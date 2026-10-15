@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# CatosTV Settings → Debug: SSH for development. Run as root:
+#   debug-ssh on    catostv-debug-ssh-on.service (the Debug page)
+#   debug-ssh off   catostv-debug-ssh-off.service, and at every boot
+#                   (catostv-debug-boot.service): Debug SSH never survives
+#                   a restart.
+# On: sshd runs until the next boot (never enabled), only `catostv` (and
+# the old `ok` login until it is removed) may log in, never root; the TV
+# account gets the default password `catostv` the first time (shown on
+# the Debug page until changed) and may use sudo with its password while
+# SSH is on (global timestamp, so scripts/deploy.sh unlocks it once).
+set -euo pipefail
+SUDOERS=/etc/sudoers.d/91-catostv-debug
+SSHD_CONF=/etc/ssh/sshd_config.d/50-catostv-debug.conf
+STATE=/run/catostv/debug-ssh
+mkdir -p /run/catostv /var/lib/catostv/debug
+publish() { printf '%s\n' "$1" >"$STATE.tmp" && chmod 644 "$STATE.tmp" && mv -f "$STATE.tmp" "$STATE"; }
+case "${1:-}" in
+  on)
+    command -v sshd >/dev/null || { echo "openssh is not installed" >&2; exit 1; }
+    if [ ! -e /var/lib/catostv/debug/password-changed ]; then
+      case "$(getent shadow catostv | cut -d: -f2)" in
+        ""|'!'*|'*'*) printf 'catostv:catostv\n' | chpasswd ;;
+      esac
+    fi
+    mkdir -p /etc/ssh/sshd_config.d
+    cat >"$SSHD_CONF" <<'CONF'
+# CatosTV Debug SSH (Settings → Debug). Removed when it is switched off.
+PermitRootLogin no
+AllowUsers catostv ok
+PasswordAuthentication yes
+CONF
+    tmp=$(mktemp)
+    cat >"$tmp" <<'SUDO'
+# CatosTV Debug SSH is on (Settings → Debug); removed when it is switched
+# off and at every boot.
+Defaults:catostv timestamp_type=global, timestamp_timeout=20
+catostv ALL=(ALL:ALL) ALL
+SUDO
+    visudo -cqf "$tmp"
+    install -m 440 "$tmp" "$SUDOERS"
+    rm -f "$tmp"
+    # reload: an sshd that was already running must read the drop-in.
+    systemctl reload-or-restart sshd.service
+    publish on
+    ;;
+  off)
+    rm -f "$SUDOERS" "$SSHD_CONF"
+    systemctl disable sshd.service 2>/dev/null || true
+    systemctl stop sshd.service 2>/dev/null || true
+    publish off
+    ;;
+  *)
+    echo "usage: debug-ssh on|off" >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,52 @@
+# CatosTV start-up screen: text only, no images, so
+# it needs nothing but Plymouth's script module. A deep backdrop, "CatosTV"
+# and "A libre TV experience" fading in, then breathing gently, with a thin
+# light sweeping under them until the TV interface takes over.
+
+Window.SetBackgroundTopColor(0.06, 0.07, 0.11);
+Window.SetBackgroundBottomColor(0.02, 0.03, 0.05);
+
+w = Window.GetWidth();
+h = Window.GetHeight();
+scale = h / 720;
+if (scale < 1) scale = 1;
+
+title.image = Image.Text("CatosTV", 0.96, 0.96, 0.98, 1, "Inter SemiBold " + Math.Int(54 * scale));
+title.sprite = Sprite(title.image);
+title.sprite.SetX(w / 2 - title.image.GetWidth() / 2);
+title.sprite.SetY(h / 2 - title.image.GetHeight());
+title.sprite.SetOpacity(0);
+
+line.image = Image.Text("A libre TV experience", 0.96, 0.96, 0.98, 1, "Inter " + Math.Int(20 * scale));
+line.sprite = Sprite(line.image);
+line.sprite.SetX(w / 2 - line.image.GetWidth() / 2);
+line.sprite.SetY(h / 2 + 14 * scale);
+line.sprite.SetOpacity(0);
+
+# The sweep: a short bar of light under the text.
+bar.image = Image.Text("________", 0.55, 0.49, 1.0, 1, "Inter " + Math.Int(18 * scale));
+bar.sprite = Sprite(bar.image);
+bar.sprite.SetY(h / 2 + 46 * scale);
+bar.sprite.SetOpacity(0);
+
+t = 0;
+fun refresh () {
+    t++;
+    # 50 frames per second.
+    fade = t / 60;
+    if (fade > 1) fade = 1;
+    title.sprite.SetOpacity(fade);
+    later = (t - 25) / 60;
+    if (later < 0) later = 0;
+    if (later > 1) later = 1;
+    breathe = 0.75 + 0.25 * Math.Sin(t / 40);
+    line.sprite.SetOpacity(later * breathe * 0.7);
+    phase = (t % 120) / 120;
+    bar.sprite.SetX(w / 2 - 130 * scale + 260 * scale * phase - bar.image.GetWidth() / 2);
+    bar.sprite.SetOpacity(later * Math.Sin(phase * 3.14159) * 0.6);
+}
+Plymouth.SetRefreshFunction(refresh);
+
+# No password prompts or messages on a TV; keep the screen calm.
+fun display_normal () {}
+Plymouth.SetDisplayNormalFunction(display_normal);

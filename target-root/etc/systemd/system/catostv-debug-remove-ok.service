@@ -1,0 +1,6 @@
+[Unit]
+Description=CatosTV: remove the old ok development login
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/catostv/debug-remove-ok

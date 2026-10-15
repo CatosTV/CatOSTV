@@ -1,0 +1,173 @@
+<?xml version="1.0"?>
+<!--
+  CatosTV appliance compositor configuration (installed system).
+
+  labwc must stay invisible: no panels, menus, decorations or workspace
+  popups ever reach the TV user.
+
+    desktop 1 "CatosTV"  catostv-shell
+    desktop 2 "App"    the running app, maximized; apps other than Android
+                       get a slim bar with round close / minimise /
+                       full-screen buttons (theme "CatosTV")
+
+  Docs: docs/ARCHITECTURE.md (session), docs/UX_AND_INPUT_SPEC.md (keys),
+        docs/APP_INTEGRATION.md (window rules).
+
+  DO NOT remove the reserved W-A-F11 / W-A-F12 bindings: the shell presses
+  them with `wtype` to switch desktops (crates/catostv-core/src/compositor.rs).
+  A unit test checks they exist.
+-->
+<labwc_config>
+  <core>
+    <adaptiveSync>fullscreen</adaptiveSync>
+  </core>
+
+  <desktops number="2">
+    <names>
+      <name>CatosTV</name>
+      <name>App</name>
+    </names>
+    <initial>1</initial>
+    <!-- No on-screen workspace name when switching. -->
+    <popupTime>0</popupTime>
+  </desktops>
+
+  <theme>
+    <!-- No window decorations at all: apps draw edge to edge like
+         on a TV. Back / full screen / close live in CatosTV's Control Center
+         (the Control Center key over any app), usable with a remote. -->
+    <keepBorder>no</keepBorder>
+    <maximizedDecoration>none</maximizedDecoration>
+  </theme>
+
+  <keyboard>
+    <!-- HOME always belongs to CatosTV, even if a running app is frozen. -->
+    <keybind key="XF86HomePage">
+      <action name="GoToDesktop" to="1" />
+      <action name="Execute" command="/usr/local/bin/catostv-ctl home" />
+    </keybind>
+    <keybind key="W-Home">
+      <action name="GoToDesktop" to="1" />
+      <action name="Execute" command="/usr/local/bin/catostv-ctl home" />
+    </keybind>
+    <!-- The plain Home key too: on a keyboard,
+         Super often does not reach the TV (e.g. through a VNC console).
+         Apps lose Home inside text fields; a TV needs a way out more. -->
+    <keybind key="Home">
+      <action name="GoToDesktop" to="1" />
+      <action name="Execute" command="/usr/local/bin/catostv-ctl home" />
+    </keybind>
+
+    <!-- Control Center. -->
+    <keybind key="XF86Tools">
+      <action name="GoToDesktop" to="1" />
+      <action name="Execute" command="/usr/local/bin/catostv-ctl quick" />
+    </keybind>
+    <keybind key="F10">
+      <action name="GoToDesktop" to="1" />
+      <action name="Execute" command="/usr/local/bin/catostv-ctl quick" />
+    </keybind>
+
+    <!-- Power key opens the CatosTV power menu (logind ignores the key; see
+         /etc/systemd/logind.conf.d/20-catostv.conf). -->
+    <keybind key="XF86PowerOff">
+      <action name="GoToDesktop" to="1" />
+      <action name="Execute" command="/usr/local/bin/catostv-ctl power" />
+    </keybind>
+
+    <!-- Volume keys work everywhere, including inside apps, with an
+         on-screen level bar (catostv-ctl → wpctl + notify-send). -->
+    <keybind key="XF86AudioRaiseVolume">
+      <action name="Execute" command="/usr/local/bin/catostv-ctl volume-up" />
+    </keybind>
+    <keybind key="XF86AudioLowerVolume">
+      <action name="Execute" command="/usr/local/bin/catostv-ctl volume-down" />
+    </keybind>
+    <keybind key="XF86AudioMute">
+      <action name="Execute" command="/usr/local/bin/catostv-ctl mute" />
+    </keybind>
+
+    <!-- Search key on remotes / keyboards: CatosTV Search. -->
+    <keybind key="XF86Search">
+      <action name="GoToDesktop" to="1" />
+      <action name="Execute" command="/usr/local/bin/catostv-ctl search" />
+    </keybind>
+
+    <!-- RESERVED: pressed by catostv-shell through wtype. No remote sends these. -->
+    <keybind key="W-A-F11">
+      <action name="GoToDesktop" to="1" />
+    </keybind>
+    <keybind key="W-A-F12">
+      <action name="GoToDesktop" to="2" />
+    </keybind>
+
+    <!-- Full screen on/off for the app in front (keyboard; the remote
+         uses the Control Center's app row). -->
+    <keybind key="F11">
+      <action name="ToggleFullscreen" />
+    </keybind>
+
+    <!-- Development fallback keys (keyboard only). -->
+    <keybind key="W-1"><action name="GoToDesktop" to="1" /></keybind>
+    <keybind key="W-2"><action name="GoToDesktop" to="2" /></keybind>
+  </keyboard>
+
+  <!-- Defining any mousebind disables labwc's defaults, which include the
+       desktop right-click menu (Terminal / Reconfigure / Exit). Clicks inside
+       app windows are unaffected. -->
+  <mouse>
+    <context name="Client">
+      <mousebind button="Left" action="Press"><action name="Focus" /><action name="Raise" /></mousebind>
+      <mousebind button="Middle" action="Press"><action name="Focus" /><action name="Raise" /></mousebind>
+      <mousebind button="Right" action="Press"><action name="Focus" /><action name="Raise" /></mousebind>
+    </context>
+    <context name="Root">
+      <mousebind button="Left" action="Press"><action name="None" /></mousebind>
+      <mousebind button="Middle" action="Press"><action name="None" /></mousebind>
+      <mousebind button="Right" action="Press"><action name="None" /></mousebind>
+    </context>
+  </mouse>
+
+  <windowRules>
+    <!-- Every normal app window: App desktop, maximized, no decorations
+         (the Control Center's app row replaces window buttons).
+         Maximize (not ToggleFullscreen) is idempotent, so apps that start
+         fullscreen themselves (Firefox kiosk, Steam) are not toggled back
+         to windowed. Apps that support it get a fullscreen flag in apps.toml. -->
+    <windowRule identifier="*" type="normal">
+      <!-- Android (Waydroid) windows go to the App desktop WITHOUT switching
+           to it: Android may open or re-open a window on its own (boot,
+           crash, updater) and must never pull the TV away from CatosTV. The
+           shell switches desktops itself when you open an Android app.
+           Waydroid's app ids: "waydroid.<package>" (multi-window) and
+           "Waydroid" (full UI); matching is case-insensitive. -->
+      <action name="If">
+        <query identifier="waydroid*" />
+        <then>
+          <!-- No Maximize for Android: its windows already come at the
+               display's size, and every configure event with a size is a
+               display re-plug to Waydroid's HAL. labwc's initial
+               configure for an unsized window is 0x0, which the HAL
+               ignores. -->
+          <action name="SendToDesktop" to="2" follow="no" />
+          <action name="SetDecorations" decorations="none" />
+        </then>
+        <else>
+          <action name="SendToDesktop" to="2" follow="yes" />
+          <action name="SetDecorations" decorations="none" />
+          <action name="Maximize" />
+        </else>
+      </action>
+    </windowRule>
+
+    <!-- CatosTV's own windows (app_id catostv-shell) stay on the CatosTV desktop.
+         This rule comes after the catch-all so it wins. -->
+    <windowRule identifier="catostv-*" serverDecoration="no">
+      <action name="SendToDesktop" to="1" follow="yes" />
+      <action name="SetDecorations" decorations="none" />
+    </windowRule>
+
+    <!-- Nobody gets server-side decorations. -->
+    <windowRule identifier="*" serverDecoration="no" />
+  </windowRules>
+</labwc_config>

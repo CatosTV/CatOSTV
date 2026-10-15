@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# CatosTV, start the Waydroid session through the display filter.
+#
+# Runs as the TV account inside its Wayland session: the shell's hidden
+# "Android" entry and android-setup's first boot both use it. Android's
+# display HAL connects to the socket named by WAYLAND_DISPLAY (Waydroid
+# bind-mounts that file into the container as /run/xdg/wayland-0). When
+# catostv-wlfilter's relay socket is up, Android gets that one, so the
+# idle-inhibit protocol stays hidden from the HAL and the lock
+# cycle cannot form (see crates/catostv-core/src/wlfilter.rs).
+#
+# Falls back to the compositor's own socket, with a log line, if the relay
+# has not come up within 3 s: Android works either way, only the deadlock
+# protection would be missing.
+#
+# Off switch (debugging): `sudo touch /etc/catostv/android-no-display-filter`
+# and restart the TV session; Android then connects to the compositor
+# directly again.
+set -u
+RUN=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+FILTER=$RUN/wayland-android
+OFF_FLAG=/etc/catostv/android-no-display-filter
+if [[ -e $OFF_FLAG ]]; then
+    echo "catostv: display filter switched off ($OFF_FLAG)" >&2
+    FILTER=/nonexistent
+fi
+for _ in $(seq 1 30); do
+    [[ -S $FILTER ]] && break
+    sleep 0.1
+done
+if [[ -S $FILTER ]]; then
+    export WAYLAND_DISPLAY=wayland-android
+    echo "catostv: Android session through the display filter ($FILTER)" >&2
+else
+    export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+    echo "catostv: display filter socket missing ($FILTER): Android on $WAYLAND_DISPLAY without deadlock protection" >&2
+fi
+exec waydroid session start

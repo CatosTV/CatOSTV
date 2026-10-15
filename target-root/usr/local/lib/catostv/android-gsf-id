@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# CatosTV: read Android's Google Services Framework id and publish it as
+# /var/lib/catostv/android/gsf-id (world-readable) so Settings → Android can
+# show it: with Google apps, signing in needs the device registered once at
+# google.com/android/uncertified with this id. Run as root while
+# Android runs; no input. Exit 1 while GMS has not created it yet.
+set -euo pipefail
+OUT=/var/lib/catostv/android/gsf-id
+# Google Services Framework keeps the id in its gservices table; asked
+# through its content provider (root may), with the database file as the
+# fallback for builds without the `content` tool.
+DB=/data/data/com.google.android.gsf/databases/gservices.db
+id=$(waydroid shell -- content query --uri content://com.google.android.gsf.gservices \
+       --where "name='android_id'" 2>/dev/null | tr -d '\r' | sed -n 's/.*value=\([0-9]*\).*/\1/p' | head -n1 || true)
+if [[ -z $id ]]; then
+  id=$(waydroid shell -- sh -c "test -f $DB && sqlite3 $DB \"select value from main where name = 'android_id';\"" 2>/dev/null \
+       | tr -d '\r[:space:]' || true)
+fi
+# Newer Google Play services (the Android TV 16 image) keep the check-in
+# id in their own preferences; the gservices table stays empty.
+CHECKIN=/data/data/com.google.android.gms/shared_prefs/Checkin.xml
+if [[ -z $id ]]; then
+  # Stored as <long name="android_id" value="N" /> or
+  # <string name="android_id">N</string> depending on the build.
+  id=$(waydroid shell -- sh -c "test -f $CHECKIN && grep 'name=\"android_id\"' $CHECKIN" 2>/dev/null \
+       | tr -d '\r' | sed -n -e 's/.*value="\([0-9]*\)".*/\1/p' -e 's/.*>\([0-9]*\)<.*/\1/p' | head -n1 || true)
+fi
+if [[ -z $id || ! $id =~ ^[0-9]{10,25}$ ]]; then
+  exit 1
+fi
+mkdir -p "$(dirname "$OUT")"
+printf '%s\n' "$id" >"$OUT.tmp"
+chmod 644 "$OUT.tmp"
+mv -f "$OUT.tmp" "$OUT"
+echo "$id"

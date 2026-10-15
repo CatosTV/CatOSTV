@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=CatosTV
+Description=CatosTV start-up screen: the name and "A libre TV experience" breathing softly while the TV starts.
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/catostv
+ScriptFile=/usr/share/plymouth/themes/catostv/catostv.script

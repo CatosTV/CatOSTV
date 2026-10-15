@@ -1,0 +1,37 @@
+# CatosTV boot menu theme: the TV's dark background, a large
+# title, large menu items, the selected one on an accent pill. Fonts are
+# made by build-iso.sh with grub-mkfont (DejaVu Sans, named "CatosTV …").
+title-text: "CatosTV"
+title-font: "CatosTV Bold 56"
+title-color: "#f4f4f8"
+desktop-color: "#0b0d14"
+message-font: "CatosTV Regular 22"
+message-color: "#9aa0b4"
+terminal-font: "CatosTV Regular 22"
+
++ boot_menu {
+    left = 16%
+    top = 24%
+    width = 68%
+    height = 62%
+    item_font = "CatosTV Regular 32"
+    item_color = "#b9bdcc"
+    selected_item_font = "CatosTV Bold 32"
+    selected_item_color = "#ffffff"
+    selected_item_pixmap_style = "select_*.png"
+    item_height = 56
+    item_padding = 24
+    item_spacing = 8
+    scrollbar = false
+}
+
++ label {
+    id = "__timeout__"
+    left = 16%
+    top = 90%
+    width = 68%
+    align = "center"
+    font = "CatosTV Regular 22"
+    color = "#7b8094"
+    text = "Starting in %d s · use ↑ ↓ and Enter"
+}

@@ -1,0 +1,17 @@
+# CatosTV: Settings → Android → Repair Android (after its confirmation sheet).
+# Starts Android over: its data folder is set aside, keystore and lock
+# settings included, so they are made together again (see
+# /usr/local/lib/catostv/android-keystore-check --force). Started by the TV
+# shell as
+#   systemctl --no-ask-password start --no-block catostv-android-repair.service
+# which /etc/polkit-1/rules.d/50-catostv-android.rules allows (verb "start").
+
+[Unit]
+Description=CatosTV: repair Android
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl stop waydroid-container.service
+ExecStart=/usr/bin/bash /usr/local/lib/catostv/android-keystore-check --force
+ExecStart=/usr/bin/systemctl start waydroid-container.service
+TimeoutStartSec=120

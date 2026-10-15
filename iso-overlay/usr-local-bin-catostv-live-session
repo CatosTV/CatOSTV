@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Live installer session, started by greetd as root on the CatosTV ISO.
+# This is the ONLY place CATOSTV_INSTALLER_ALLOW_DESTRUCTIVE=1 is set.
+set -u
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=CatosTVInstaller:wlroots
+export CATOSTV_INSTALLER_ALLOW_DESTRUCTIVE=1
+export MOZ_ENABLE_WAYLAND=1
+export XCURSOR_THEME=Adwaita
+export XCURSOR_SIZE=32
+
+# "Install CatosTV with safe graphics" (boot menu): no GPU
+# acceleration, so draw in software.
+if grep -qw 'catostv.gpu=safe' /proc/cmdline; then
+  export WLR_RENDERER=pixman
+  export LIBGL_ALWAYS_SOFTWARE=1
+fi
+
+if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -n "${XDG_RUNTIME_DIR:-}" && -S "$XDG_RUNTIME_DIR/bus" ]]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+fi
+
+while :; do
+  labwc >>/tmp/catostv-labwc.log 2>&1
+  echo "$(date -Is) labwc exited with status $?" >>/tmp/catostv-labwc.log
+  sleep 1
+done

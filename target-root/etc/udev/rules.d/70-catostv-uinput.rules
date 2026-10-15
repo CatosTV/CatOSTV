@@ -1,0 +1,4 @@
+# CatosTV: the TV remote (catostv-cecd) and the phone remote (catostv-remoted)
+# press keys on a virtual keyboard (/dev/uinput) so Android apps get real
+# key codes too. The TV account is in group `input`.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"

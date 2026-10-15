@@ -1,0 +1,4 @@
+# CatosTV: per-user settings first, then the TV defaults in
+# /etc/dconf/db/local.d (compiled with `dconf update`).
+user-db:user
+system-db:local

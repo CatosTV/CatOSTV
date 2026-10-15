@@ -1,0 +1,33 @@
+[workspace]
+# `.`, GUI package `catostv` (catostv-shell, catostv-installer)
+# `crates/catostv-core`, dependency-free core logic + catostv-ctl, catostv-diag and
+#                        the session daemons catostv-inputd/-cecd/-castd/-remoted
+members = [".", "crates/catostv-core"]
+default-members = [".", "crates/catostv-core"]
+resolver = "3"
+
+[package]
+name = "catostv"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.95"
+description = "CatosTV television appliance shell and installer for Arch Linux x86_64"
+license = "MIT"
+publish = false
+
+[dependencies]
+catostv-core = { path = "crates/catostv-core" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Pinned to the API this code was written against (egui 0.36.2 source was
+# used to verify every call; see docs/VERIFICATION.md). `glow` is included so
+# CATOSTV_RENDERER=glow can fall back to OpenGL on machines without Vulkan.
+eframe = { version = "=0.36.2", default-features = false, features = ["default_fonts", "wgpu", "glow", "wayland", "x11"] }
+# PNG app icons (Flatpak / Android / store). PNG only, no default features.
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<!--
+  CatosTV live installer compositor configuration.
+  Only catostv-installer is shown. Defining keybinds/mousebinds disables
+  labwc's defaults (terminal launcher, window close, desktop menu).
+-->
+<labwc_config>
+  <desktops number="1">
+    <popupTime>0</popupTime>
+  </desktops>
+
+  <theme>
+    <keepBorder>no</keepBorder>
+    <maximizedDecoration>none</maximizedDecoration>
+  </theme>
+
+  <keyboard>
+    <keybind key="W-Return"><action name="None" /></keybind>
+    <keybind key="A-F4"><action name="None" /></keybind>
+  </keyboard>
+
+  <mouse>
+    <context name="Root">
+      <mousebind button="Left" action="Press"><action name="None" /></mousebind>
+      <mousebind button="Middle" action="Press"><action name="None" /></mousebind>
+      <mousebind button="Right" action="Press"><action name="None" /></mousebind>
+    </context>
+  </mouse>
+
+  <windowRules>
+    <!-- The installer requests fullscreen itself; Maximize is a harmless
+         idempotent fallback (ToggleFullscreen would undo its request). -->
+    <windowRule identifier="catostv-installer">
+      <action name="Maximize" />
+      <action name="SetDecorations" decorations="none" />
+    </windowRule>
+    <windowRule identifier="*" serverDecoration="no" />
+  </windowRules>
+</labwc_config>

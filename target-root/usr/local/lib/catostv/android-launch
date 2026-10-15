@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# CatosTV: open an Android app that was made only for TVs (run as root by
+# catostv-android-launch@<package>.service; `am start` needs root).
+#
+# Such apps (SmartTube…) have an Android TV home-screen entry
+# (LEANBACK_LAUNCHER) but no phone launcher icon, so `waydroid app launch`
+# cannot open them. The package name is the only
+# input and is validated here again.
+set -euo pipefail
+pkg="${1:-}"
+if ! [[ "$pkg" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] || (( ${#pkg} > 255 )); then
+  echo "refusing invalid package name: $pkg" >&2
+  exit 2
+fi
+# The app's TV entry point, e.g. org.smarttube.stable/com.….SplashActivity
+category=android.intent.category.LEANBACK_LAUNCHER
+comp=$(waydroid shell -- cmd package resolve-activity --brief \
+         -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER "$pkg" 2>/dev/null \
+       | tr -d '\r' | grep -E "^${pkg//./\\.}/" | tail -n1 || true)
+if [[ -z "$comp" ]]; then
+  # Not a TV-only app after all: the normal launcher entry.
+  category=android.intent.category.LAUNCHER
+  comp=$(waydroid shell -- cmd package resolve-activity --brief \
+           -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "$pkg" 2>/dev/null \
+         | tr -d '\r' | grep -E "^${pkg//./\\.}/" | tail -n1 || true)
+fi
+if [[ -z "$comp" ]]; then
+  echo "$pkg has no TV or phone entry point" >&2
+  exit 1
+fi
+# Waydroid's display HAL maps a window only while `waydroid.active_apps`
+# names something (black screen on a fresh session). Always
+# "Waydroid": the one full-screen window that shows whatever Android has
+# in front. A package name asks for that app's own window, which the HAL
+# can only find through task names surfaceflinger sends with each layer
+# (`TID:…`); the Android TV 16 image's surfaceflinger sends none, so no
+# window ever opened. The status bar is hidden as
+# `waydroid app launch` does.
+waydroid shell -- setprop waydroid.active_apps Waydroid 2>/dev/null || true
+# What CatosTV opened and which apps Android already had: the shell
+# returns Home when Back past this app's first screen shows one of those
+# instead (full-screen mode shows Android's previous task there). First
+# line the package, then the package of every task, top to bottom.
+mkdir -p /run/catostv
+{
+  printf '%s\n' "$pkg"
+  waydroid shell -- dumpsys activity activities 2>/dev/null | tr -d '\r' \
+    | sed -n 's/^  \* Task{.* A=[0-9]*:\([A-Za-z0-9_.]*\).*/\1/p' | awk 'NR<=40'
+} >/run/catostv/android-launched.tmp && chmod 644 /run/catostv/android-launched.tmp \
+  && mv -f /run/catostv/android-launched.tmp /run/catostv/android-launched
+waydroid shell -- settings put global policy_control 'immersive.status=*' 2>/dev/null || true
+# Started the way Android TV's launcher does: the entry's own action
+# and category, new task, reset-if-needed, a running app's task comes to
+# the front as it was. A bare `am start -n` made Android stack a new splash
+# screen on SmartTube's playing player; SmartTube rebuilt its screens and
+# its video decoder deadlocked in the restart.
+exec waydroid shell -- am start -a android.intent.action.MAIN -c "$category" \
+  -f 0x10200000 -n "$comp"

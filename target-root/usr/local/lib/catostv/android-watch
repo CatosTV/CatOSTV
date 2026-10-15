@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# CatosTV: publish which Android app is in front, for the TV shell
+# (/run/catostv/android-top, one package name; empty when unknown).
+# Run as root by catostv-android-watch.service while Android's container runs
+# (reading Android's activity stack needs root). No input.
+#
+# The shell uses it to come back to CatosTV Home when you press Back on an
+# Android app's first screen (Android would show its own home screen), so
+# Android apps behave like the rest of the TV.
+#
+# Cheap on purpose: lxc-attach directly (no Python `waydroid shell`), one
+# `dumpsys window` per second, and nothing at all while Android is not
+# running. The focused window ("mCurrentFocus=Window{… u0 <pkg>/<class>}")
+# is used because Android 13 no longer prints `mResumedActivity` lines in
+# `dumpsys activity activities` (seen on the TV).
+#
+# It is also the screen-service watchdog: Android's
+# surfaceflinger crashed on an Intel GPU whenever an app drew with
+# hardware overlays on, and the "overlays off" switch (SurfaceFlinger
+# transaction 1008) is lost every time surfaceflinger restarts. So whenever
+# surfaceflinger's pid changes the switch is applied again, and the restart
+# is published in /run/catostv/android-sf ("<pid> <restarts>") so the TV shell
+# can leave the frozen last frame of the app and tell the user.
+set -uo pipefail
+OUT=/run/catostv/android-top
+SF=/run/catostv/android-sf
+APPS=/run/catostv/android-apps
+LXC=(-P /var/lib/waydroid/lxc -n waydroid)
+ANDROID_ENV=(--clear-env
+  -v PATH=/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin
+  -v ANDROID_ROOT=/system -v ANDROID_DATA=/data)
+mkdir -p /run/catostv
+last=unset
+publish() {
+  [[ "$1" == "$last" ]] && return
+  printf '%s\n' "$1" >"$OUT.tmp" && chmod 644 "$OUT.tmp" && mv -f "$OUT.tmp" "$OUT"
+  last=$1
+}
+in_android() {
+  timeout 5 lxc-attach "${LXC[@]}" "${ANDROID_ENV[@]}" -- /system/bin/sh -c "$1" 2>/dev/null
+}
+# The screen-service watchdog runs INSIDE Android as one long shell (one
+# lxc-attach, a 200 ms loop, no per-check attach cost): whenever
+# surfaceflinger has a new pid it sends "hardware overlays off" until
+# surfaceflinger answers ("Result: Parcel(NULL)"), then prints "SF <pid>".
+# Fast on purpose: the switch has to land before the first app frame.
+SF_LOOP='last=""
+while true; do
+  p=$(pidof surfaceflinger 2>/dev/null)
+  if [ -n "$p" ] && [ "$p" != "$last" ]; then
+    if service call SurfaceFlinger 1008 i32 1 2>/dev/null | grep -q Parcel; then
+      last=$p
+      echo "SF $p"
+    fi
+  fi
+  sleep 0.2
+done'
+publish_sf() {
+  local pid=$1 restarts=0 prev
+  if [[ -r $SF ]]; then
+    read -r prev restarts <"$SF" || true
+    restarts=${restarts:-0}
+    if [[ -n "${prev:-}" && "$prev" != "$pid" ]]; then
+      restarts=$((restarts + 1))
+      echo "surfaceflinger restarted (pid $prev -> $pid), restart #$restarts" >&2
+    fi
+  fi
+  printf '%s %s\n' "$pid" "$restarts" >"$SF.tmp" && chmod 644 "$SF.tmp" && mv -f "$SF.tmp" "$SF"
+}
+watchdog() {
+  lxc-attach "${LXC[@]}" "${ANDROID_ENV[@]}" -- /system/bin/sh -c "$SF_LOOP" 2>/dev/null \
+    | while read -r tag pid; do
+        [[ "$tag" == SF && "$pid" =~ ^[0-9]+$ ]] && publish_sf "$pid"
+      done
+}
+WD=""
+stop_watchdog() {
+  [[ -n "$WD" ]] || return 0
+  pkill -P "$WD" 2>/dev/null || true
+  kill "$WD" 2>/dev/null || true
+  WD=""
+}
+# Which app has the window: Waydroid's display HAL shows anything only
+# while `waydroid.active_apps` names something. CatosTV always uses
+# "Waydroid", the one full-screen window (the Android TV 16 image
+# sends the HAL no task names, so a package name never gets a window).
+# `android-launch` sets it; this puts it back when something else changed
+# it (`waydroid app launch` sets the package; the HAL sets "none" when its
+# window was closed) while a real app is in front, an app started by
+# another (Play Store → the app it installed) shows in the
+# same window. Checked only when Android's front app changes.
+active=""
+keep_full_ui() {
+  local pkg=$1 now
+  [[ -n "$pkg" && "$pkg" != "$active" ]] || return 0
+  active=$pkg
+  case "$pkg" in
+    com.android.systemui|android|*launcher*|*trebuchet*|*catapult*|*leanback*) return 0 ;;
+  esac
+  now=$(in_android 'getprop waydroid.active_apps' | tr -d '\r')
+  [[ "$now" == Waydroid ]] || in_android 'setprop waydroid.active_apps Waydroid'
+}
+# Android's tasks, top to bottom, one package per line: with the
+# launch record from android-launch the shell can tell "the user backed
+# out of the app" from "the app opened another one".
+TASKS=/run/catostv/android-tasks
+last_tasks=unset
+publish_tasks() {
+  [[ "$1" == "$last_tasks" ]] && return
+  printf '%s\n' "$1" >"$TASKS.tmp" && chmod 644 "$TASKS.tmp" && mv -f "$TASKS.tmp" "$TASKS"
+  last_tasks=$1
+}
+# Android has finished booting: the shell removes Home icons only
+# on app lists from a booted Android, never from one starting or stopping.
+BOOTED=/run/catostv/android-booted
+publish_booted() {
+  if [[ "$1" == 1 ]]; then
+    [[ -e $BOOTED ]] || { : >"$BOOTED"; chmod 644 "$BOOTED"; }
+  else
+    rm -f "$BOOTED"
+  fi
+}
+# Installed packages, as a fingerprint: the shell re-reads its
+# app list when it changes, and once after every boot, the first
+# fingerprint is the moment Android can list its apps. All packages, not
+# only third-party ones: on a fresh image those are none, and an empty
+# list was never published, so a fresh Android got no icons until the
+# shell happened to restart. Every ~10 s.
+apps_tick=0
+publish_apps() {
+  apps_tick=$(( (apps_tick + 1) % 10 ))
+  [[ $apps_tick == 0 ]] || return 0
+  local stamp
+  stamp=$(in_android 'pm list packages 2>/dev/null' | sort | md5sum | cut -c1-32)
+  [[ -n "$stamp" && "$stamp" != d41d8cd98f00b204e9800998ecf8427e ]] || return 0
+  if [[ ! -r $APPS ]] || [[ "$(cat "$APPS" 2>/dev/null)" != "$stamp" ]]; then
+    printf '%s\n' "$stamp" >"$APPS.tmp" && chmod 644 "$APPS.tmp" && mv -f "$APPS.tmp" "$APPS"
+  fi
+}
+# Google Play certification id: Google's services create it only
+# after they have checked in with Google, minutes after a first boot, so
+# one early read (the density unit) misses it. Until the file exists, ask
+# every 30 s on Google Play images.
+GSF=/var/lib/catostv/android/gsf-id
+gsf_tick=0
+publish_gsf() {
+  gsf_tick=$(( (gsf_tick + 1) % 30 ))
+  [[ $gsf_tick == 0 ]] || return 0
+  [[ -s $GSF ]] && return 0
+  grep -qs -- '-gapps$' /var/lib/catostv/android/image || return 0
+  /usr/local/lib/catostv/android-gsf-id >/dev/null 2>&1 || true
+}
+# Hung apps: an app whose main thread is stuck (seen: SmartTube in
+# Android's codec2 block-pool deadlock after leaving it) keeps its video
+# decoder, so other apps cannot play, and opening it again only shows the
+# app that was in front before. Android notices ("ANR in <pkg>", "Activity
+# stop timeout for … <pkg>/…") but on a TV nobody sees its dialog. So the
+# app is closed (`am force-stop`) and the shell is told
+# (/run/catostv/android-hung: "<count> <pkg>") so it can say so; the next
+# open starts the app fresh. Android itself and launchers are never closed.
+HUNG=/run/catostv/android-hung
+HUNG_LOOP='logcat -b system -T "$(date +%m-%d\ %H:%M:%S).000" -v brief ActivityTaskManager:W ActivityManager:E "*:S" 2>/dev/null'
+hung_count=0
+close_hung() {
+  local pkg=$1
+  case "$pkg" in
+    ""|android|system|com.android.*|com.google.android.gms*|com.google.android.gsf*|*launcher*|*leanback*|*catapult*|com.google.android.tvlauncher*) return 0 ;;
+  esac
+  echo "$pkg is not responding: closing it" >&2
+  in_android "am force-stop $pkg" >/dev/null || true
+  hung_count=$((hung_count + 1))
+  printf '%s %s\n' "$hung_count" "$pkg" >"$HUNG.tmp" && chmod 644 "$HUNG.tmp" && mv -f "$HUNG.tmp" "$HUNG"
+}
+hung_watch() {
+  lxc-attach "${LXC[@]}" "${ANDROID_ENV[@]}" -- /system/bin/sh -c "$HUNG_LOOP" 2>/dev/null \
+    | while IFS= read -r line; do
+        case "$line" in
+          *"ANR in "*) close_hung "$(sed -n 's/.*ANR in \([A-Za-z0-9_.]*\).*/\1/p' <<<"$line")" ;;
+          *"Activity stop timeout for ActivityRecord{"*)
+            close_hung "$(sed -n 's/.*ActivityRecord{[^ ]* u[0-9]* \([A-Za-z0-9_.]*\)\/.*/\1/p' <<<"$line")" ;;
+        esac
+      done
+}
+HW=""
+stop_hung_watch() {
+  [[ -n "$HW" ]] || return 0
+  pkill -P "$HW" 2>/dev/null || true
+  kill "$HW" 2>/dev/null || true
+  HW=""
+}
+trap 'stop_watchdog; stop_hung_watch; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp"; exit' EXIT TERM INT
+while true; do
+  if [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" != RUNNING ]]; then
+    publish ""
+    publish_tasks ""
+    publish_booted ""
+    active=""
+    if [[ -n "$WD" ]]; then
+      stop_watchdog
+      rm -f "$SF" "$APPS"
+    fi
+    stop_hung_watch
+    sleep 3
+    continue
+  fi
+  if [[ -z "$WD" ]] || ! kill -0 "$WD" 2>/dev/null; then
+    watchdog &
+    WD=$!
+  fi
+  if [[ -z "$HW" ]] || ! kill -0 "$HW" 2>/dev/null; then
+    hung_watch &
+    HW=$!
+  fi
+  # One attach: boot state, Android's focused window, its tasks top to
+  # bottom.
+  state=$(in_android 'echo "booted=$(getprop sys.boot_completed)"; dumpsys window 2>/dev/null | grep "mCurrentFocus="; dumpsys activity activities 2>/dev/null | grep "^  \* Task{"' | tr -d '\r')
+  publish_booted "$(grep -qx 'booted=1' <<<"$state" && echo 1)"
+  line=$(grep -m1 'mCurrentFocus=' <<<"$state")
+  pkg=$(sed -n 's/.* \([A-Za-z][A-Za-z0-9_.]*\)\/[^ ]*.*/\1/p' <<<"$line" | head -n1)
+  publish "$pkg"
+  publish_tasks "$(sed -n 's/^  \* Task{.* A=[0-9]*:\([A-Za-z0-9_.]*\).*/\1/p' <<<"$state" | awk 'NR<=40')"
+  keep_full_ui "$pkg"
+  publish_apps
+  publish_gsf
+  sleep 1
+done

@@ -1,0 +1,46 @@
+# CatosTV app registry (installed at ~/.config/catostv/apps.toml).
+#
+# Fields (see docs/APP_INTEGRATION.md):
+#   name      shown on the card (required)
+#   subtitle  short role label
+#   icon      play | media | game | music | stream | browser | tv | folder,
+#             or a 1–2 character monogram
+#   accent    violet | red | blue | green | sky | orange
+#   command   program + arguments. NOT run through a shell: quoting works,
+#             but pipes, ';', '&&' and variables (except $HOME and ~/) do not.
+#   singleton true (default): selecting a running app resumes it
+#   id        optional stable id (defaults to a slug of the name)
+#
+# Keep this file in sync with apps::default_specs() in
+# crates/catostv-core/src/apps.rs, a unit test compares them.
+# After editing on a running TV: `catostv-ctl reload`.
+
+# Catfyn is CatosTV's own Jellyfin client, built into the shell.
+[[app]]
+name = "Catfyn"
+subtitle = "Jellyfin"
+icon = "catfyn"
+accent = "violet"
+command = "catostv:fin"
+
+[[app]]
+name = "Steam"
+subtitle = "Games"
+icon = "game"
+accent = "blue"
+command = "steam -gamepadui"
+
+[[app]]
+name = "Moonlight"
+subtitle = "PC streaming"
+icon = "stream"
+accent = "sky"
+command = "moonlight"
+
+# Files is CatosTV's own file browser, built into the shell.
+[[app]]
+name = "Files"
+subtitle = "Drives & downloads"
+icon = "folder"
+accent = "orange"
+command = "catostv:files"

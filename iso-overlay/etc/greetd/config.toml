@@ -1,0 +1,14 @@
+# CatosTV live ISO: start the graphical installer session immediately.
+# default_session is the installer session too, so a text login prompt is
+# never shown even if the session restarts.
+
+[terminal]
+vt = 1
+
+[default_session]
+command = "/usr/local/bin/catostv-live-session"
+user = "root"
+
+[initial_session]
+command = "/usr/local/bin/catostv-live-session"
+user = "root"

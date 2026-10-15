@@ -1,0 +1,10 @@
+[Unit]
+Description=CatosTV: Debug SSH starts off after every boot
+Before=sshd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/catostv/debug-ssh off
+
+[Install]
+WantedBy=multi-user.target

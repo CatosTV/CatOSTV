@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# CatosTV: work around Waydroid's display-HAL bug that crashes Android's
+# screen service (upstream
+# https://github.com/waydroid/android_hardware_waydroid/issues/84).
+#
+# The HAL (hwcomposer.waydroid.so) tells surfaceflinger "display
+# hotplugged" on EVERY window configure event from the compositor (focus
+# change, maximize, map…), for a display that is already connected; a
+# burst of those makes surfaceflinger present on a display it just
+# replaced → SIGSEGV, and with it every Android app dies. On a TV the
+# window never changes size, so the hotplug has no value: this flips the
+# one byte in do_hotplug() that sets `needHotplug = true` to 0 (the
+# display's size is published by the same function as before; the initial
+# display comes from the HWC adapter at start-up, not from this hotplug).
+#
+# The patched copy goes through Waydroid's overlay (removable: delete
+# the overlay file and restart the container). Only a file whose code
+# matches the expected instruction sequence exactly once is patched; any
+# other build is left alone and reported. Run as root, no input; safe to
+# run again (does nothing when the overlay copy already matches).
+set -euo pipefail
+OVERLAY=/var/lib/waydroid/overlay/vendor/lib64/hw/hwcomposer.waydroid.so
+# The stock file comes from the running container's rootfs, or, before
+# Android has ever started (setup), straight from the downloaded image,
+# loop-mounted read-only for the copy.
+stock_file() { # $1 image (system|vendor), $2 path inside the image
+  local mounted=/var/lib/waydroid/rootfs/$1/$2 img mnt tmp
+  if [[ -r $mounted ]]; then
+    printf '%s\n' "$mounted"
+    return 0
+  fi
+  img=/var/lib/waydroid/images/$1.img
+  [[ -r $img ]] || return 1
+  mnt=$(mktemp -d /run/catostv-$1.XXXXXX) || return 1
+  if ! mount -o loop,ro "$img" "$mnt"; then
+    rmdir "$mnt"
+    return 1
+  fi
+  tmp=$(mktemp /run/catostv-stock.XXXXXX)
+  cp "$mnt/$2" "$tmp" || { umount "$mnt"; rmdir "$mnt"; rm -f "$tmp"; return 1; }
+  umount "$mnt"
+  rmdir "$mnt"
+  printf '%s\n' "$tmp"
+}
+STOCK=$(stock_file vendor lib64/hw/hwcomposer.waydroid.so) || {
+  echo "Android's display HAL is not available (no running container, no vendor image)" >&2
+  exit 1
+}
+trap '[[ $STOCK == /run/catostv-stock.* ]] && rm -f "$STOCK"' EXIT
+python3 -I - "$STOCK" "$OVERLAY" <<'PY'
+import hashlib, pathlib, re, sys
+stock, overlay = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+data = bytearray(stock.read_bytes())
+# do_hotplug(): mov BYTE PTR [rbx+needHotplug], 1 ; call QWORD PTR [rdi]  (procs->invalidate)
+hits = list(re.finditer(rb"\xc6\x83..\x00\x00\x01\xff\x17", bytes(data), re.S))
+if len(hits) != 1:
+    print(f"display HAL not patched: expected one needHotplug store, found {len(hits)} "
+          f"(build {hashlib.sha256(bytes(data)).hexdigest()[:16]})")
+    sys.exit(2)
+off = hits[0].start() + 6
+data[off] = 0
+if overlay.exists() and overlay.read_bytes() == bytes(data):
+    print("display HAL patch already in place")
+    sys.exit(0)
+overlay.parent.mkdir(parents=True, exist_ok=True)
+tmp = overlay.with_suffix(".tmp")
+tmp.write_bytes(bytes(data))
+tmp.chmod(0o644)
+tmp.replace(overlay)
+print(f"display HAL patched (needHotplug store at 0x{off:x}); takes effect when Android restarts")
+PY

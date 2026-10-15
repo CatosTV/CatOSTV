@@ -1,0 +1,29 @@
+// CatosTV: let the TV account START the one-time Android setup unit, the
+// TV-density unit, the per-app "close Android app" template unit and the
+// per-app "open TV-only Android app" template unit (android-launch, same
+// validation as android-stop) and the per-app "uninstall" template unit
+// (android-remove, same validation), and the APK install unit (a fixed
+// root script over a file the shell staged),
+// nothing else (the density unit runs a fixed root script with no input). The setup unit
+// runs a fixed root script that takes no input
+// (/usr/local/lib/catostv/android-setup); the stop unit's only input is the
+// instance name, which /usr/local/lib/catostv/android-stop validates as a Java
+// package name before running `waydroid shell -- am force-stop <pkg>`. Stopping, restarting, enabling or
+// editing units, and any other unit, stay governed by the default policy.
+// "unit" and "verb" are the details systemd attaches to
+// org.freedesktop.systemd1.manage-units (src/core/dbus-util.c).
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        (action.lookup("unit") == "catostv-android-setup.service" ||
+         action.lookup("unit") == "catostv-android-density.service" ||
+         action.lookup("unit") == "catostv-android-repair.service" ||
+         action.lookup("unit") == "catostv-android-install.service" ||
+         (/^catostv-android-(stop|launch|remove)@[A-Za-z][A-Za-z0-9_.]*\.service$/).test(action.lookup("unit") || "")) &&
+        action.lookup("verb") == "start" &&
+        subject.user == "catostv" &&
+        subject.local &&
+        subject.active) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

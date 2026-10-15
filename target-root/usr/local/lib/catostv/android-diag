@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# CatosTV: one-shot Android diagnostics: what the
+# TV's Android container sees of the screen service and the network, so a
+# report can be pasted in one go. Run as root (`sudo catostv-diag android`
+# calls it). No input; prints only.
+set -uo pipefail
+LXC=(-P /var/lib/waydroid/lxc -n waydroid)
+ANDROID_ENV=(--clear-env
+  -v PATH=/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin
+  -v ANDROID_ROOT=/system -v ANDROID_DATA=/data)
+in_android() {
+  timeout 8 lxc-attach "${LXC[@]}" "${ANDROID_ENV[@]}" -- /system/bin/sh -c "$1" 2>&1
+}
+row() { printf '%-22s: %s\n' "$1" "$2"; }
+
+echo "== Android container"
+row "container" "$(lxc-info "${LXC[@]}" -sH 2>/dev/null || echo not-running)"
+if [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" != RUNNING ]]; then
+  exit 0
+fi
+row "boot completed" "$(in_android 'getprop sys.boot_completed' | tr -d '[:space:]')"
+row "front app" "$(cat /run/catostv/android-top 2>/dev/null || echo '(not published)')"
+
+echo
+echo "== Screen service (surfaceflinger)"
+pid=$(in_android 'pidof surfaceflinger' | tr -d '[:space:]')
+row "surfaceflinger pid" "${pid:-not running}"
+row "watchdog (pid restarts)" "$(cat /run/catostv/android-sf 2>/dev/null || echo '(not published)')"
+row "wm size" "$(in_android 'wm size' | tr '\n' ' ')"
+row "wm density" "$(in_android 'wm density' | tr '\n' ' ')"
+row "gralloc / egl" "$(in_android 'getprop ro.hardware.gralloc; getprop ro.hardware.egl' | tr '\n' ' ')"
+row "HDR display prop" "$(in_android 'getprop ro.surface_flinger.has_HDR_display' | tr -d '[:space:]')"
+row "wide colour prop" "$(in_android 'getprop ro.surface_flinger.has_wide_color_display' | tr -d '[:space:]')"
+row "persist width/height" "$(in_android 'getprop persist.waydroid.width; getprop persist.waydroid.height' | tr '\n' ' ')"
+row "renderengine" "$(in_android 'getprop debug.renderengine.backend' | tr -d '[:space:]')"
+TOMB=/home/catostv/.local/share/waydroid/data/tombstones
+if [[ -d $TOMB ]]; then
+  latest=$(ls -t "$TOMB" 2>/dev/null | grep -v '\.pb$' | head -n 1)
+  if [[ -n $latest ]]; then
+    echo "latest Android crash report ($latest):"
+    grep -E "^(Timestamp|Cmdline|signal|Abort message|    #[0-9]+ )" "$TOMB/$latest" | head -n 24 | sed 's/^/  /'
+  fi
+fi
+echo "recent crashes (coredumpctl, Android processes):"
+coredumpctl list --no-pager --no-legend 2>/dev/null | grep -E 'surfaceflinger|keystore|hwcomposer|composer|mediaserver|codec' | tail -n 8 | sed 's/^/  /'
+echo "last surfaceflinger lines in logcat:"
+in_android 'logcat -d -b main -b system -b crash -t 400 2>/dev/null | grep -iE "surfaceflinger|FATAL|DEBUG   :" | tail -n 12' | sed 's/^/  /'
+
+echo
+echo "== Android network"
+row "interfaces" "$(in_android 'ip -o addr show 2>/dev/null' | tr -s ' ' | tr '\n' ';')"
+row "routes" "$(in_android 'ip route show 2>/dev/null' | tr '\n' ';')"
+row "dns props" "$(in_android 'getprop net.dns1; getprop net.dns2; getprop net.eth0.dns1' | tr '\n' ' ')"
+row "gateway ping" "$(in_android 'ping -c1 -W2 192.168.240.1 2>&1 | tail -n1')"
+row "name lookup" "$(in_android 'ping -c1 -W2 google.com 2>&1 | head -n1')"
+echo "host side:"
+row "  waydroid0" "$(ip -o -4 addr show waydroid0 2>/dev/null | tr -s ' ' | cut -d' ' -f4)"
+row "  dnsmasq" "$(pgrep -a dnsmasq 2>/dev/null | grep -o 'listen-address=[^ ]*' | head -n1)"
+row "  ip_forward" "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)"
+row "  nft waydroid" "$(nft list ruleset 2>/dev/null | grep -c waydroid)"

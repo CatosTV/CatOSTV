@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# CatosTV: make Escape act as Back inside Android
+# (the remote's Back key, Escape on a keyboard remote, closed SmartTube's
+# menus but not its player, because Android maps Escape to ESCAPE, not
+# BACK). Android looks for Generic.kl in /odm, then /vendor, then
+# /system (usr/keylayout). The stock Waydroid image has it in /system;
+# WayDroid-ATV's TV images install their TV layout (Generic_ATV.kl, OK =
+# DPAD_CENTER) in /vendor, which wins, so the copy with `key 1` (Escape)
+# mapped to BACK goes into Waydroid's overlay for the same partition the
+# image uses. Run as root (container running, or the image
+# downloaded); no input.
+set -euo pipefail
+# The stock file comes from the running container's rootfs, or, before
+# Android has ever started (setup), straight from the downloaded image,
+# loop-mounted read-only for the copy.
+stock_file() { # $1 image (system|vendor), $2 path inside the image
+  local mounted=/var/lib/waydroid/rootfs/$1/$2 img mnt tmp
+  if [[ -r $mounted ]]; then
+    printf '%s\n' "$mounted"
+    return 0
+  fi
+  img=/var/lib/waydroid/images/$1.img
+  [[ -r $img ]] || return 1
+  mnt=$(mktemp -d /run/catostv-$1.XXXXXX) || return 1
+  if ! mount -o loop,ro "$img" "$mnt"; then
+    rmdir "$mnt"
+    return 1
+  fi
+  tmp=$(mktemp /run/catostv-stock.XXXXXX)
+  # The stock Waydroid system image is the partition itself (files at its
+  # root); WayDroid-ATV's TV images are system-as-root, with everything
+  # under system/. Take whichever layout this image has.
+  local src
+  for src in "$mnt/$2" "$mnt/$1/$2"; do
+    [[ -r $src ]] && break
+    src=""
+  done
+  if [[ -z $src ]] || ! cp "$src" "$tmp"; then
+    echo "no $2 in the $1 image (looked at / and /$1)" >&2
+    umount "$mnt"
+    rmdir "$mnt"
+    rm -f "$tmp"
+    return 1
+  fi
+  umount "$mnt"
+  rmdir "$mnt"
+  printf '%s\n' "$tmp"
+}
+STOCK="" OVERLAY=""
+for part in vendor system; do
+  if STOCK=$(stock_file "$part" usr/keylayout/Generic.kl 2>/dev/null); then
+    OVERLAY=/var/lib/waydroid/overlay/$part/usr/keylayout/Generic.kl
+    break
+  fi
+done
+[[ -n $STOCK ]] || {
+  echo "Android's key layout is not available (no running container, no system image)" >&2
+  exit 1
+}
+trap '[[ $STOCK == /run/catostv-stock.* ]] && rm -f "$STOCK"' EXIT
+echo "key layout from the $part image"
+mkdir -p "$(dirname "$OVERLAY")"
+sed -E 's/^(key 1 +)ESCAPE\b/\1BACK/' "$STOCK" >"$OVERLAY.tmp"
+if cmp -s "$OVERLAY.tmp" "$OVERLAY" 2>/dev/null; then
+  rm -f "$OVERLAY.tmp"
+  echo "Android key layout already in place"
+  exit 0
+fi
+chmod 644 "$OVERLAY.tmp"
+mv -f "$OVERLAY.tmp" "$OVERLAY"
+grep -q '^key 1 *BACK' "$OVERLAY" && echo "Android key layout: Escape → Back (takes effect when Android restarts)"

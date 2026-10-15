@@ -1,0 +1,6 @@
+[Unit]
+Description=CatosTV: turn Debug SSH off
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/catostv/debug-ssh off

@@ -1,0 +1,18 @@
+# CatosTV installed system: boot straight into the TV session.
+#
+# initial_session runs once at boot as the hidden, locked `catostv` user.
+# If that session ever ends, greetd starts default_session. In a normal
+# desktop that is a login prompt; on CatosTV it is the TV session again, so a
+# Linux login screen can never appear. (greetd-agreety is still installed
+# because the greetd package requires a greeter.)
+
+[terminal]
+vt = 1
+
+[default_session]
+command = "/usr/local/bin/catostv-session"
+user = "catostv"
+
+[initial_session]
+command = "/usr/local/bin/catostv-session"
+user = "catostv"

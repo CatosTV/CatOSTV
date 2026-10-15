@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# CatosTV Settings → Debug → Remove the old ok login. Run as
+# root by catostv-debug-remove-ok.service. Only after a login as `catostv`
+# over SSH worked (this boot's journal), so the TV never ends up without a
+# working development login.
+set -euo pipefail
+id ok >/dev/null 2>&1 || { echo "no ok login"; exit 0; }
+if ! journalctl -b -q --no-pager -u sshd.service 2>/dev/null \
+    | grep -Eq 'Accepted (password|publickey|keyboard-interactive/pam) for catostv '; then
+  echo "log in as catostv over SSH first" >&2
+  exit 1
+fi
+userdel -r ok
+rm -f /etc/sudoers.d/90-catostv-debug
+echo "ok removed"

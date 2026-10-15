@@ -1,0 +1,17 @@
+# CatosTV: install the APK the TV shell staged in
+# /home/catostv/.cache/catostv/android-install/ with Android's package manager
+# see /usr/local/lib/catostv/android-install. Started by the shell as
+#   systemctl --no-ask-password start --no-block catostv-android-install.service
+# which /etc/polkit-1/rules.d/50-catostv-android.rules allows for the active
+# local `catostv` session (verb "start" only). Result in
+# /run/catostv/android-install.result.
+
+[Unit]
+Description=CatosTV: install an Android app
+Requires=waydroid-container.service
+After=waydroid-container.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /usr/local/lib/catostv/android-install
+TimeoutStartSec=330
