@@ -1,6 +1,6 @@
 [package]
 name = "catostv-core"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.88"
 description = "CatosTV core logic: remote navigation, installer flow and safety, system tool adapters, IPC and app lifecycle. Standard library only."
