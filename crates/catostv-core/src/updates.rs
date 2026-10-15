@@ -170,20 +170,23 @@ pub fn archive_mirrorlist(date: &str) -> String {
     )
 }
 
-/// Fetch the manifest and its signature, verify, compare with the running
-/// version. Runs `curl` and `gpgv`; call from a worker thread.
-pub fn check(r: &mut dyn Runner) -> Result<Check, String> {
-    let Some(url) = configured_url() else {
-        return Ok(Check::NotSetUp);
-    };
-    if !Path::new(KEYRING).exists() {
-        return Ok(Check::NotSetUp);
-    }
-    let dir = crate::env::runtime_dir().join("catostv-update-check");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+/// The packages every release needs (`catostv-diag packages`), one per
+/// line. Shipped in each update so the updater and the installer can add
+/// what a newer version needs (`pacman -S --needed`).
+pub const PACKAGES_FILE: &str = "/usr/share/catostv/packages.txt";
+
+/// Fetch `url` and `url.sig` into `dir`, verify the signature with
+/// `keyring` and parse the manifest. Runs `curl` and `gpgv`.
+pub fn fetch_verified(
+    r: &mut dyn Runner,
+    url: &str,
+    keyring: &str,
+    dir: &Path,
+) -> Result<Manifest, String> {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let (man, sig) = (dir.join("manifest.json"), dir.join("manifest.json.sig"));
-    for (u, p) in [(url.clone(), &man), (format!("{url}.sig"), &sig)] {
+    for (u, p) in [(url.to_string(), &man), (format!("{url}.sig"), &sig)] {
         let out = r
             .run(
                 &Cmd::new("curl")
@@ -200,7 +203,7 @@ pub fn check(r: &mut dyn Runner) -> Result<Check, String> {
     let out = r
         .run(
             &Cmd::new("gpgv")
-                .args(["--keyring", KEYRING])
+                .args(["--keyring", keyring])
                 .arg(sig.to_string_lossy().to_string())
                 .arg(man.to_string_lossy().to_string())
                 .timeout(Duration::from_secs(20)),
@@ -211,12 +214,128 @@ pub fn check(r: &mut dyn Runner) -> Result<Check, String> {
     }
     let text = std::fs::read_to_string(&man).map_err(|e| e.to_string())?;
     let m = parse_manifest(&text).ok_or("The update information is damaged")?;
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(dir);
+    Ok(m)
+}
+
+/// Fetch the manifest and its signature, verify, compare with the running
+/// version. Runs `curl` and `gpgv`; call from a worker thread.
+pub fn check(r: &mut dyn Runner) -> Result<Check, String> {
+    let Some(url) = configured_url() else {
+        return Ok(Check::NotSetUp);
+    };
+    if !Path::new(KEYRING).exists() {
+        return Ok(Check::NotSetUp);
+    }
+    let dir = crate::env::runtime_dir().join("catostv-update-check");
+    let m = fetch_verified(r, &url, KEYRING, &dir)?;
     Ok(if newer(&m.version, crate::env::version()) {
         Check::Available(m)
     } else {
         Check::UpToDate
     })
+}
+
+/// The day of the Arch Linux Archive a live ISO was built from (written by
+/// scripts/build-iso.sh): the installer's pin when the update server
+/// cannot be reached.
+pub const LIVE_ARCHIVE_DATE: &str = "/usr/share/catostv/archive-date";
+
+/// What [`prepare_live`] did, for the install log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Prepared {
+    /// Pinned to the newest release's day; `Some(version)` if that release
+    /// is newer than the ISO and its files replaced the ISO's.
+    Release(String, Option<String>),
+    /// Server unreachable or unverifiable: pinned to the ISO's own day.
+    IsoDate(String, String),
+    /// Nothing to pin to: the fastest current mirrors (reflector).
+    Mirrors(String),
+}
+
+fn archive_day_exists(r: &mut dyn Runner, date: &str) -> bool {
+    r.run(
+        &Cmd::new("curl")
+            .args(["-fsI", "-o", "/dev/null"])
+            .arg(format!(
+                "https://archive.archlinux.org/repos/{date}/core/os/x86_64/"
+            ))
+            .timeout(Duration::from_secs(20)),
+    )
+    .is_ok_and(|o| o.success())
+}
+
+/// Before the installer downloads anything (live ISO, as root): ask the
+/// update server, with the address and key the ISO would install, for
+/// the newest release, so a new TV starts on it:
+///
+/// 1. pin pacman (`/etc/pacman.d/mirrorlist`, which pacstrap copies into
+///    the new system) to that release's day of the Arch Linux Archive;
+/// 2. if the release is newer than the ISO, download its package (checked
+///    against the signed SHA-256) and put its binaries and files where the
+///    installer copies them from.
+///
+/// Without a verified answer: the ISO's own day, else the fastest mirrors.
+pub fn prepare_live(r: &mut dyn Runner) -> Prepared {
+    use crate::install::{LIVE_BIN_DIR, OVERLAY_DIR, reflector_cmd};
+    let ok = |o: &crate::Result<crate::process::Output>| o.as_ref().is_ok_and(|o| o.success());
+    let pin =
+        |date: &str| std::fs::write("/etc/pacman.d/mirrorlist", archive_mirrorlist(date)).is_ok();
+    let conf = std::fs::read_to_string(format!("{OVERLAY_DIR}{CONFIG}")).unwrap_or_default();
+    let keyring = format!("{OVERLAY_DIR}{KEYRING}");
+    let dir = Path::new("/tmp/catostv-release");
+    let release = match parse_config(&conf) {
+        Some(url) if Path::new(&keyring).exists() => fetch_verified(r, &url, &keyring, dir),
+        _ => Err("updates aren't set up in this ISO".into()),
+    };
+    let why = match release {
+        Ok(m) if archive_day_exists(r, &m.archive_date) && pin(&m.archive_date) => {
+            if !newer(&m.version, crate::env::version()) {
+                return Prepared::Release(m.archive_date, None);
+            }
+            let pkg = "/tmp/catostv-release.tar.zst";
+            let stage = "/tmp/catostv-release-stage";
+            let fetched = ok(&r.run(
+                &Cmd::new("curl")
+                    .args(["-fsSL", "--max-filesize", "1073741824", "-o", pkg])
+                    .arg(&m.package_url)
+                    .timeout(Duration::from_secs(1800)),
+            ));
+            let sum = r
+                .run(&Cmd::new("sha256sum").arg(pkg))
+                .ok()
+                .map(|o| o.stdout.split_whitespace().next().unwrap_or("").to_string());
+            let _ = std::fs::remove_dir_all(stage);
+            let unpacked = fetched
+                && sum.as_deref() == Some(m.package_sha256.as_str())
+                && std::fs::create_dir_all(stage).is_ok()
+                && ok(&r.run(&Cmd::new("bsdtar").args(["-xf", pkg, "-C", stage])));
+            let swapped = unpacked
+                && ok(&r.run(&Cmd::new("sh").args([
+                    "-c",
+                    &format!(
+                        "set -e; for b in {stage}/bin/catostv-*; do \
+                         install -m755 \"$b\" {LIVE_BIN_DIR}/; done; \
+                         rm -rf {OVERLAY_DIR}.new; cp -a {stage}/root {OVERLAY_DIR}.new; \
+                         rm -rf {OVERLAY_DIR}; mv {OVERLAY_DIR}.new {OVERLAY_DIR}"
+                    ),
+                ])));
+            let _ = std::fs::remove_file(pkg);
+            let _ = std::fs::remove_dir_all(stage);
+            // Not swapped: the ISO's own files, still on the release's day.
+            return Prepared::Release(m.archive_date, swapped.then_some(m.version));
+        }
+        Ok(m) => format!("no archive snapshot for {}", m.archive_date),
+        Err(e) => e,
+    };
+    let iso_date = std::fs::read_to_string(LIVE_ARCHIVE_DATE)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if is_archive_date(&iso_date) && archive_day_exists(r, &iso_date) && pin(&iso_date) {
+        return Prepared::IsoDate(iso_date, why);
+    }
+    let _ = r.run(&reflector_cmd());
+    Prepared::Mirrors(why)
 }
 
 /// Start the install unit (polkit lets the TV account start exactly it).

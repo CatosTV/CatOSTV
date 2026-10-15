@@ -2,7 +2,10 @@
 # Make a signed CatosTV update.
 #
 #   ./scripts/make-update.sh OUTDIR --archive-date YYYY/MM/DD \
-#       --notes NOTES.txt --key KEYID --base-url https://host/catostv/stable
+#       --notes NOTES.txt --key KEYID [--base-url https://host/catostv/stable]
+#
+# The default base URL is https://updates.catostv.com/stable; publish with
+# scripts/publish-update.sh OUTDIR. GPG_PASSPHRASE (if set) unlocks the key.
 #
 # Writes to OUTDIR: catostv-<VERSION>.tar.zst (bin/ + root/, the files the
 # installer would copy), manifest.json (version, Arch Linux Archive day,
@@ -17,7 +20,7 @@ cd "$ROOT"
 usage() { sed -n '2,13p' "$0"; exit 2; }
 [[ $# -ge 1 ]] || usage
 OUT="$1"; shift
-DATE="" NOTES="" KEY="" BASE=""
+DATE="" NOTES="" KEY="" BASE="https://updates.catostv.com/stable"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --archive-date) DATE="$2"; shift ;;
@@ -46,6 +49,8 @@ for b in "${BINS[@]}"; do install -m755 "target/release/$b" "$STAGE/bin/$b"; don
 git ls-files -z target-root | while IFS= read -r -d '' f; do
   install -D -m "$( [[ -x $f ]] && echo 755 || echo 644 )" "$f" "$STAGE/root/${f#target-root/}"
 done
+# What this version needs installed (updater and installer add what's missing).
+target/release/catostv-diag packages > "$STAGE/root/usr/share/catostv/packages.txt"
 PKG="catostv-$VERSION.tar.zst"
 tar --zstd -cf "$OUT/$PKG" -C "$STAGE" --owner=0 --group=0 bin root
 SHA="$(sha256sum "$OUT/$PKG" | cut -d' ' -f1)"
@@ -57,5 +62,5 @@ lines = [l.strip() for l in open(notes) if l.strip()]
 json.dump({"version": version, "archive_date": date, "notes": lines,
            "package": {"url": url, "sha256": sha}}, open(out, "w"), indent=2)
 PY
-gpg --batch --yes --local-user "$KEY" --detach-sign -o "$OUT/manifest.json.sig" "$OUT/manifest.json"
+gpg --batch --yes ${GPG_PASSPHRASE:+--pinentry-mode loopback --passphrase-fd 3} --local-user "$KEY" --detach-sign -o "$OUT/manifest.json.sig" "$OUT/manifest.json" 3<<<"${GPG_PASSPHRASE:-}"
 echo "Made $OUT/$PKG, manifest.json, manifest.json.sig, upload them to $BASE/"

@@ -531,18 +531,23 @@ pub fn plan(cfg: &InstallConfig) -> Result<Plan> {
                 )),
             ],
         ),
-        // Before anything is erased: rank mirrors by measured speed so the
-        // big download uses the fastest servers. Failure is tolerated (the
-        // stock mirror list still works); pacstrap copies the ranked list
-        // into the new system.
+        // Before anything is erased: ask the update server for the newest
+        // release and pin pacman to its day of the Arch Linux Archive (else
+        // this ISO's day, else the fastest mirrors); a newer release's files
+        // replace the ISO's. pacstrap copies the pinned list into the new
+        // system. See updates::prepare_live.
         step(
-            "Finding the fastest servers",
+            "Checking for updates",
             false,
             vec![
                 // releng's own reflector.service may still be rewriting the
                 // same file from boot; stop it first.
                 Op::try_run(Cmd::new("systemctl").args(["stop", "reflector.service"])),
-                Op::try_run(reflector_cmd()),
+                Op::try_run(
+                    Cmd::new(format!("{LIVE_BIN_DIR}/catostv-diag"))
+                        .arg("install-prepare")
+                        .timeout(Duration::from_secs(2400)),
+                ),
             ],
         ),
         step(
@@ -612,7 +617,27 @@ pub fn plan(cfg: &InstallConfig) -> Result<Plan> {
                 ])),
             ],
         ),
-        step("Downloading CatosTV", true, vec![Op::Stream(pacstrap)]),
+        step(
+            "Downloading CatosTV",
+            true,
+            vec![
+                Op::Stream(pacstrap),
+                // Packages a newer release (taken by "Checking for updates")
+                // needs beyond this ISO's list.
+                Op::run(
+                    Cmd::new("sh")
+                        .args([
+                            "-c",
+                            &format!(
+                                "f={OVERLAY_DIR}{pk}; [ -s \"$f\" ] || exit 0; \
+                                 arch-chroot {MOUNT_ROOT} pacman -S --needed --noconfirm $(cat \"$f\")",
+                                pk = crate::updates::PACKAGES_FILE
+                            ),
+                        ])
+                        .timeout(VERY_LONG),
+                ),
+            ],
+        ),
         step(
             "Setting up your TV",
             true,
@@ -1312,11 +1337,15 @@ mod tests {
                 .ops
                 .contains(&Op::Check(Check::DiskEligible("/dev/nvme0n1".into())))
         );
-        // Before the first destructive step only the (tolerated) mirror
-        // ranking runs.
+        // Before the first destructive step only the (tolerated) update
+        // check runs.
         let first_destructive = p.steps.iter().position(|s| s.destructive).unwrap();
         assert_eq!(first_destructive, 2);
-        assert_eq!(p.steps[1].ops.last(), Some(&Op::try_run(reflector_cmd())));
+        assert!(matches!(
+            p.steps[1].ops.last(),
+            Some(Op::Run { cmd, allow_fail: true, .. })
+                if cmd.program.ends_with("catostv-diag") && cmd.args == ["install-prepare"]
+        ));
         assert!(p.steps[1].ops.iter().all(|o| matches!(
             o,
             Op::Run {
@@ -1417,7 +1446,8 @@ mod tests {
         if DEBUG_SSH {
             assert!(text.contains(" openssh sudo rsync"));
         }
-        assert!(text.contains("reflector --protocol https"));
+        assert!(text.contains("catostv-diag install-prepare"));
+        assert!(text.contains("pacman -S --needed --noconfirm"));
     }
 
     #[test]

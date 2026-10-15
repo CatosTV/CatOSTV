@@ -25,7 +25,7 @@ use catostv_core::{android, audio, bluetooth, desktop, disk, env, flatpak, ipc, 
 use std::time::Duration;
 
 const USAGE: &str =
-    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|packages|windows|version> [options]
+    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|packages|install-prepare|windows|version> [options]
   plan/dry-run options: --disk /dev/X  [--timezone Area/City]  [--keyboard us|de|…]  [--cpu intel|amd|other]";
 
 fn opt(args: &[String], name: &str) -> Option<String> {
@@ -114,6 +114,23 @@ fn main() {
                 1
             }
         },
+        Some("install-prepare") => {
+            // Live ISO, before the download (see updates::prepare_live).
+            use catostv_core::updates::{Prepared, prepare_live};
+            match prepare_live(&mut SystemRunner) {
+                Prepared::Release(date, Some(v)) => {
+                    println!("installing CatosTV {v} (newer than this ISO), packages of {date}")
+                }
+                Prepared::Release(date, None) => println!("packages of {date} (newest release)"),
+                Prepared::IsoDate(date, why) => {
+                    println!("update server: {why}; packages of {date} (this ISO)")
+                }
+                Prepared::Mirrors(why) => {
+                    println!("update server: {why}; current packages from the fastest mirrors")
+                }
+            }
+            0
+        }
         Some("packages") => {
             // One per line, for `pacman -T` in scripts/deploy.sh (which
             // installs only what an older install is missing).
