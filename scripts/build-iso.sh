@@ -160,6 +160,11 @@ install -Dm755 "$ROOT/iso-overlay/root/.config/labwc/autostart" "$A/root/.config
 install -Dm644 "$ROOT/iso-overlay/root/.config/labwc/environment" "$A/root/.config/labwc/environment"
 mkdir -p "$A/usr/share/catostv"
 cp -a "$ROOT/target-root" "$A/usr/share/catostv/install-root"
+# The installer's fallback pin when the update server can't be reached:
+# the Arch Linux Archive day this ISO's packages come from (UTC; the
+# snapshot of a day is complete once the day is over, so take yesterday).
+date -u -d yesterday +%Y/%m/%d >"$A/usr/share/catostv/archive-date"
+"$ROOT/target/release/catostv-diag" packages >"$A/usr/share/catostv/install-root/usr/share/catostv/packages.txt"
 
 # Start NetworkManager and the graphical installer in the live environment.
 mkdir -p "$A/etc/systemd/system/multi-user.target.wants"

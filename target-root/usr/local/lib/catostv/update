@@ -6,7 +6,9 @@
 #      /etc/catostv/updates.conf, verified with gpgv against
 #      /usr/share/catostv/updates.gpg;
 #   2. pins pacman to the manifest's Arch Linux Archive day and runs a full
-#      upgrade (packages exactly as tested for that CatosTV version);
+#      upgrade (packages exactly as tested for that CatosTV version), adding
+#      what the version's packages.txt lists and is missing. Arch is never
+#      upgraded any other way;
 #   3. the CatosTV package (sha256 from the signed manifest): binaries to
 #      /usr/local/bin, files over / as the installer copies them.
 # Progress for the interface: /run/catostv/update-state, one line
@@ -121,6 +123,17 @@ def main():
     if h.hexdigest() != pkg_sha:
         fail("The download is damaged (checksum)")
 
+    stage = f"{WORK}/stage"
+    os.makedirs(stage)
+    run(["tar", "--zstd", "-xf", pkg, "-C", stage, "--no-same-owner"], "The download could not be unpacked")
+    # Packages this version needs that an older one did not.
+    wanted = []
+    try:
+        wanted = [p for p in open(f"{stage}/root/usr/share/catostv/packages.txt").read().split()
+                  if re.fullmatch(r"[a-z0-9@._+-]+", p)]
+    except OSError:
+        pass
+
     state("running", "Updating system packages")
     backup = MIRRORLIST + ".catostv-backup"
     if not os.path.exists(backup) and os.path.exists(MIRRORLIST):
@@ -129,12 +142,9 @@ def main():
         f.write(f"# CatosTV {version}: packages as of {date} (Arch Linux Archive).\n"
                 f"# Your previous list: {backup}\n"
                 f"Server = https://archive.archlinux.org/repos/{date}/$repo/os/$arch\n")
-    run(["pacman", "-Syyuu", "--noconfirm"], "Updating the system packages failed")
+    run(["pacman", "-Syyuu", "--needed", "--noconfirm"] + wanted, "Updating the system packages failed")
 
     state("running", f"Installing CatosTV {version}")
-    stage = f"{WORK}/stage"
-    os.makedirs(stage)
-    run(["tar", "--zstd", "-xf", pkg, "-C", stage, "--no-same-owner"], "The download could not be unpacked")
     for b in sorted(os.listdir(f"{stage}/bin")):
         if not re.fullmatch(r"catostv-[a-z-]+", b):
             continue

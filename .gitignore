@@ -3,3 +3,4 @@
 /out
 # Cargo.lock IS committed for this application workspace once a machine with
 # crates.io has generated it (see docs/VERIFICATION.md, "First real build").
+docs/creds.txt
