@@ -1,0 +1,5 @@
+# CatosTV: a game controller plugged in while Android runs is handed to
+# Android as well, and its node is deleted when it is unplugged so
+# a re-plug is seen as new; see /usr/local/lib/catostv/android-pads.
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_JOYSTICK}=="1", RUN+="/usr/local/lib/catostv/android-pads"
+ACTION=="remove", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_JOYSTICK}=="1", RUN+="/usr/local/lib/catostv/android-pads remove %k"

@@ -1,0 +1,286 @@
+#!/usr/bin/python3 -I
+# CatosTV: make a Home icon for an Android app from its installed APK
+# Waydroid's platform service writes /data/icons/<pkg>.png only
+# while Android boots, so an app installed afterwards (CatosTV's own APK
+# install, the Play Store) had a name but no icon until Android restarted.
+#
+#   android-icon PACKAGE OUT.png
+#
+# Run as the TV account (Android's system uid owns /data/app, which is the
+# TV account on the host). Reads the app's base and split APKs, follows the
+# manifest's icon through the resource table to the highest-density
+# bitmap, and writes it as PNG; adaptive icons are drawn as foreground over
+# background. Vector-only icons are left alone (exit 3: the Home tile shows
+# the app's name). No network, nothing written but OUT.png.
+import glob
+import os
+import re
+import struct
+import sys
+import zipfile
+
+DATA_APP = os.path.expanduser("~/.local/share/waydroid/data/app")
+ATTR_ICON, ATTR_ROUND_ICON, ATTR_BANNER = 0x01010002, 0x0101052C, 0x010102E1
+ATTR_DRAWABLE = 0x01010199
+T_REFERENCE, T_STRING = 0x01, 0x03
+T_INT_COLOR_FIRST, T_INT_COLOR_LAST = 0x1C, 0x1F
+
+
+def string_pool(buf, off):
+    """Strings of a ResStringPool chunk at `off`."""
+    _, hdr, _ = struct.unpack_from("<HHI", buf, off)
+    count, _, flags, strings_start, _ = struct.unpack_from("<IIIII", buf, off + 8)
+    utf8 = flags & 0x100
+    out = []
+    for i in range(count):
+        (rel,) = struct.unpack_from("<I", buf, off + hdr + 4 * i)
+        p = off + strings_start + rel
+        if utf8:
+            n = buf[p]
+            p += 2 if n & 0x80 else 1
+            n = buf[p]
+            if n & 0x80:
+                n = ((n & 0x7F) << 8) | buf[p + 1]
+                p += 1
+            p += 1
+            out.append(buf[p : p + n].decode("utf-8", "replace"))
+        else:
+            (n,) = struct.unpack_from("<H", buf, p)
+            p += 2
+            if n & 0x8000:
+                n = ((n & 0x7FFF) << 16) | struct.unpack_from("<H", buf, p)[0]
+                p += 2
+            out.append(buf[p : p + 2 * n].decode("utf-16-le", "replace"))
+    return out
+
+
+def xml_elements(buf):
+    """(tag, {attr resource id: (type, data)}) of a binary XML file."""
+    strings, res_ids, out = [], [], []
+    off = struct.unpack_from("<H", buf, 2)[0]
+    while off + 8 <= len(buf):
+        typ, hdr, size = struct.unpack_from("<HHI", buf, off)
+        if size < 8:
+            break
+        if typ == 0x0001:
+            strings = string_pool(buf, off)
+        elif typ == 0x0180:
+            res_ids = list(struct.unpack_from("<%dI" % ((size - hdr) // 4), buf, off + hdr))
+        elif typ == 0x0102:
+            name_i, attr_start, attr_size, attr_count = struct.unpack_from("<IHHH", buf, off + 16 + 4)
+            attrs = {}
+            a = off + 16 + attr_start
+            for k in range(attr_count):
+                _, aname, _, _, _, dtype, data = struct.unpack_from("<IIIHBBI", buf, a + k * attr_size)
+                if aname < len(res_ids):
+                    attrs[res_ids[aname]] = (dtype, data)
+            out.append((strings[name_i] if name_i < len(strings) else "", attrs))
+        off += size
+    return out
+
+
+def res_table(buf, table):
+    """Add {resource id: [(density, type, data, value strings)]} from one
+    resource table (base and density splits each have one)."""
+    values = []
+    _, hdr, _, _ = struct.unpack_from("<HHII", buf, 0)
+    off = hdr
+    while off + 8 <= len(buf):
+        typ, chdr, size = struct.unpack_from("<HHI", buf, off)
+        if size < 8:
+            break
+        if typ == 0x0001:
+            values = string_pool(buf, off)
+        elif typ == 0x0200:
+            (pkg_id,) = struct.unpack_from("<I", buf, off + 8)
+            p = off + chdr
+            end = off + size
+            while p + 8 <= end:
+                t, thdr, tsize = struct.unpack_from("<HHI", buf, p)
+                if tsize < 8:
+                    break
+                if t == 0x0201:
+                    read_type(buf, p, thdr, pkg_id, table, values)
+                p += tsize
+        off += size
+
+
+def read_type(buf, p, thdr, pkg_id, table, values):
+    type_id, flags, _, count, entries_start = struct.unpack_from("<BBHII", buf, p + 8)
+    (density,) = struct.unpack_from("<H", buf, p + 20 + 14)
+    sparse, off16 = flags & 0x01, flags & 0x02
+    index = p + thdr
+    pairs = []
+    for i in range(count):
+        if sparse:
+            idx, o = struct.unpack_from("<HH", buf, index + 4 * i)
+            pairs.append((idx, o * 4))
+        elif off16:
+            (o,) = struct.unpack_from("<H", buf, index + 2 * i)
+            if o != 0xFFFF:
+                pairs.append((i, o * 4))
+        else:
+            (o,) = struct.unpack_from("<I", buf, index + 4 * i)
+            if o != 0xFFFFFFFF:
+                pairs.append((i, o))
+    for idx, o in pairs:
+        e = p + entries_start + o
+        esize, eflags = struct.unpack_from("<HH", buf, e)
+        if eflags & 0x08:  # compact entry: type in the flags' high byte
+            dtype, (data,) = eflags >> 8, struct.unpack_from("<I", buf, e + 4)
+        elif eflags & 0x01:  # a map (style), never an icon file
+            continue
+        else:
+            _, _, dtype, data = struct.unpack_from("<HBBI", buf, e + esize)
+        rid = (pkg_id << 24) | (type_id << 16) | idx
+        table.setdefault(rid, []).append((density, dtype, data, values))
+
+
+class App:
+    def __init__(self, apks):
+        self.zips = [zipfile.ZipFile(a) for a in apks]
+        base = self.zips[0]
+        self.manifest = xml_elements(base.read("AndroidManifest.xml"))
+        self.table = {}
+        for z in self.zips:
+            try:
+                res_table(z.read("resources.arsc"), self.table)
+            except KeyError:
+                continue
+
+    def read(self, path):
+        for z in self.zips:
+            try:
+                return z.read(path)
+            except KeyError:
+                continue
+        return None
+
+    def resolve(self, rid, depth=0):
+        """Best (type, data, value strings) for a resource: highest density
+        first (0xFFFE "any" and 0xFFFF "none" count as lowest)."""
+        if depth > 8 or rid not in self.table:
+            return None
+        for density, dtype, data, values in sorted(
+            self.table[rid], key=lambda v: -(v[0] if v[0] < 0xFFFE else 0)
+        ):
+            if dtype == T_REFERENCE:
+                r = self.resolve(data, depth + 1)
+                if r:
+                    return r
+                continue
+            return dtype, data, values
+        return None
+
+    def drawable(self, rid, size):
+        """A GdkPixbuf for a drawable resource, or None."""
+        r = self.resolve(rid)
+        if not r:
+            return None
+        dtype, data, values = r
+        if T_INT_COLOR_FIRST <= dtype <= T_INT_COLOR_LAST:
+            return solid(data, size)
+        if dtype != T_STRING or data >= len(values):
+            return None
+        path = values[data]
+        raw = self.read(path)
+        if raw is None:
+            return None
+        if path.endswith(".xml"):
+            return self.adaptive(raw, size)
+        return pixbuf(raw, size)
+
+    def adaptive(self, raw, size):
+        elements = xml_elements(raw)
+        layers = {tag: attrs.get(ATTR_DRAWABLE) for tag, attrs in elements}
+        fg, bg = layers.get("foreground"), layers.get("background")
+        if not fg or fg[0] != T_REFERENCE:
+            return None
+        # Adaptive layers are 108 dp of which the middle 72 dp show.
+        big = size * 108 // 72
+        front = self.drawable(fg[1], big)
+        if front is None:
+            return None
+        back = None
+        if bg and bg[0] == T_REFERENCE:
+            back = self.drawable(bg[1], big)
+        elif bg and T_INT_COLOR_FIRST <= bg[0] <= T_INT_COLOR_LAST:
+            back = solid(bg[1], big)
+        if back is None:
+            back = solid(0xFF202020, big)
+        front.composite(back, 0, 0, big, big, 0, 0, 1, 1, interp(), 255)
+        cut = (big - size) // 2
+        return back.new_subpixbuf(cut, cut, size, size).copy()
+
+
+def gdk():
+    import gi
+
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf
+
+    return GdkPixbuf
+
+
+def interp():
+    return gdk().InterpType.BILINEAR
+
+
+def solid(argb, size):
+    p = gdk().Pixbuf.new(gdk().Colorspace.RGB, True, 8, size, size)
+    a, r, g, b = (argb >> 24) & 0xFF, (argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF
+    p.fill((r << 24) | (g << 16) | (b << 8) | (a or 0xFF))
+    return p
+
+
+def pixbuf(raw, size):
+    loader = gdk().PixbufLoader()
+    try:
+        loader.write(raw)
+        loader.close()
+    except Exception:
+        return None
+    p = loader.get_pixbuf()
+    if p is None:
+        return None
+    if not p.get_has_alpha():
+        p = p.add_alpha(False, 0, 0, 0)
+    return p.scale_simple(size, size, interp())
+
+
+def apks(package):
+    pattern = os.path.join(DATA_APP, "*", glob.escape(package) + "-*")
+    for d in sorted(glob.glob(pattern)) + sorted(glob.glob(os.path.join(DATA_APP, glob.escape(package) + "-*"))):
+        base = os.path.join(d, "base.apk")
+        if os.path.isfile(base):
+            return [base] + sorted(glob.glob(os.path.join(d, "split_*.apk")))
+    return []
+
+
+def main():
+    if len(sys.argv) != 3 or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+", sys.argv[1]):
+        print("usage: android-icon PACKAGE OUT.png", file=sys.stderr)
+        return 2
+    package, out = sys.argv[1], sys.argv[2]
+    files = apks(package)
+    if not files:
+        print(f"{package}: no APK found", file=sys.stderr)
+        return 1
+    app = App(files)
+    application = next((a for t, a in app.manifest if t == "application"), {})
+    for attr in (ATTR_ICON, ATTR_ROUND_ICON, ATTR_BANNER):
+        ref = application.get(attr)
+        if not ref or ref[0] != T_REFERENCE:
+            continue
+        icon = app.drawable(ref[1], 192)
+        if icon is not None:
+            tmp = out + ".tmp"
+            icon.savev(tmp, "png", [], [])
+            os.replace(tmp, out)
+            return 0
+    print(f"{package}: no bitmap icon (vector only?)", file=sys.stderr)
+    return 3
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,9 @@
+# CatosTV: Android display properties. Read by Android's init
+# at boot (/odm/etc/build.prop through Waydroid's overlay); property names
+# are case-sensitive, which waydroid.cfg cannot carry.
+# No HDR / wide-colour display: 10-bit video buffers crashed the GPU
+# composition path on an Intel GPU; CatosTV's own player does HDR.
+ro.surface_flinger.has_HDR_display=false
+ro.surface_flinger.has_wide_color_display=false
+ro.surface_flinger.use_color_management=false
+ro.surface_flinger.protected_contents=false

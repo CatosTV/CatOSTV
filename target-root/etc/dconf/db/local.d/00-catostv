@@ -1,0 +1,10 @@
+# CatosTV defaults for GTK / libadwaita apps (Store apps): dark,
+# larger text for viewing from the couch, Papirus icons. Read by the
+# settings portal; compiled with `dconf update` (installer and deploy.sh).
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+text-scaling-factor=1.5
+icon-theme='Papirus-Dark'
+cursor-theme='Adwaita'
+cursor-size=32
+enable-animations=true

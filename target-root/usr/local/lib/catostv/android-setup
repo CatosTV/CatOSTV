@@ -1,0 +1,482 @@
+#!/usr/bin/env bash
+# CatosTV, one-time Android (Waydroid) setup: Android TV 16.
+#
+# Runs as root from catostv-android-setup.service, which the TV account may
+# start (and only start) through /etc/polkit-1/rules.d/50-catostv-android.rules.
+# Its only input is one word the TV account chose in Settings → Android
+# before starting it (`android_variant = gapps|vanilla` in
+# /home/catostv/.config/catostv/ui.conf): Google Play or Aurora Store.
+# Anything else in that file is ignored. Safe to re-run after a failure:
+# finished steps are skipped.
+#
+# Progress for the shell (world-readable, replaced atomically):
+#   /run/catostv/android-setup.state
+#     step=N/5 <text>
+#     result=ok | result=failed:<text>      (last line, once finished)
+# Full log: /var/log/catostv-android-setup.log
+# Done marker (survives reboots): /var/lib/catostv/android/setup-done
+#
+# Image: WayDroid-ATV's Android TV 16 (LineageOS 23.0 for TV, release
+# 20260403), a real Android TV with the Catapult launcher,
+# VA-API zero-copy video decoding on Intel/AMD, ARM translation built in,
+# Widevine L3, with or without Google apps
+# (https://github.com/WayDroid-ATV/waydroid-androidtv-builds:
+# 4K video needs hardware decoding, which the stock
+# Waydroid image lacks). Downloaded by `waydroid init` from
+# https://waydroid-atv.github.io/ota/a16-tv (GitHub Pages → SourceForge),
+# sha256-checked against the OTA JSON. With "vanilla", Aurora Store comes
+# from f-droid.org (built and signed by F-Droid).
+#
+# A CatosTV-built image in
+# /var/lib/catostv/android/custom/{system,vendor}.img takes precedence:
+# Waydroid loads "pre-installed" images from /etc/waydroid-extra/images,
+# which is pointed at that folder, and downloads nothing.
+set -euo pipefail
+umask 022
+export LC_ALL=C
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/bin
+
+readonly STATE_DIR=/run/catostv
+readonly STATE_FILE=$STATE_DIR/android-setup.state
+readonly LOG_FILE=/var/log/catostv-android-setup.log
+readonly LIB_DIR=/var/lib/catostv
+readonly ANDROID_DIR=$LIB_DIR/android
+readonly DONE_FILE=$ANDROID_DIR/setup-done
+readonly APK_FILE=$ANDROID_DIR/AuroraStore.apk
+readonly IMAGE_FILE=$ANDROID_DIR/image
+readonly GSF_FILE=$ANDROID_DIR/gsf-id
+readonly CACHE_DIR=/var/cache/catostv
+readonly WAYDROID_DIR=/var/lib/waydroid
+readonly WAYDROID_CFG=$WAYDROID_DIR/waydroid.cfg
+readonly WAYDROID_DATA=/home/catostv/.local/share/waydroid
+readonly SOFTWARE_RENDERING_FLAG=/etc/catostv/android-software-rendering
+readonly NO_ZERO_COPY_FLAG=/etc/catostv/android-no-zero-copy
+readonly UI_CONF=/home/catostv/.config/catostv/ui.conf
+# WayDroid-ATV's Android TV 16 channel (LineageOS 23.0;): the
+# newest TV image, with zero-copy video decoding on by default, Catapult
+# as launcher and the Google TV components. (The Android TV 13 channel is
+# the same host without the `a16-tv/` part.)
+readonly OTA_SYSTEM=https://waydroid-atv.github.io/ota/a16-tv/system
+readonly OTA_VENDOR=https://waydroid-atv.github.io/ota/a16-tv/vendor
+readonly IMAGE_TAG=atv16
+# A CatosTV-built image: scripts/deploy.sh --android-image puts
+# system.img, vendor.img and BUILD.txt here; Waydroid finds them through
+# the "pre-installed images" link below.
+readonly CUSTOM_DIR=$ANDROID_DIR/custom
+readonly PREINSTALLED_LINK=/etc/waydroid-extra/images
+readonly FDROID_API=https://f-droid.org/api/v1/packages/com.aurora.store
+readonly FDROID_REPO=https://f-droid.org/repo
+readonly TOTAL=5
+
+mkdir -p "$STATE_DIR" "$ANDROID_DIR" "$CACHE_DIR"
+chmod 0755 "$STATE_DIR" "$LIB_DIR" "$ANDROID_DIR"
+touch "$LOG_FILE"
+chmod 0644 "$LOG_FILE"
+exec >>"$LOG_FILE" 2>&1
+
+STEP_LINE="step=0/$TOTAL Starting"
+STEP_TEXT="Starting"
+FAIL_REASON=""
+
+write_state() {
+    local tmp
+    tmp=$(mktemp "$STATE_DIR/.android-setup.XXXXXX")
+    printf '%s\n' "$@" >"$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$STATE_FILE"
+}
+
+step() {
+    STEP_TEXT=$2
+    STEP_LINE="step=$1/$TOTAL $2"
+    echo "==> [$(date -Is)] $STEP_LINE"
+    write_state "$STEP_LINE"
+}
+
+fail() {
+    FAIL_REASON=$1
+    echo "!! $1"
+    exit 1
+}
+
+on_exit() {
+    local code=$?
+    if ((code == 0)); then
+        write_state "$STEP_LINE" "result=ok"
+        echo "==> [$(date -Is)] Android setup finished"
+    else
+        local reason=${FAIL_REASON:-"$STEP_TEXT failed"}
+        reason=${reason//$'\n'/ }
+        write_state "$STEP_LINE" "result=failed:$reason"
+        echo "!! [$(date -Is)] Android setup failed (exit $code): $reason"
+    fi
+}
+trap on_exit EXIT
+
+# Read [section] key from waydroid.cfg (INI) without sourcing anything.
+cfg_get() {
+    python3 -I - "$WAYDROID_CFG" "$1" "$2" <<'PY'
+import configparser, sys
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+print(cfg.get(sys.argv[2], sys.argv[3], fallback=""))
+PY
+}
+
+# Set [properties] key=value in waydroid.cfg.
+cfg_set_property() {
+    python3 -I - "$WAYDROID_CFG" "$1" "$2" <<'PY'
+import configparser, sys
+cfg = configparser.ConfigParser()
+cfg.read(sys.argv[1])
+if not cfg.has_section("properties"):
+    cfg.add_section("properties")
+cfg.set("properties", sys.argv[2], sys.argv[3])
+with open(sys.argv[1], "w") as f:
+    cfg.write(f)
+PY
+}
+
+# "gapps" (Google Play, default) or "vanilla" (Aurora Store), chosen in
+# Settings → Android. Only those two words are accepted.
+variant() {
+    local v
+    v=$(sed -n 's/^android_variant *= *\([a-z]*\).*/\1/p' "$UI_CONF" 2>/dev/null | head -n1)
+    case $v in
+    vanilla) echo vanilla ;;
+    *) echo gapps ;;
+    esac
+}
+
+is_initialized() {
+    [[ -f $WAYDROID_CFG && -d $WAYDROID_DIR/rootfs ]] || return 1
+    local images
+    images=$(cfg_get waydroid images_path)
+    [[ -n $images && -e $images/system.img && -e $images/vendor.img ]]
+}
+
+# A complete CatosTV-built image is in CUSTOM_DIR.
+custom_image() {
+    [[ -s $CUSTOM_DIR/system.img && -s $CUSTOM_DIR/vendor.img ]]
+}
+
+# `key=value` from the build's BUILD.txt (written by
+# scripts/android-image/build.sh); empty when absent. One word only.
+custom_build_value() {
+    sed -n "s/^$1=\([A-Za-z0-9._-]*\).*/\1/p" "$CUSTOM_DIR/BUILD.txt" 2>/dev/null | head -n1
+}
+
+# Something that changes when the custom image changes, so a new build is
+# installed on the next setup: its build stamp, else size and mtime.
+custom_image_id() {
+    local id
+    id=$(custom_build_value build)
+    [[ -n $id ]] || id=$(stat -c '%s-%Y' "$CUSTOM_DIR/system.img" 2>/dev/null | tr -c 'A-Za-z0-9\n' '-')
+    printf '%s' "${id:-unknown}"
+}
+
+# Major Android version of the installed system image (16 for the TV image).
+android_version() {
+    local images mnt ver=""
+    images=$(cfg_get waydroid images_path)
+    mnt=$(mktemp -d)
+    if mount -o loop,ro "$images/system.img" "$mnt"; then
+        ver=$(grep -h -m1 -E '^ro\.(system\.)?build\.version\.release=' \
+            "$mnt/system/build.prop" "$mnt/build.prop" 2>/dev/null | head -n1 | cut -d= -f2 || true)
+        umount "$mnt"
+    fi
+    rmdir "$mnt"
+    printf '%s' "${ver%%.*}"
+}
+
+# Waydroid's last progress line ("[Downloading] 185.81 MB/193.87 MB"); it
+# prints one every 2 s with \r, straight into this log.
+download_progress() {
+    tail -c 4000 "$LOG_FILE" 2>/dev/null | tr '\r' '\n' |
+        grep -o '\[Downloading\] *[0-9.]* MB/[0-9.]* MB' | tail -n1
+}
+
+# `waydroid init` downloads with no network timeout: a mirror that
+# stops sending leaves it waiting forever, printing the same size. Run it
+# in the background and end it when the size has not moved for STALL_SECS
+# while the file is still incomplete (a finished download is being checked
+# and unpacked, which prints nothing: left alone), or after MAX_INIT_SECS
+# altogether. Returns 75 for "stalled, retry"; otherwise the command's
+# status. Waydroid skips images it already has, so a retry fetches only
+# what is missing.
+readonly STALL_SECS=${CATOSTV_STALL_SECS:-180}
+readonly MAX_INIT_SECS=${CATOSTV_MAX_INIT_SECS:-5400}
+run_init() {
+    "$@" &
+    local pid=$! last="" since=$SECONDS started=$SECONDS cur got total
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep "${CATOSTV_STALL_POLL:-5}"
+        cur=$(download_progress)
+        if [[ $cur != "$last" ]]; then
+            last=$cur
+            since=$SECONDS
+        elif [[ -n $cur ]] && ((SECONDS - since >= STALL_SECS)); then
+            got=${cur#*] }
+            got=${got%% MB*}
+            total=${cur##*/}
+            total=${total% MB}
+            if [[ $got != "$total" ]]; then
+                echo "download stalled at $cur for $STALL_SECS s: stopping it to retry"
+                kill "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+                return 75
+            fi
+        fi
+        if ((SECONDS - started >= MAX_INIT_SECS)); then
+            echo "giving up after $MAX_INIT_SECS s"
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 1
+        fi
+    done
+    wait "$pid"
+}
+
+# ---------------------------------------------------------------------------
+step 1 "Checking this PC"
+[[ $(uname -m) == x86_64 ]] || fail "Android apps need a 64-bit x86 PC"
+for tool in waydroid lxc-start curl python3 modprobe mount timeout; do
+    command -v "$tool" >/dev/null || fail "A required program is missing: $tool"
+done
+# Any HTTP answer counts as online (no -f: a 404 still proves connectivity).
+curl -sS --max-time 30 -o /dev/null https://waydroid-atv.github.io/ ||
+    curl -sS --max-time 30 -o /dev/null https://github.com/ ||
+    fail "No internet connection"
+# Android needs the binder IPC filesystem. Arch's kernel ships the Rust
+# implementation as module `rust_binder` (registers filesystem "binder");
+# other kernels use the DKMS `binder_linux` module.
+if ! grep -qw binder /proc/filesystems; then
+    modprobe rust_binder 2>/dev/null ||
+        modprobe binder_linux devices=binder,hwbinder,vndbinder 2>/dev/null || true
+fi
+grep -qw binder /proc/filesystems || [[ -e /dev/binder ]] ||
+    fail "This kernel has no Android (binder) support"
+# Android's /data lives in the TV account's home. A default ACL on that
+# tree (debugging leftovers) overrides the umask for every file
+# Android creates: its classpath exports came out group-writable, which
+# Android's init refuses to load, and Android TV never booted. No ACLs
+# there, ever.
+if command -v setfacl >/dev/null && [[ -d $WAYDROID_DATA ]]; then
+    setfacl -R -b "$WAYDROID_DATA" 2>/dev/null || true
+fi
+if command -v getfacl >/dev/null &&
+    getfacl -d /home/catostv/.local/share 2>/dev/null | grep -q '^default:'; then
+    setfacl -k /home/catostv /home/catostv/.local /home/catostv/.local/share 2>/dev/null || true
+    echo "removed default ACLs from the TV account's data folders"
+fi
+for mod in rust_binder binder_linux; do
+    if grep -q "^$mod " /proc/modules; then
+        printf '# Written by CatosTV android-setup: Waydroid needs binder at boot.\n%s\n' "$mod" \
+            >/etc/modules-load.d/catostv-binder.conf
+    fi
+done
+
+# ---------------------------------------------------------------------------
+VARIANT=$(variant)
+CUSTOM=0
+STEP2="Downloading Android TV (about 1 GB)"
+if custom_image; then
+    CUSTOM=1
+    STEP2="Installing the CatosTV-built Android TV image"
+    # Google apps are baked in at build time: the build's word wins over
+    # the one chosen on the store sheet.
+    built=$(custom_build_value variant)
+    case $built in
+    gapps | vanilla)
+        [[ $built == "$VARIANT" ]] || echo "the CatosTV-built image is '$built'; using that instead of '$VARIANT'"
+        VARIANT=$built
+        ;;
+    esac
+fi
+step 2 "$STEP2"
+case $VARIANT in
+gapps) SYSTEM_TYPE=GAPPS ;;
+vanilla) SYSTEM_TYPE=VANILLA ;;
+esac
+if ((CUSTOM)); then
+    WANT_IMAGE="$IMAGE_TAG-custom-$(custom_image_id)-$VARIANT"
+else
+    WANT_IMAGE="$IMAGE_TAG-$VARIANT"
+fi
+if is_initialized && [[ $(cat "$IMAGE_FILE" 2>/dev/null) == "$WANT_IMAGE" ]]; then
+    echo "Android TV ($VARIANT) is already installed"
+else
+    # Another image (the stock LineageOS one, or the other variant) is a
+    # fresh start: Waydroid's own data and overlays go (the overlays are
+    # written again below), then `waydroid init -f` downloads the TV image.
+    # Waydroid's own config and images folder stay: it remembers which
+    # image it finished downloading and fetches only what differs (a
+    # retry after a stalled mirror, or the other variant), and
+    # forgets by itself when the OTA address changes.
+    systemctl stop waydroid-container.service 2>/dev/null || true
+    rm -rf "$WAYDROID_DATA" "$WAYDROID_DIR/overlay" "$WAYDROID_DIR/overlay_rw" \
+        "$WAYDROID_DIR/rootfs" "$WAYDROID_DIR/waydroid_base.prop"
+    rm -f "$DONE_FILE" "$IMAGE_FILE" "$GSF_FILE"
+    if ((CUSTOM)); then
+        # Waydroid's "pre-installed images" folder (checked first by
+        # `waydroid init`, never downloaded over) points at the
+        # CatosTV-built image; a downloaded image is dead weight then.
+        rm -rf "$WAYDROID_DIR/images"
+        mkdir -p "$(dirname "$PREINSTALLED_LINK")"
+        ln -sfn "$CUSTOM_DIR" "$PREINSTALLED_LINK"
+        echo "installing the CatosTV-built image $(custom_image_id) from $CUSTOM_DIR"
+        waydroid init -f -r lineage -s "$SYSTEM_TYPE" ||
+            fail "Could not install the CatosTV-built Android TV image"
+        [[ $(cfg_get waydroid images_path) == "$PREINSTALLED_LINK" ]] ||
+            fail "Waydroid did not pick up the CatosTV-built image"
+    else
+        # Only CatosTV's own link is removed; a pre-installed image someone
+        # else put there is theirs.
+        if [[ -L $PREINSTALLED_LINK && $(readlink "$PREINSTALLED_LINK") == "$CUSTOM_DIR" ]]; then
+            rm -f "$PREINSTALLED_LINK"
+        fi
+        attempt=0
+        until run_init waydroid init -f -c "$OTA_SYSTEM" -v "$OTA_VENDOR" -r lineage -s "$SYSTEM_TYPE"; do
+            rc=$?
+            attempt=$((attempt + 1))
+            if ((rc == 75 && attempt <= 3)); then
+                echo "retrying the download ($attempt of 3)"
+                sleep 5
+                continue
+            fi
+            fail "Could not download Android TV"
+        done
+    fi
+    is_initialized || fail "Android TV was not installed correctly"
+    echo "$WANT_IMAGE" >"$IMAGE_FILE"
+fi
+# Make Android apps feel native on the TV:
+#  - one full-screen Waydroid window (per-app windows crashed the screen
+#    service on an Intel GPU and opened apps small);
+#  - no boot animation; no on-screen navigation bar (the remote is the
+#    navigation).
+# Applied with `waydroid upgrade --offline` (props in waydroid.cfg's
+# [properties] section are written into the image's build.prop).
+cfg_set_property persist.waydroid.multi_windows false
+cfg_set_property debug.sf.nobootanimation 1
+cfg_set_property qemu.hw.mainkeys 1
+# Zero-copy video decoding: the Android TV 16 image has it on by
+# default on its stock gralloc (`minigbm_gbm_mesa`, via VPP), so nothing
+# is forced any more; `/etc/catostv/android-no-zero-copy` is kept for the
+# Settings → System → Waydroid options switch inside Android instead.
+# The Android TV 16 image asks to pair a Bluetooth remote at first boot;
+# CatosTV's remotes are handled on the Linux side.
+cfg_set_property atv.setup.bt_remote_pairing false
+waydroid upgrade --offline || fail "Could not apply the TV settings to Android"
+# Android is composited by Waydroid in plain 8-bit sRGB: it must not offer
+# apps an HDR / wide-colour display, or players (SmartTube) pick HDR
+# streams whose 10-bit buffers crash Android's screen service on the GPU
+# path. waydroid.cfg lowercases property names, so these go in
+# through Waydroid's overlay as /odm/etc/build.prop, which init reads.
+install -D -m 644 /usr/share/catostv/android-display.prop \
+    "$WAYDROID_DIR/overlay/vendor/odm/etc/build.prop" \
+    || fail "Could not install Android's display properties"
+if [[ -e $SOFTWARE_RENDERING_FLAG ]]; then
+    echo "Software rendering requested ($SOFTWARE_RENDERING_FLAG)"
+    cfg_set_property ro.hardware.gralloc default
+    cfg_set_property ro.hardware.egl swiftshader
+    waydroid upgrade --offline || fail "Could not switch Android to software rendering"
+fi
+
+# ---------------------------------------------------------------------------
+step 3 "Starting the Android container"
+systemctl enable --now waydroid-container.service ||
+    fail "The Android container service could not be started"
+for _ in $(seq 1 30); do
+    systemctl is-active --quiet waydroid-container.service && break
+    sleep 1
+done
+systemctl is-active --quiet waydroid-container.service ||
+    fail "The Android container service did not start"
+ANDROID_VERSION=$(android_version)
+case $ANDROID_VERSION in
+16) echo "Android version: $ANDROID_VERSION (TV)" ;;
+# A CatosTV-built image may be the next LineageOS.
+17)
+    ((CUSTOM)) || fail "Unsupported Android version '$ANDROID_VERSION'"
+    echo "Android version: $ANDROID_VERSION (TV, CatosTV build)"
+    ;;
+*) fail "Unsupported Android version '${ANDROID_VERSION:-unknown}'" ;;
+esac
+# Two fixes read from the downloaded image and applied through Waydroid's
+# overlay before Android's first start: the display-HAL hotplug patch
+# and Escape → Back in Android's key layout.
+# (The display-HAL byte patch, is for the stock image's build; the
+# TV image's HAL is a different build and is left as shipped.)
+/usr/local/lib/catostv/android-keymap || echo "key layout skipped" >&2
+
+# ---------------------------------------------------------------------------
+step 4 "Waiting for Android TV to start"
+# Boot once so Google services (GApps) register and the TV settings can
+# be applied; the shell's density unit repeats the settings at every boot.
+# The session process lives as long as Android runs: it is stopped again
+# at the end of this step (the shell starts Android on demand later).
+# Through the display filter when it is up, like the shell does.
+sudo -u catostv XDG_RUNTIME_DIR="/run/user/$(id -u catostv)" WAYLAND_DISPLAY=wayland-0 \
+    /usr/local/lib/catostv/android-session >/dev/null 2>&1 &
+booted=0
+for _ in $(seq 1 120); do
+    if [[ $(waydroid shell -- getprop sys.boot_completed 2>/dev/null | tr -d '\r[:space:]') == 1 ]]; then
+        booted=1
+        break
+    fi
+    sleep 2
+done
+if ((booted)); then
+    /usr/local/lib/catostv/android-tv-density || echo "TV settings skipped" >&2
+    if [[ $VARIANT == gapps ]]; then
+        # Google Play certification (you register this id once at
+        # google.com/android/uncertified): read it when GMS has created it.
+        for _ in $(seq 1 30); do
+            /usr/local/lib/catostv/android-gsf-id >/dev/null 2>&1 && break
+            sleep 2
+        done
+    fi
+else
+    echo "Android did not report boot completion in time; continuing" >&2
+fi
+sudo -u catostv XDG_RUNTIME_DIR="/run/user/$(id -u catostv)" timeout 30 waydroid session stop >/dev/null 2>&1 || true
+wait || true
+
+# ---------------------------------------------------------------------------
+step 5 "Getting Aurora Store"
+ARM_LAYER=built-in
+if [[ $VARIANT == gapps ]]; then
+    echo "Google Play is included; Aurora Store not needed"
+elif [[ -s $APK_FILE ]]; then
+    echo "Aurora Store already downloaded"
+else
+    code=$(curl -fsSL --max-time 60 "$FDROID_API" |
+        python3 -I -c 'import json, sys; print(int(json.load(sys.stdin)["suggestedVersionCode"]))') ||
+        fail "Could not reach F-Droid"
+    [[ $code =~ ^[0-9]{1,10}$ ]] || fail "F-Droid sent an unexpected answer"
+    tmp=$(mktemp "$ANDROID_DIR/.aurora.XXXXXX")
+    if ! curl -fsSL --max-time 900 --retry 3 -o "$tmp" "$FDROID_REPO/com.aurora.store_${code}.apk"; then
+        rm -f "$tmp"
+        fail "Could not download Aurora Store"
+    fi
+    size=$(stat -c %s "$tmp")
+    magic=$(head -c 2 "$tmp")
+    if ((size < 1000000)) || [[ $magic != PK ]]; then
+        rm -f "$tmp"
+        fail "The Aurora Store download is damaged"
+    fi
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$APK_FILE"
+    echo "$code" >"$ANDROID_DIR/AuroraStore.version"
+    echo "Aurora Store version code $code, $size bytes"
+fi
+
+{
+    echo "date=$(date -Is)"
+    echo "android=$ANDROID_VERSION"
+    echo "image=$WANT_IMAGE"
+    echo "arm=$ARM_LAYER"
+    if ((CUSTOM)); then echo "custom=$(custom_image_id)"; fi
+} >"$DONE_FILE"
+chmod 0644 "$DONE_FILE"

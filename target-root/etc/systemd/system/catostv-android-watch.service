@@ -1,0 +1,18 @@
+# CatosTV: tell the TV shell which Android app is in front
+# (/run/catostv/android-top), see /usr/local/lib/catostv/android-watch.
+# Runs exactly while Android's container runs.
+
+[Unit]
+Description=CatosTV: watch the Android app in front
+BindsTo=waydroid-container.service
+After=waydroid-container.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bash /usr/local/lib/catostv/android-watch
+Restart=on-failure
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=waydroid-container.service

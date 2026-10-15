@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# CatosTV: force-stop one Android app (run as root by
+# catostv-android-stop@<package>.service; `waydroid shell` needs root).
+# The package name is validated here again, it is the only input.
+set -euo pipefail
+pkg="${1:-}"
+if ! [[ "$pkg" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] || (( ${#pkg} > 255 )); then
+  echo "refusing invalid package name: $pkg" >&2
+  exit 2
+fi
+exec waydroid shell -- am force-stop "$pkg"

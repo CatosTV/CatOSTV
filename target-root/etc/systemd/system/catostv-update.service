@@ -1,0 +1,10 @@
+[Unit]
+Description=CatosTV: install an update (Settings → Updates)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/catostv/update
+TimeoutStartSec=3h
+Nice=10

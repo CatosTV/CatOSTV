@@ -1,0 +1,24 @@
+# CatosTV: one-time Android (Waydroid) setup, see /usr/local/lib/catostv/android-setup.
+#
+# Never enabled; started on demand by the TV shell with
+#   systemctl --no-ask-password start --no-block catostv-android-setup.service
+# which /etc/polkit-1/rules.d/50-catostv-android.rules allows for the active
+# local `catostv` session (verb "start" of this unit only).
+# To run it again after a successful setup, delete
+# /var/lib/catostv/android/setup-done (as root).
+
+[Unit]
+Description=CatosTV Android (Waydroid) setup
+Documentation=file:///usr/local/lib/catostv/android-setup
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/catostv/android/setup-done
+
+[Service]
+Type=oneshot
+# Invoked through bash so the script works even if the overlay copy lost
+# its executable bit (the installer copies the overlay with default modes).
+ExecStart=/usr/bin/bash /usr/local/lib/catostv/android-setup
+# Downloads ~1 GB (Android images, microG, ARM translation, Aurora Store).
+TimeoutStartSec=2h
+Nice=5

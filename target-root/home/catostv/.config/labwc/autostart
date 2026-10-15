@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Started by labwc once per compositor start.
+#
+# Every CatosTV process below is supervised: if it exits or crashes it comes
+# back after a pause instead of leaving a feature dead until reboot. Output
+# goes to ~/.local/state/catostv/<name>.log.
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/catostv"
+mkdir -p "$STATE"
+
+# supervise NAME PAUSE COMMAND..., run COMMAND forever, logging to NAME.log.
+# A lock makes this idempotent: if labwc restarts and runs autostart again
+# while the old supervisors are alive, no second copy starts (two cecd
+# would fight over the adapter, two inputd would send "escape" twice).
+# A supervisor stops once its compositor's socket is gone.
+RUN="${XDG_RUNTIME_DIR:-/tmp}"
+SOCKET="$RUN/${WAYLAND_DISPLAY:-wayland-0}"
+supervise() {
+  local name=$1 pause=$2
+  shift 2
+  (
+    exec 9>"$RUN/catostv-supervise-$name.lock"
+    flock -n 9 || exit 0
+    while [ -S "$SOCKET" ]; do
+      "$@" 9>&- >>"$STATE/$name.log" 2>&1
+      echo "$(date -Is) $name exited with status $?" >>"$STATE/$name.log"
+      sleep "$pause"
+    done
+  ) &
+}
+
+# Wayland relay for Android: hides the idle-inhibit protocol from Android's
+# display HAL so it cannot deadlock against Android's window manager
+# Before the shell, which starts Android through it.
+supervise wlfilter 2 /usr/local/bin/catostv-wlfilter
+# The TV interface. "Restart the interface" exits it; it comes back here.
+supervise shell 1 /usr/local/bin/catostv-shell
+# Escape gesture: Back ×3 or hold Back inside an app → CatosTV Home.
+supervise inputd 2 /usr/local/bin/catostv-inputd
+# HDMI-CEC remote (waits quietly when there is no CEC adapter).
+supervise cec 5 /usr/local/bin/catostv-cecd
+# Cast to this TV: DLNA renderer + YouTube (DIAL).
+supervise castd 5 /usr/local/bin/catostv-castd
+# Phone remote web page (PIN shown in Settings → Cast & remote).
+supervise remoted 5 /usr/local/bin/catostv-remoted
+# On-screen notices over apps (volume bar), ~/.config/mako/config.
+if command -v mako >/dev/null 2>&1; then
+  supervise mako 5 mako
+fi
+# KDE Connect daemon (pairing is accepted in Settings → Cast & remote).
+if command -v kdeconnectd >/dev/null 2>&1; then
+  supervise kdeconnectd 5 kdeconnectd
+fi

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# CatosTV: switch on the start-up screen (Plymouth theme "catostv").
+# Run as root by the installer (in the new system) and by
+# scripts/deploy.sh. Idempotent: does nothing when everything is in place.
+#
+#   * theme   /usr/share/plymouth/themes/catostv (text only)
+#   * hook    `plymouth` in mkinitcpio HOOKS, right after `systemd` or `udev`
+#   * kernel  `splash` on the systemd-boot entry's options line
+#   * initramfs rebuilt only when the hook was added or the theme changed
+#
+# Never touches anything it does not recognise: an unusual HOOKS line or
+# boot entry is left alone (the TV then simply starts without the screen).
+set -euo pipefail
+command -v plymouth-set-default-theme >/dev/null 2>&1 || { echo "plymouth not installed; skipping"; exit 0; }
+[[ -f /usr/share/plymouth/themes/catostv/catostv.plymouth ]] || { echo "theme missing; skipping"; exit 0; }
+rebuild=0
+if [[ "$(plymouth-set-default-theme)" != catostv ]]; then
+  plymouth-set-default-theme catostv
+  rebuild=1
+fi
+CONF=/etc/mkinitcpio.conf
+if [[ -f $CONF ]] && ! grep -Eq '^HOOKS=\(.*\bplymouth\b' "$CONF"; then
+  if grep -Eq '^HOOKS=\(.*\bsystemd\b' "$CONF"; then
+    sed -i -E '/^HOOKS=\(/ s/\bsystemd\b/systemd plymouth/' "$CONF"; rebuild=1
+  elif grep -Eq '^HOOKS=\(.*\budev\b' "$CONF"; then
+    sed -i -E '/^HOOKS=\(/ s/\budev\b/udev plymouth/' "$CONF"; rebuild=1
+  else
+    echo "unusual HOOKS line in $CONF; not adding plymouth" >&2
+  fi
+fi
+for entry in /boot/loader/entries/catostv.conf; do
+  [[ -f $entry ]] || continue
+  if grep -Eq '^options ' "$entry" && ! grep -Eq '^options .*\bsplash\b' "$entry"; then
+    sed -i -E '/^options / s/$/ splash/' "$entry"
+  fi
+done
+if (( rebuild )); then
+  echo "rebuilding the initramfs for the start-up screen"
+  mkinitcpio -P
+fi

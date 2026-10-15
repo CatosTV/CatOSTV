@@ -1,0 +1,41 @@
+[package]
+name = "catostv-core"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.88"
+description = "CatosTV core logic: remote navigation, installer flow and safety, system tool adapters, IPC and app lifecycle. Standard library only."
+license = "MIT"
+publish = false
+
+# IMPORTANT: this crate intentionally has ZERO external dependencies.
+# It must stay buildable and testable with `cargo test --offline` on a machine
+# that has only a Rust toolchain (no crates.io, no GPU, no Wayland).
+[dependencies]
+
+[[bin]]
+name = "catostv-ctl"
+path = "src/bin/catostv-ctl.rs"
+
+[[bin]]
+name = "catostv-diag"
+path = "src/bin/catostv-diag.rs"
+
+[[bin]]
+name = "catostv-inputd"
+path = "src/bin/catostv-inputd.rs"
+
+[[bin]]
+name = "catostv-cecd"
+path = "src/bin/catostv-cecd.rs"
+
+[[bin]]
+name = "catostv-castd"
+path = "src/bin/catostv-castd.rs"
+
+[[bin]]
+name = "catostv-remoted"
+path = "src/bin/catostv-remoted.rs"
+
+[[bin]]
+name = "catostv-wlfilter"
+path = "src/bin/catostv-wlfilter.rs"

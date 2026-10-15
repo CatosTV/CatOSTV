@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# CatosTV: hand game controllers to Android ("the
+# controller isn't passed through to Android apps"). Waydroid only bridges
+# the Wayland keyboard/pointer/touch into Android; evdev gamepads never
+# reach it. This creates the controller's device node inside the running
+# container (same major/minor), where Android's input service picks it up
+# at once (it watches /dev/input for created and deleted nodes). Run as
+# root: at every Android boot (android-tv-density) and from udev when a
+# controller is plugged in or out (70-catostv-pads.rules).
+#
+#   android-pads              (re)create the node of every controller
+#   android-pads remove NAME  a controller was unplugged: delete its node
+#
+# Every node is deleted and made again: after an unplug and
+# re-plug the old node was still there, so Android saw no new file and
+# never opened the controller again ("controller doesn't work in Play
+# Store"). Nodes of devices that are gone are deleted.
+#
+# Only real game controllers (udev's joystick class) are passed. Keyboards,
+# remotes and mice are not (Android gets them through Waydroid already; a
+# second path would double every key), and neither is any virtual device,
+# CatosTV's own "CatosTV TV remote" / "CatosTV phone remote" keyboards included.
+set -uo pipefail
+LXC=(-P /var/lib/waydroid/lxc -n waydroid)
+[[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" == RUNNING ]] || exit 0
+in_android() {
+  timeout 5 lxc-attach "${LXC[@]}" --clear-env -- /system/bin/sh -c "$1" 2>/dev/null
+}
+valid_name() { [[ "$1" =~ ^event[0-9]{1,4}$ ]]; }
+
+if [[ "${1:-}" == remove ]]; then
+  name=${2:-}
+  valid_name "$name" || exit 0
+  in_android "rm -f /dev/input/$name" && echo "controller $name removed from Android"
+  exit 0
+fi
+
+is_pad() {
+  local dev=$1 props name
+  props=$(udevadm info -q property "$dev" 2>/dev/null) || return 1
+  grep -q '^ID_INPUT_JOYSTICK=1' <<<"$props" || return 1
+  # Never a virtual (uinput) device, whatever it declares.
+  grep -q '^DEVPATH=/devices/virtual/' <<<"$props" && return 1
+  name=$(cat "/sys/class/input/${dev##*/}/device/name" 2>/dev/null)
+  [[ "$name" != CatosTV* ]]
+}
+
+keep=" "
+for dev in /dev/input/event*; do
+  [[ -e $dev ]] || continue
+  is_pad "$dev" || continue
+  name=${dev##*/}
+  maj=$((16#$(stat -c %t "$dev")))
+  min=$((16#$(stat -c %T "$dev")))
+  # Android's input service runs as system with the input group (1004).
+  in_android "rm -f /dev/input/$name; mknod /dev/input/$name c $maj $min && chown 1000:1004 /dev/input/$name && chmod 0660 /dev/input/$name" \
+    && echo "controller $name ($(udevadm info -q property "$dev" | sed -n 's/^NAME=//p' | tr -d '"')) available to Android"
+  keep+="$name "
+done
+# Nodes CatosTV made earlier for controllers that are gone now.
+for name in $(in_android 'ls /dev/input' | tr -d '\r' | grep -E '^event[0-9]+$'); do
+  [[ "$keep" == *" $name "* ]] && continue
+  in_android "rm -f /dev/input/$name"
+done
+exit 0

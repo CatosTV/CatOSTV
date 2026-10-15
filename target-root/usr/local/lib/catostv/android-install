@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# CatosTV: install an APK into Android with Android's own package manager
+# Run as root by catostv-android-install.service,
+# which the TV account may start through polkit; no arguments.
+#
+# Why not `waydroid app install`: Waydroid's install service inside the
+# Android TV 16 image commits its install session with an immutable
+# PendingIntent, which Android 16 rejects ("The commit() status receiver
+# should come from a mutable PendingIntent"), so nothing ever installs
+# that way. `pm install` as root inside the container does not go through
+# that service.
+#
+# Input (staged by the shell, fixed paths, nothing from the unit line):
+#   /home/catostv/.cache/catostv/android-install/install.apk   the APK (a copy)
+#   /home/catostv/.cache/catostv/android-install/request       one id line
+# Output (world-readable, replaced atomically):
+#   /run/catostv/android-install.result   "id=<id>" then "result=ok" or
+#                                       "result=failed:<reason>"
+set -uo pipefail
+export LC_ALL=C
+STAGE=/home/catostv/.cache/catostv/android-install
+APK=$STAGE/install.apk
+REQUEST=$STAGE/request
+RESULT=/run/catostv/android-install.result
+DATA=/home/catostv/.local/share/waydroid/data
+INSIDE=/data/local/tmp/catostv-install.apk
+mkdir -p /run/catostv
+id=$(head -c 64 "$REQUEST" 2>/dev/null | tr -cd 'A-Za-z0-9')
+finish() {
+  local tmp
+  tmp=$(mktemp /run/catostv/.install.XXXXXX)
+  printf 'id=%s\nresult=%s\n' "$id" "$1" >"$tmp"
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$RESULT"
+  rm -f "$DATA/local/tmp/catostv-install.apk"
+  echo "android-install: $1"
+  [[ $1 == ok ]]
+  exit
+}
+[[ -n $id ]] || finish "failed:no install request"
+# The staged file must be the TV account's own regular file, a plausible
+# APK (a zip), and not a link into somewhere else.
+[[ -f $APK && ! -L $APK ]] || finish "failed:no APK staged"
+owner=$(stat -c %U "$APK" 2>/dev/null)
+[[ $owner == catostv ]] || finish "failed:the APK is not the TV account's"
+size=$(stat -c %s "$APK")
+(( size >= 10000 && size <= 3000000000 )) || finish "failed:the APK has an unlikely size"
+[[ $(head -c 2 "$APK") == PK ]] || finish "failed:not an APK"
+[[ -d $DATA/local/tmp ]] || finish "failed:Android's data folder is missing"
+if ! install -m 644 "$APK" "$DATA/local/tmp/catostv-install.apk"; then
+  finish "failed:could not copy the APK into Android"
+fi
+out=$(timeout 300 waydroid shell -- pm install -r --user 0 "$INSIDE" 2>&1 | tr -d '\r')
+rc=$?
+echo "pm install: $out"
+if (( rc == 0 )) && grep -q '^Success' <<<"$out"; then
+  finish ok
+fi
+reason=$(grep -o 'INSTALL_FAILED_[A-Z_]*' <<<"$out" | head -n1)
+case $reason in
+  INSTALL_FAILED_NO_MATCHING_ABIS) reason="this APK is for another processor (get the x86 or universal build)" ;;
+  INSTALL_FAILED_UPDATE_INCOMPATIBLE) reason="an app with the same name but another signature is installed; remove it first" ;;
+  INSTALL_FAILED_OLDER_SDK) reason="this APK needs a newer Android" ;;
+  INSTALL_FAILED_INSUFFICIENT_STORAGE) reason="Android is out of space" ;;
+  INSTALL_FAILED_VERSION_DOWNGRADE) reason="a newer version is already installed" ;;
+  "") reason=$(tail -n1 <<<"$out" | cut -c1-120); [[ -n $reason ]] || reason="Android did not answer" ;;
+esac
+finish "failed:$reason"

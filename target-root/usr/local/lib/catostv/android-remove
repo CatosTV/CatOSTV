@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# CatosTV: uninstall one Android app (run as root by
+# catostv-android-remove@<package>.service). `waydroid app remove` through
+# the TV account's session failed for apps Aurora installed
+# ("Failed to uninstall package"); `pm uninstall` as root works. The
+# package name is validated here again, it is the only input.
+set -euo pipefail
+pkg="${1:-}"
+if ! [[ "$pkg" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] || (( ${#pkg} > 255 )); then
+  echo "refusing invalid package name: $pkg" >&2
+  exit 2
+fi
+out=$(waydroid shell -- pm uninstall --user 0 "$pkg" 2>&1 | tr -d '\r') || true
+echo "$out"
+[[ "$out" == *Success* ]]

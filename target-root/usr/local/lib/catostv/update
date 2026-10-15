@@ -1,0 +1,169 @@
+#!/usr/bin/python3 -I
+# CatosTV Settings → Updates → Install. Run as root by
+# catostv-update.service. Downloads and verifies everything itself, never
+# uses a file the interface fetched:
+#   1. manifest + detached signature from the address in
+#      /etc/catostv/updates.conf, verified with gpgv against
+#      /usr/share/catostv/updates.gpg;
+#   2. pins pacman to the manifest's Arch Linux Archive day and runs a full
+#      upgrade (packages exactly as tested for that CatosTV version);
+#   3. the CatosTV package (sha256 from the signed manifest): binaries to
+#      /usr/local/bin, files over / as the installer copies them.
+# Progress for the interface: /run/catostv/update-state, one line
+# "<running|done|failed>\t<detail>". Log: journalctl -u catostv-update.
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import urllib.request
+
+CONFIG = "/etc/catostv/updates.conf"
+KEYRING = "/usr/share/catostv/updates.gpg"
+STATE = "/run/catostv/update-state"
+WORK = "/var/lib/catostv/update"
+MIRRORLIST = "/etc/pacman.d/mirrorlist"
+TV_HOME = "/home/catostv"
+
+
+def state(phase, detail):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(f"{phase}\t{detail}\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATE)
+    print(f"{phase}: {detail}", flush=True)
+
+
+def fail(reason):
+    state("failed", reason)
+    sys.exit(1)
+
+
+def fetch(url, path, limit):
+    req = urllib.request.Request(url, headers={"User-Agent": "CatosTV-updater"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(path, "wb") as f:
+        n = 0
+        while chunk := r.read(1 << 20):
+            n += len(chunk)
+            if n > limit:
+                raise ValueError("download too large")
+            f.write(chunk)
+
+
+def run(cmd, what):
+    print("+", " ".join(cmd), flush=True)
+    if subprocess.run(cmd).returncode != 0:
+        fail(what)
+
+
+def version_key(v):
+    nums, _, suffix = v.partition("-")
+    return [int(x) if x.isdigit() else 0 for x in nums.split(".")], 0 if suffix else 1
+
+
+def main():
+    state("running", "Checking the update")
+    url = None
+    try:
+        for line in open(CONFIG):
+            k, _, v = line.strip().partition("=")
+            if k.strip() == "url" and not line.lstrip().startswith("#"):
+                url = v.strip()
+    except OSError:
+        pass
+    if not url or not re.match(r"^https?://", url):
+        fail("Updates aren't set up yet")
+    if not os.path.exists(KEYRING):
+        fail("No update signing key on this TV")
+    shutil.rmtree(WORK, ignore_errors=True)
+    os.makedirs(WORK, mode=0o700)
+    man, sig = f"{WORK}/manifest.json", f"{WORK}/manifest.json.sig"
+    try:
+        fetch(url, man, 1 << 20)
+        fetch(url + ".sig", sig, 1 << 16)
+    except Exception as e:  # noqa: BLE001 - any network error
+        fail(f"Can't reach the update server ({e})")
+    if subprocess.run(["gpgv", "--keyring", KEYRING, sig, man]).returncode != 0:
+        fail("The update is not signed by CatosTV")
+    try:
+        m = json.load(open(man))
+        version = m["version"]
+        date = m["archive_date"]
+        pkg_url = m["package"]["url"]
+        pkg_sha = m["package"]["sha256"].lower()
+    except (ValueError, KeyError, TypeError):
+        fail("The update information is damaged")
+    if not (re.fullmatch(r"[0-9][0-9A-Za-z.-]{0,31}", version)
+            and re.fullmatch(r"\d{4}/\d{2}/\d{2}", date)
+            and re.match(r"^https?://", pkg_url)
+            and re.fullmatch(r"[0-9a-f]{64}", pkg_sha)):
+        fail("The update information is damaged")
+    out = subprocess.run(["/usr/local/bin/catostv-diag", "version"], capture_output=True, text=True)
+    current = out.stdout.split()[-1] if out.returncode == 0 and out.stdout.split() else "0"
+    if version_key(version) <= version_key(current):
+        state("done", current)
+        return
+
+    state("running", f"Downloading CatosTV {version}")
+    pkg = f"{WORK}/catostv.tar.zst"
+    try:
+        fetch(pkg_url, pkg, 1 << 30)
+    except Exception as e:  # noqa: BLE001
+        fail(f"Download failed ({e})")
+    h = hashlib.sha256()
+    with open(pkg, "rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    if h.hexdigest() != pkg_sha:
+        fail("The download is damaged (checksum)")
+
+    state("running", "Updating system packages")
+    backup = MIRRORLIST + ".catostv-backup"
+    if not os.path.exists(backup) and os.path.exists(MIRRORLIST):
+        shutil.copy2(MIRRORLIST, backup)
+    with open(MIRRORLIST, "w") as f:
+        f.write(f"# CatosTV {version}: packages as of {date} (Arch Linux Archive).\n"
+                f"# Your previous list: {backup}\n"
+                f"Server = https://archive.archlinux.org/repos/{date}/$repo/os/$arch\n")
+    run(["pacman", "-Syyuu", "--noconfirm"], "Updating the system packages failed")
+
+    state("running", f"Installing CatosTV {version}")
+    stage = f"{WORK}/stage"
+    os.makedirs(stage)
+    run(["tar", "--zstd", "-xf", pkg, "-C", stage, "--no-same-owner"], "The download could not be unpacked")
+    for b in sorted(os.listdir(f"{stage}/bin")):
+        if not re.fullmatch(r"catostv-[a-z-]+", b):
+            continue
+        run(["install", "-m", "755", f"{stage}/bin/{b}", f"/usr/local/bin/{b}"], f"Installing {b} failed")
+    # The TV's keyboard layout lives in this file; keep it (as deploy.sh).
+    env = f"{TV_HOME}/.config/labwc/environment"
+    keep = open(env).read() if os.path.exists(env) else None
+    run(["cp", "-a", "--no-preserve=mode,ownership", f"{stage}/root/.", "/"], "Installing the files failed")
+    if keep is not None:
+        open(env, "w").write(keep)
+    run(["chmod", "755", "/usr/local/bin/catostv-session", f"{TV_HOME}/.config/labwc/autostart"],
+        "Setting file modes failed")
+    run(["find", "/usr/local/lib/catostv", "-type", "f", "-exec", "chmod", "755", "{}", "+"],
+        "Setting file modes failed")
+    # Only what the package ships in the TV account's home (never chown -R:
+    # Android's data there has Android's own owners).
+    home_stage = f"{stage}/root{TV_HOME}"
+    for root, dirs, files in os.walk(home_stage):
+        for name in dirs + files:
+            rel = os.path.relpath(os.path.join(root, name), home_stage)
+            shutil.chown(os.path.join(TV_HOME, rel), "catostv", "catostv")
+    subprocess.run(["systemctl", "daemon-reload"])
+    subprocess.run(["udevadm", "control", "--reload"])
+    subprocess.run(["systemctl", "enable", "catostv-android-watch.service", "catostv-debug-boot.service"])
+    if os.access("/usr/local/lib/catostv/boot-splash-setup", os.X_OK):
+        subprocess.run(["/usr/local/lib/catostv/boot-splash-setup"])
+    shutil.rmtree(WORK, ignore_errors=True)
+    state("done", version)
+
+
+if __name__ == "__main__":
+    main()

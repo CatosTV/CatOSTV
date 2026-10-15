@@ -1,0 +1,15 @@
+# CatosTV: uninstall one Android app, see /usr/local/lib/catostv/android-remove.
+# Started by the TV shell as
+#   systemctl --no-ask-password start catostv-android-remove@<package>.service
+# which /etc/polkit-1/rules.d/50-catostv-android.rules allows for the active
+# local `catostv` session (verb "start" of this template only).
+
+[Unit]
+Description=CatosTV: uninstall Android app %i
+Requires=waydroid-container.service
+After=waydroid-container.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /usr/local/lib/catostv/android-remove %i
+TimeoutStartSec=60

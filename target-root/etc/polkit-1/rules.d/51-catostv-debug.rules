@@ -1,0 +1,22 @@
+// CatosTV Settings → Debug and Settings → Updates:
+// let the TV account START the four Debug units and the update unit, SSH on / off, set its own password (from a file only it can
+// write), remove the old `ok` login. Each runs a fixed root script under
+// /usr/local/lib/catostv/ that validates its input. Nothing else.
+polkit.addRule(function(action, subject) {
+    var units = [
+        "catostv-debug-ssh-on.service",
+        "catostv-debug-ssh-off.service",
+        "catostv-debug-password.service",
+        "catostv-debug-remove-ok.service",
+        "catostv-update.service"
+    ];
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        units.indexOf(action.lookup("unit")) >= 0 &&
+        action.lookup("verb") == "start" &&
+        subject.user == "catostv" &&
+        subject.local &&
+        subject.active) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

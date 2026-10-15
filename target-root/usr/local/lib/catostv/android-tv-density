@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# CatosTV: give Android a TV-sized layout and a stable screen service (Android apps
+# looked tiny at 4K). Run as root by catostv-android-density.service, which
+# the TV shell starts once Android has booted. No input.
+#
+# Android's density decides how big apps draw. A TV layout is 960 dp wide
+# (Android TV's 1920×1080 at xhdpi), so: density = width × 160 / 960,
+# i.e. 320 for 1080p and 640 for 4K, clamped to 160–640.
+set -euo pipefail
+# Hardware overlays off (Android developer option "Disable HW overlays",
+# SurfaceFlinger transaction 1008): with them on, Android's screen service
+# crashed on an Intel GPU whenever SmartTube started drawing
+# (surfaceflinger SIGSEGV;). Not persistent: catostv-android-watch
+# applies it again whenever surfaceflinger restarts; this is just
+# the first try, right after boot.
+waydroid shell -- service call SurfaceFlinger 1008 i32 1 >/dev/null 2>&1 \
+  || echo "could not turn off hardware overlays" >&2
+# No Android banners over the TV ("Google Play Protect is turned on" from
+# microG showed over every screen): heads-up notifications off and
+# microG may not post notifications at all. Kept in Android's settings, so
+# it is cheap to repeat every boot.
+waydroid shell -- settings put global heads_up_notifications_enabled 0 >/dev/null 2>&1 || true
+waydroid shell -- appops set com.google.android.gms POST_NOTIFICATION ignore >/dev/null 2>&1 || true
+# The remotes look like a physical keyboard to Android: keep the on-screen
+# keyboard coming up anyway.
+waydroid shell -- settings put secure show_ime_with_hard_keyboard 1 >/dev/null 2>&1 || true
+# Google's voice/Assistant service on the TV image spins all cores
+# without a microphone (1300 % CPU, every video choppy): off.
+# `pm` only answers once the package service is up; a miss is retried at
+# the next boot.
+waydroid shell -- pm disable-user --user 0 com.google.android.katniss >/dev/null 2>&1 || true
+# Android TV's first-run setup, finished by CatosTV. A fresh
+# Android (the setup's first boot, or the first boot after Repair → Start
+# over moved the data folder aside) is "not set up": HOME stays Google's
+# setup app (setupwraith), which Waydroid's display HAL hides, so Android
+# showed nothing. Mark setup done and switch the setup app off, once,
+# every step is skipped when already in place, and setupwraith only on
+# images that have it.
+finish_tv_setup() {
+  local key val
+  for key in "secure user_setup_complete" "global device_provisioned" "secure tv_user_setup_complete"; do
+    val=$(waydroid shell -- settings get $key 2>/dev/null | tr -d '\r[:space:]')
+    [[ "$val" == 1 ]] || waydroid shell -- settings put $key 1 >/dev/null 2>&1 || true
+  done
+  local wraith=com.google.android.tungsten.setupwraith
+  if waydroid shell -- pm list packages "$wraith" 2>/dev/null | tr -d '\r' | grep -qx "package:$wraith" &&
+     ! waydroid shell -- pm list packages -d "$wraith" 2>/dev/null | tr -d '\r' | grep -qx "package:$wraith"; then
+    waydroid shell -- pm disable-user --user 0 "$wraith" >/dev/null 2>&1 \
+      && echo "Android TV setup finished (setup app off)" \
+      || echo "could not switch off Android's setup app" >&2
+  fi
+}
+finish_tv_setup
+# Game controllers into Android.
+/usr/local/lib/catostv/android-pads || true
+# Google Play certification id for Settings (GApps images; harmless otherwise).
+/usr/local/lib/catostv/android-gsf-id >/dev/null 2>&1 || true
+size=$(waydroid shell -- wm size 2>/dev/null | sed -n 's/.*size: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -n1)
+read -r w h <<<"${size:-0 0}"
+if (( w <= 0 || h <= 0 )); then
+  echo "Android display size unknown; leaving density alone" >&2
+  exit 0
+fi
+short=$(( w < h ? w : h ))   # landscape TV: the height is the short side
+long=$(( w < h ? h : w ))
+density=$(( long * 160 / 960 ))
+(( density < 160 )) && density=160
+(( density > 640 )) && density=640
+echo "Android display ${long}x${short} -> density ${density}"
+exec waydroid shell -- wm density "$density"

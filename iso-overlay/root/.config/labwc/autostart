@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Live ISO: run the installer, restarting it if it ever exits or crashes.
+# Its own output goes to /tmp/catostv-installer-ui.log (the install log
+# itself is /tmp/catostv-install.log).
+(
+  sleep 1
+  while :; do
+    /usr/local/bin/catostv-installer >>/tmp/catostv-installer-ui.log 2>&1
+    echo "$(date -Is) catostv-installer exited with status $?" >>/tmp/catostv-installer-ui.log
+    sleep 1
+  done
+) &

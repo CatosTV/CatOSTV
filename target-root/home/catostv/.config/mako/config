@@ -1,0 +1,19 @@
+# CatosTV on-screen hints over apps (notify-send), e.g. "Press F11 to show the
+# window buttons again". Frosted dark pill, top centre.
+font=Inter 20
+background-color=#16161ce6
+text-color=#f2f2f7
+border-size=1
+border-color=#ffffff22
+border-radius=26
+padding=16,30
+margin=36
+width=760
+anchor=top-center
+layer=overlay
+default-timeout=3500
+max-visible=2
+icons=0
+
+# Volume bar (catostv-ctl volume-up/down/mute sends the level as a hint).
+progress-color=over #8b7cffcc

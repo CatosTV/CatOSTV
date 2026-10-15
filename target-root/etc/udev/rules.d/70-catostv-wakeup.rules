@@ -1,0 +1,3 @@
+# CatosTV: let USB keyboards and remote-control receivers (USB HID) wake the
+# TV from Sleep. Other USB devices keep the kernel default.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:03*", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"

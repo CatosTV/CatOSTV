@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# CatosTV appliance session, started by greetd as the hidden `catostv` user.
+#
+# Uses the systemd user D-Bus (dbus-broker) that pam_systemd provides, NOT a
+# private `dbus-run-session` bus: PipeWire/WirePlumber and portals run as
+# systemd user services on that bus, and labwc exports WAYLAND_DISPLAY etc.
+# to it automatically on start (see `man labwc`, SESSION MANAGEMENT).
+set -u
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=CatosTV:wlroots
+export XDG_SESSION_DESKTOP=CatosTV
+export MOZ_ENABLE_WAYLAND=1
+export GDK_BACKEND=wayland,x11
+export QT_QPA_PLATFORM='wayland;xcb'
+# Comma list: SDL tries Wayland, then falls back to X11 (many games need it).
+export SDL_VIDEODRIVER=wayland,x11
+export CATOSTV_APPLIANCE=1
+
+# Graphics (/etc/catostv/gpu.conf from the installer). Safe
+# graphics: no acceleration, everything is drawn in software.
+SAFE_GRAPHICS=0
+if grep -qx 'mode=safe' /etc/catostv/gpu.conf 2>/dev/null; then
+  SAFE_GRAPHICS=1
+  export LIBGL_ALWAYS_SOFTWARE=1
+fi
+# Several graphics cards: draw on the one the firmware booted on (boot_vga),
+# normally the one the TV is plugged into; wlroots would otherwise pick by
+# its own order.
+cards=(/sys/class/drm/card[0-9])
+if (( ${#cards[@]} > 1 )); then
+  for c in "${cards[@]}"; do
+    if [[ "$(cat "$c/device/boot_vga" 2>/dev/null)" == 1 ]]; then
+      export WLR_DRM_DEVICES="/dev/dri/${c##*/}"
+      break
+    fi
+  done
+fi
+# A normal, TV-sized cursor (mouse support). CatosTV's
+# own screens hide it after a few seconds without movement.
+export XCURSOR_THEME=Adwaita
+export XCURSOR_SIZE=32
+# Flatpak apps' launchers and icons.
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share"
+
+if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -n "${XDG_RUNTIME_DIR:-}" && -S "$XDG_RUNTIME_DIR/bus" ]]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+fi
+
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/catostv"
+mkdir -p "$STATE"
+
+# HDR (Settings → Display → HDR, experimental). The shell creates the
+# runtime flag $XDG_RUNTIME_DIR/catostv-hdr and restarts labwc; the flag is
+# gone after a reboot, so a TV that shows black in HDR always comes back
+# in SDR after a restart (, a running-but-black
+# compositor cannot be detected from here).
+# labwc enables HDR on capable outputs with <core><hdr>yes</hdr></core>,
+# which needs the Vulkan renderer. The TV account's own labwc config is left
+# untouched: a copy with HDR switched on is made in $XDG_RUNTIME_DIR and
+# passed with `labwc -C`. If labwc then fails to start twice in a row, the
+# flag is removed again.
+HDR_FLAG="${XDG_RUNTIME_DIR:-/tmp}/catostv-hdr"
+HDR_DIR="${XDG_RUNTIME_DIR:-/tmp}/catostv-labwc-hdr"
+hdr_wanted() {
+  [[ -e "$HDR_FLAG" ]]
+}
+hdr_config() {
+  mkdir -p "$HDR_DIR" &&
+    cp -f "${XDG_CONFIG_HOME:-$HOME/.config}"/labwc/* "$HDR_DIR"/ || return 1
+  if grep -q '<core>' "$HDR_DIR/rc.xml"; then
+    sed -i '0,/<core>/s##<core>\n    <hdr>yes</hdr>#' "$HDR_DIR/rc.xml"
+  else
+    sed -i '0,/<labwc_config>/s##<labwc_config>\n  <core><hdr>yes</hdr></core>#' "$HDR_DIR/rc.xml"
+  fi
+}
+
+# Keep the appliance alive if the compositor itself crashes. Back off when it
+# crashes repeatedly so a broken config cannot spin the CPU.
+fails=0
+hdr_fails=0
+while :; do
+  args=()
+  hdr=0
+  unset WLR_RENDERER
+  if (( SAFE_GRAPHICS )); then
+    export WLR_RENDERER=pixman
+  elif hdr_wanted && hdr_config; then
+    hdr=1
+    export WLR_RENDERER=vulkan
+    args=(-C "$HDR_DIR")
+    echo "$(date -Is) starting labwc with HDR (Vulkan renderer)" >>"$STATE/labwc.log"
+  fi
+  start=$(date +%s)
+  labwc "${args[@]}" >>"$STATE/labwc.log" 2>&1
+  status=$?
+  echo "$(date -Is) labwc exited with status $status" >>"$STATE/labwc.log"
+  if (( $(date +%s) - start < 10 )); then
+    fails=$((fails + 1))
+    if (( hdr )); then
+      hdr_fails=$((hdr_fails + 1))
+      if (( hdr_fails >= 2 )); then
+        rm -f "$HDR_FLAG"
+        echo "$(date -Is) HDR failed to start twice; HDR switched off" >>"$STATE/labwc.log"
+        hdr_fails=0
+      fi
+    fi
+  else
+    fails=0
+    hdr_fails=0
+  fi
+  sleep $(( fails > 5 ? 10 : 1 ))
+done
