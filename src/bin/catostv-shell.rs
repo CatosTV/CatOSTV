@@ -522,6 +522,8 @@ struct ShellApp {
     launching: Option<(String, Instant)>,
     /// When the shell started (start-up animation).
     started: Instant,
+    /// Notices waking from Sleep (keys right after are ignored).
+    wake: power::WakeGuard,
     /// Catfyn accounts and the Home "Continue watching" row.
     media: fin::Media,
     /// Catfyn pictures: URL → cached PNG (None = failed, do not retry).
@@ -792,6 +794,7 @@ impl ShellApp {
             store_shots: HashMap::new(),
             launching: None,
             started: Instant::now(),
+            wake: power::WakeGuard::default(),
             media: fin::Media {
                 accounts: jf::load_accounts(&home_dir()),
                 home: Vec::new(),
@@ -1372,6 +1375,18 @@ impl ShellApp {
                 Msg::Volume(audio::toggle_mute(&mut SystemRunner).map_err(|e| e.to_string()))
             }),
             Effect::Power(action) => {
+                if action == power::PowerAction::Suspend {
+                    if self
+                        .wake
+                        .sleep_blocked(self.started.elapsed().as_secs_f64())
+                    {
+                        eprintln!("catostv: just woke up; not going back to sleep");
+                        return;
+                    }
+                    // Wake up on Home, not on Quick settings' "Sleep".
+                    self.shell.go_home();
+                    self.mapper.reset();
+                }
                 let appliance = self.appliance;
                 self.job(move |r| power::perform(r, action, appliance));
             }
@@ -2836,11 +2851,29 @@ impl eframe::App for ShellApp {
         }
         self.was_focused = focused;
 
+        // Just woke from Sleep: the waking key (and any pressed while the
+        // screen comes back) must not act, it used to land on Quick
+        // settings' "Sleep" and put the TV straight back to sleep.
+        let mono = self.started.elapsed().as_secs_f64();
+        if let Some(boot) = power::boot_seconds()
+            && self.wake.observe(boot, mono)
+        {
+            eprintln!("catostv: woke from sleep");
+            self.mapper.reset();
+        }
+        let quiet = self.wake.input_blocked(mono);
         let events = keys::collect(&ctx);
-        let actions = self
-            .mapper
-            .map(&events, keys::now(&ctx), self.shell.text_mode());
-        let p = self.pointer.collect(&ctx);
+        let actions = if quiet {
+            Vec::new()
+        } else {
+            self.mapper
+                .map(&events, keys::now(&ctx), self.shell.text_mode())
+        };
+        let mut p = self.pointer.collect(&ctx);
+        if quiet {
+            p = Default::default();
+            self.pending_nav.clear();
+        }
         let mut effects = Vec::new();
         {
             let views = self.views();
