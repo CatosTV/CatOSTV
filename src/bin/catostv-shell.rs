@@ -2701,7 +2701,24 @@ impl ShellApp {
         // or removed outside CatosTV appears/disappears within one refresh.
         self.discovered = discovered;
         self.rebuild_apps();
-        if !s.android.session {
+        // The green dots follow Android's own list of open apps
+        // (android-watch, every second), plus the app in front (just opened,
+        // before that list catches up). Apps Android closed lose their dot;
+        // the dots are cleared only when that list is empty and Android's
+        // session reports stopped, one failed status check used to wipe them.
+        let tasks = android::read_tasks();
+        if !tasks.is_empty() {
+            let front = self.foreground_android().flatten();
+            self.android_running = tasks
+                .into_iter()
+                .filter(|p| !android::is_android_home(p))
+                .collect();
+            if let Some(f) = front
+                && !self.android_running.contains(&f)
+            {
+                self.android_running.push(f);
+            }
+        } else if !s.android.session {
             self.android_running.clear();
         }
         self.sys = s;
