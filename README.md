@@ -50,11 +50,11 @@ a USB stick (8 GB or more) with [balenaEtcher](https://etcher.balena.io),
 [Ventoy](https://www.ventoy.net) or `dd`:
 
 ```bash
-sudo dd if=catostv-1.0.0-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+sudo dd if=catostv-1.0.2-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
 ```
 
 You can check the download with the `.sha256` file next to it:
-`sha256sum -c catostv-1.0.0-x86_64.iso.sha256`.
+`sha256sum -c catostv-1.0.2-x86_64.iso.sha256`.
 
 You don't need a newer ISO when a new version comes out. The installer
 checks for updates before it starts and installs the newest version.
