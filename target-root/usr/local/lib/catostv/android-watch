@@ -214,6 +214,22 @@ stop_hung_watch() {
   kill "$HW" 2>/dev/null || true
   HW=""
 }
+# Process IDs below 65536 inside Android (see
+# /etc/sysctl.d/60-catostv-android.conf for why): each process-ID
+# namespace has its own limit and Android's container starts with the
+# kernel default (about 4 million), and its /proc/sys is read-only. So
+# for every new container, a process joins only its PID namespace and
+# sets the limit there. Android's first seconds use low IDs, well below.
+pids_capped=""
+cap_android_pids() {
+  local init
+  init=$(lxc-info "${LXC[@]}" -pH 2>/dev/null)
+  [[ "$init" =~ ^[0-9]+$ && "$init" != "$pids_capped" ]] || return 0
+  if nsenter -t "$init" -p -- sh -c 'echo 65535 > /proc/sys/kernel/pid_max' 2>/dev/null; then
+    pids_capped=$init
+    echo "Android's process IDs capped at 65535 (container init $init)" >&2
+  fi
+}
 trap 'stop_watchdog; stop_hung_watch; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp"; exit' EXIT TERM INT
 while true; do
   if [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" != RUNNING ]]; then
@@ -229,6 +245,7 @@ while true; do
     sleep 3
     continue
   fi
+  cap_android_pids
   if [[ -z "$WD" ]] || ! kill -0 "$WD" 2>/dev/null; then
     watchdog &
     WD=$!
