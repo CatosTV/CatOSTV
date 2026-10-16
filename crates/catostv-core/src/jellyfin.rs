@@ -986,9 +986,18 @@ pub fn player_config(device_id: &str, token: &str) -> Result<PathBuf> {
         .create_new(true)
         .mode(0o600)
         .open(&tmp)?;
-    // mpv's list option: one header; quotes keep the commas inside.
+    // `-append` adds exactly one header (its commas are not list
+    // separators) and `%N%` quotes the value by its byte length, which
+    // every mpv version reads the same way; backslash-escaped quotes do
+    // not parse on mpv 0.40.
     let header = format!("Authorization: {}", auth_value(device_id, Some(token)));
-    f.write_all(format!("http-header-fields=\"{}\"\n", header.replace('"', "\\\"")).as_bytes())?;
+    f.write_all(
+        format!(
+            "http-header-fields-append={}\n",
+            crate::mpv::option_value(&header)
+        )
+        .as_bytes(),
+    )?;
     drop(f);
     std::fs::rename(&tmp, &path)?;
     Ok(path)
