@@ -86,9 +86,13 @@ pleasant on a TV. Phone-only apps open but may expect a touch screen.
   NVIDIA's driver, the open NVIDIA driver, or *safe graphics*, Android draws
   in software: fine for most apps, slow for 3D games and very high
   resolutions. CatosTV's own video player (Catfyn) isn't affected.
-- **Streaming services**: some apps check for a certified device or copy
-  protection and refuse to run, or play only in lower quality. That's the
-  service's choice, not something CatosTV can change.
+- **Streaming services**: Android on CatosTV has software copy
+  protection (Widevine L3), not the hardware kind only Google-certified
+  devices have. YouTube for Android TV plays once the TV is registered
+  (see *Google Play certification* above). SmartTube, Jellyfin, Plex,
+  Kodi, Twitch and most free and live TV apps play normally. Apps that
+  insist on hardware protection, such as Netflix, Prime Video and Disney+,
+  refuse to play, keep loading or drop to low quality.
 - **Casting to Android apps**: Android's built-in Chromecast receiver isn't
   available. CatosTV's own casting (DLNA, YouTube "link with TV") still
   works. See the [manual](MANUAL.md#your-phone-remote-casting-kde-connect).
