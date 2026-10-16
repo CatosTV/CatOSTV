@@ -270,7 +270,6 @@ pub enum RowId {
     UpdateStatus,
     UpdateCheck,
     UpdateInstall,
-    UpdateNote(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -744,7 +743,7 @@ fn update_rows(sys: &SystemSnapshot) -> Vec<Row> {
         (Some(InstallState::Failed(r)), _, _) => format!("Update failed: {r}"),
         (_, true, _) => "Checking…".into(),
         (_, _, Some(Ok(Check::NotSetUp))) => "Updates aren't set up yet".into(),
-        (_, _, Some(Ok(Check::UpToDate))) => "Up to date".into(),
+        (_, _, Some(Ok(Check::UpToDate(_)))) => "Up to date".into(),
         (_, _, Some(Ok(Check::Available(m)))) => format!("Version {} is available", m.version),
         (_, _, Some(Err(e))) => e.clone(),
         _ => String::new(),
@@ -766,9 +765,6 @@ fn update_rows(sys: &SystemSnapshot) -> Vec<Row> {
             "",
             RowKind::Primary,
         ));
-        for (i, n) in m.notes.iter().enumerate() {
-            v.push(row(RowId::UpdateNote(i), n, "", "", RowKind::Info));
-        }
     }
     if !running {
         v.push(row(

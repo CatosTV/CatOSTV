@@ -48,7 +48,9 @@ pub struct Manifest {
 pub enum Check {
     /// No address configured, or no signing key installed.
     NotSetUp,
-    UpToDate,
+    /// The newest release is the running one (or older); its manifest
+    /// (for "What's new in this version").
+    UpToDate(Manifest),
     Available(Manifest),
 }
 
@@ -232,7 +234,7 @@ pub fn check(r: &mut dyn Runner) -> Result<Check, String> {
     Ok(if newer(&m.version, crate::env::version()) {
         Check::Available(m)
     } else {
-        Check::UpToDate
+        Check::UpToDate(m)
     })
 }
 
@@ -336,6 +338,17 @@ pub fn prepare_live(r: &mut dyn Runner) -> Prepared {
     }
     let _ = r.run(&reflector_cmd());
     Prepared::Mirrors(why)
+}
+
+/// Release notes to show on the Updates page: the available version's,
+/// or, when up to date, the running version's own (`None` when the
+/// server's newest is older than this build).
+pub fn shown_notes(check: &Check) -> Option<(&str, &[String])> {
+    match check {
+        Check::Available(m) => Some((&m.version, &m.notes)),
+        Check::UpToDate(m) if m.version == crate::env::version() => Some((&m.version, &m.notes)),
+        _ => None,
+    }
 }
 
 /// Start the install unit (polkit lets the TV account start exactly it).
