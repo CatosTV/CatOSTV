@@ -16,7 +16,7 @@ use crate::error::{Error, Result};
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -108,6 +108,47 @@ struct Tracked {
 pub struct AppManager {
     tracked: HashMap<String, Tracked>,
     log_dir: Option<PathBuf>,
+    /// Where the process group of every running app is written ("<pgid>
+    /// <id>" per line), so the next shell can stop what this one leaves
+    /// behind ([`stop_leftovers`]).
+    record: Option<PathBuf>,
+}
+
+/// The record of running apps the shell keeps in the runtime folder.
+pub fn record_path() -> PathBuf {
+    crate::env::runtime_dir().join("catostv-apps")
+}
+
+/// Stop every app a previous shell left running (it was killed or
+/// restarted without closing them: a deploy, a crash). Each recorded
+/// process group gets SIGTERM, then SIGKILL after 2 s. The record lives in
+/// the runtime folder, which a reboot empties, so it never names groups of
+/// an earlier boot. Returns the ids of the apps that were still running.
+pub fn stop_leftovers(record: &Path) -> Vec<String> {
+    let text = std::fs::read_to_string(record).unwrap_or_default();
+    let _ = std::fs::remove_file(record);
+    let groups: Vec<(i32, String)> = text
+        .lines()
+        .filter_map(|l| {
+            let (pgid, id) = l.split_once(' ')?;
+            let pgid: i32 = pgid.parse().ok()?;
+            (pgid > 1).then(|| (pgid, id.to_string()))
+        })
+        .filter(|(pgid, _)| group_alive(*pgid))
+        .collect();
+    for (pgid, _) in &groups {
+        let _ = signal_group(*pgid, SIGTERM);
+    }
+    let until = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < until && groups.iter().any(|(p, _)| group_alive(*p)) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for (pgid, _) in &groups {
+        if group_alive(*pgid) {
+            let _ = signal_group(*pgid, SIGKILL);
+        }
+    }
+    groups.into_iter().map(|(_, id)| id).collect()
 }
 
 impl AppManager {
@@ -117,6 +158,27 @@ impl AppManager {
         Self {
             tracked: HashMap::new(),
             log_dir,
+            record: None,
+        }
+    }
+
+    /// Keep the record of running apps at `path` (see [`stop_leftovers`]).
+    pub fn with_record(mut self, path: PathBuf) -> Self {
+        self.record = Some(path);
+        self.write_record();
+        self
+    }
+
+    fn write_record(&self) {
+        let Some(path) = &self.record else { return };
+        let text: String = self
+            .tracked
+            .iter()
+            .map(|(id, t)| format!("{} {}\n", t.pgid, id.split('#').next().unwrap_or(id)))
+            .collect();
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
         }
     }
 
@@ -178,6 +240,7 @@ impl AppManager {
                 killed: false,
             },
         );
+        self.write_record();
         Ok(LaunchResult::Started)
     }
 
@@ -248,6 +311,9 @@ impl AppManager {
                 }
             };
             events.push(event);
+        }
+        if !events.is_empty() {
+            self.write_record();
         }
         events
     }
@@ -398,5 +464,23 @@ mod tests {
         let log = std::fs::read_to_string(dir.join("echo.log")).unwrap();
         assert_eq!(log.trim(), "hello-log");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_new_shell_stops_what_the_last_one_left_running() {
+        let record = std::env::temp_dir().join(format!("catostv-apps-{}", std::process::id()));
+        let mut m = AppManager::new(None).with_record(record.clone());
+        let app = app("sleeper", "sleep 30");
+        m.launch(&app).unwrap();
+        assert!(
+            std::fs::read_to_string(&record)
+                .unwrap()
+                .ends_with(" sleeper\n")
+        );
+        // The shell goes away without closing it; the next one cleans up.
+        std::mem::forget(m);
+        assert_eq!(stop_leftovers(&record), vec!["sleeper".to_string()]);
+        assert!(!record.exists());
+        assert!(stop_leftovers(&record).is_empty());
     }
 }

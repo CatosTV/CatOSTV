@@ -751,6 +751,18 @@ fn run_store_job(tx: std::sync::mpsc::Sender<Msg>, ctx: egui::Context, id: Strin
 
 impl ShellApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // A reload of the interface starts clean: apps the previous one left
+        // running (it was restarted or killed: a deploy, a crash) are
+        // stopped, a Catfyn player nothing could control any more stayed
+        // stuck on screen. Android's session is one of them, so Android
+        // apps stop too and Android starts again with this interface.
+        let left = catostv_core::lifecycle::stop_leftovers(&catostv_core::lifecycle::record_path());
+        if !left.is_empty() {
+            eprintln!(
+                "catostv: stopped apps the last interface left running: {}",
+                left.join(", ")
+            );
+        }
         theme::setup(&cc.egui_ctx);
         let mut prefs = prefs::load();
         // HDR lasts until the next reboot only (runtime flag).
@@ -774,9 +786,10 @@ impl ShellApp {
             discovered: Vec::new(),
             apps: Vec::new(),
             installed: Vec::new(),
-            manager: Arc::new(Mutex::new(AppManager::new(Some(
-                env::state_dir().join("apps"),
-            )))),
+            manager: Arc::new(Mutex::new(
+                AppManager::new(Some(env::state_dir().join("apps")))
+                    .with_record(catostv_core::lifecycle::record_path()),
+            )),
             watch: Arc::new(Mutex::new(Watch {
                 appliance,
                 ..Watch::default()
@@ -859,6 +872,23 @@ impl ShellApp {
         }) {
             eprintln!("catostv-shell: {e}");
             app.show_toast(&cc.egui_ctx, "Remote shortcuts are unavailable");
+        }
+        // Android apps the last interface left open close too (Android
+        // itself keeps running, so they reopen quickly): a reload stops all
+        // apps.
+        if appliance {
+            app.jobs.spawn(|| {
+                let mut r = SystemRunner;
+                for pkg in android::read_tasks() {
+                    if android::is_android_home(&pkg) || pkg == "com.android.systemui" {
+                        continue;
+                    }
+                    if let Ok(cmd) = android::stop_cmd(&pkg) {
+                        let _ = r.run_ok(&cmd);
+                    }
+                }
+                Msg::Nothing
+            });
         }
         spawn_app_watcher(app.manager.clone(), app.watch.clone(), app.jobs.sender());
         app.reload_apps(&cc.egui_ctx);
