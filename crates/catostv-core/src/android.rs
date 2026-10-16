@@ -1068,6 +1068,19 @@ pub const STOP_UNIT_PREFIX: &str = "catostv-android-stop@";
 /// `systemctl start catostv-android-stop@<pkg>.service`, closes an Android
 /// app (Recents X, app options Close). The package is validated first and
 /// validated again by the root script.
+/// Send Android to its home screen (root unit, no input): you left an
+/// Android app for CatosTV, so the app pauses as on a real Android TV.
+pub fn home_cmd() -> Cmd {
+    Cmd::new("systemctl")
+        .args([
+            "--no-ask-password",
+            "start",
+            "--no-block",
+            "catostv-android-home.service",
+        ])
+        .timeout(SLOW)
+}
+
 pub fn stop_cmd(pkg: &str) -> Result<Cmd> {
     check_package(pkg)?;
     Ok(Cmd::new("systemctl")

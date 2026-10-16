@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# CatosTV: send Android to its own home screen (run as root by
+# catostv-android-home.service; `waydroid shell` needs root). No input.
+#
+# Android runs in one hidden full-screen window, so when you go back to
+# CatosTV, Android never learns you left: the app stays in front inside
+# Android and keeps going (a game's music, SmartTube resuming a video),
+# and backing out of the next app revealed it again. The Home key tells
+# Android you left, as on a real Android TV: the app pauses and goes to
+# the background, and Android's home screen is what sits under the next
+# app you open.
+set -euo pipefail
+exec waydroid shell -- input keyevent KEYCODE_HOME
