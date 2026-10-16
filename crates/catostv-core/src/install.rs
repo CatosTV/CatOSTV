@@ -33,6 +33,9 @@ pub const MOUNT_ROOT: &str = "/mnt/catostv";
 pub const OVERLAY_DIR: &str = "/usr/share/catostv/install-root";
 /// Where the live ISO keeps the CatosTV binaries to copy.
 pub const LIVE_BIN_DIR: &str = "/usr/local/bin";
+/// Each release's own setup steps, run in the new system after its files
+/// (and by the updater on TVs). See the script itself.
+pub const POST_INSTALL: &str = "/usr/local/lib/catostv/post-install";
 /// Install log on the live system (RAM-backed `/tmp`).
 pub const LOG_PATH: &str = "/tmp/catostv-install.log";
 
@@ -508,14 +511,17 @@ pub fn plan(cfg: &InstallConfig) -> Result<Plan> {
         pacstrap = pacstrap.args(DEBUG_PACKAGES.iter().copied());
     }
 
-    let mut install_bins = Vec::new();
-    for b in INSTALLED_BINARIES {
-        install_bins.push(Op::run(Cmd::new("install").args([
-            "-Dm755".to_string(),
-            format!("{LIVE_BIN_DIR}/{b}"),
-            m(&format!("/usr/local/bin/{b}")),
-        ])));
-    }
+    // Every CatosTV program the live system has, after "Checking for
+    // updates" those are the newest release's, so a program a release adds
+    // is installed too (rolling: the ISO's own list is not the limit).
+    let install_bins = vec![Op::run(Cmd::new("sh").args([
+        "-c".to_string(),
+        format!(
+            "set -e; for b in {LIVE_BIN_DIR}/catostv-*; do case \"${{b##*/}}\" in \
+             catostv-installer|catostv-live-session) ;; \
+             *) install -Dm755 \"$b\" {MOUNT_ROOT}/usr/local/bin/\"${{b##*/}}\" ;; esac; done"
+        ),
+    ]))];
 
     let steps = vec![
         step(
@@ -770,6 +776,19 @@ pub fn plan(cfg: &InstallConfig) -> Result<Plan> {
             // After "Installing the TV interface": the unit file comes with
             // the overlay (enabling it earlier failed every install).
             .chain(debug_ssh_ops())
+            // The release's own setup (rolling; see target-root's
+            // usr/local/lib/catostv/post-install).
+            .chain([Op::run(
+                Cmd::new("sh")
+                    .args([
+                        "-c",
+                        &format!(
+                            "[ -x {MOUNT_ROOT}{POST_INSTALL} ] || exit 0; \
+                             arch-chroot {MOUNT_ROOT} {POST_INSTALL}"
+                        ),
+                    ])
+                    .timeout(VERY_LONG),
+            )])
             .collect(),
         ),
         step(
@@ -1447,6 +1466,9 @@ mod tests {
             assert!(text.contains(" openssh sudo rsync"));
         }
         assert!(text.contains("catostv-diag install-prepare"));
+        // Rolling: the release's programs and setup hook, not the ISO's list.
+        assert!(text.contains("for b in /usr/local/bin/catostv-*"));
+        assert!(text.contains("arch-chroot /mnt/catostv /usr/local/lib/catostv/post-install"));
         assert!(text.contains("pacman -S --needed --noconfirm"));
     }
 
