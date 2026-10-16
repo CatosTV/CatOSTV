@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# CatosTV: let Android apps play 4K at 60 fps. The image's VP9 decoder
+# (c2.ffmpeg, decoding on the GPU through VA-API) says it manages 4K at
+# 30 fps only, so YouTube offers 1440p60 at most for 60 fps videos. Intel
+# and AMD GPUs decode VP9 4K60 in hardware, so on those the copy in
+# Waydroid's overlay says 60. Without such a GPU (NVIDIA, safe graphics)
+# Android decodes in software and the stock limits stay. Run as root
+# (container running, or the image downloaded); no input.
+set -euo pipefail
+FILE=etc/media_codecs_ffmpeg_c2.xml
+OVERLAY=/var/lib/waydroid/overlay/vendor/$FILE
+
+hw_vp9() {
+  [[ -e /etc/catostv/android-software-rendering ]] && return 1
+  local d drv
+  for d in /sys/class/drm/renderD*/device/driver; do
+    drv=$(basename "$(readlink -f "$d")")
+    [[ $drv == i915 || $drv == xe || $drv == amdgpu ]] && return 0
+  done
+  return 1
+}
+
+if ! hw_vp9; then
+  if [[ -e $OVERLAY ]]; then
+    rm -f "$OVERLAY"
+    echo "Android video decoders: stock limits (no hardware VP9)"
+  fi
+  exit 0
+fi
+
+stock=/var/lib/waydroid/rootfs/vendor/$FILE tmp=""
+if [[ ! -r $stock ]]; then
+  img=/var/lib/waydroid/images/vendor.img
+  [[ -r $img ]] || { echo "Android's codec list is not available (no running container, no vendor image)" >&2; exit 1; }
+  mnt=$(mktemp -d /run/catostv-vendor.XXXXXX)
+  mount -o loop,ro "$img" "$mnt"
+  tmp=$(mktemp /run/catostv-codecs.XXXXXX)
+  for src in "$mnt/$FILE" "$mnt/vendor/$FILE"; do
+    [[ -r $src ]] && cp "$src" "$tmp" && break
+  done
+  umount "$mnt"
+  rmdir "$mnt"
+  [[ -s $tmp ]] || { rm -f "$tmp"; echo "no $FILE in the vendor image" >&2; exit 1; }
+  stock=$tmp
+fi
+trap '[[ -n $tmp ]] && rm -f "$tmp"' EXIT
+
+mkdir -p "$(dirname "$OVERLAY")"
+# Only inside the VP9 decoder's entry.
+sed -E '/<MediaCodec name="c2\.ffmpeg\.vp9\.decoder"/,/<\/MediaCodec>/{
+  s/(name="performance-point-3840x2160" value=")[0-9]+"/\160"/
+  s/(name="measured-frame-rate-3840x2160" range=")[0-9]+-([0-9]+)"/\160-\2"/
+}' "$stock" >"$OVERLAY.tmp"
+if cmp -s "$OVERLAY.tmp" "$OVERLAY" 2>/dev/null; then
+  rm -f "$OVERLAY.tmp"
+  echo "Android video decoders already set"
+  exit 0
+fi
+chmod 644 "$OVERLAY.tmp"
+mv -f "$OVERLAY.tmp" "$OVERLAY"
+echo "Android video decoders: VP9 4K at 60 fps (takes effect when Android restarts)"
