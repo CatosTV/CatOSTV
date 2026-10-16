@@ -110,6 +110,8 @@ pub const BASE_PACKAGES: &[&str] = &[
     "vulkan-intel",
     "vulkan-radeon",
     "intel-media-driver",
+    // `vainfo`: which codecs the GPU decodes (android-codecs)
+    "libva-utils",
     // Fonts and cursor
     "inter-font",
     "noto-fonts",
