@@ -560,7 +560,11 @@ fn home_dir() -> PathBuf {
 }
 
 /// True if a process with this exact name (`/proc/<pid>/comm`) is running.
+/// Whether a process called `name` runs. The kernel keeps only the first
+/// 15 characters of a process name (`catostv-wlfilter` shows as
+/// `catostv-wlfilte`), so compare those.
 fn process_running(name: &str) -> bool {
+    let name: String = name.chars().take(15).collect();
     std::fs::read_dir("/proc")
         .map(|d| {
             d.flatten().any(|e| {
