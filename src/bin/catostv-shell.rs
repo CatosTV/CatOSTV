@@ -85,6 +85,8 @@ enum Msg {
     AndroidScreenRestart,
     /// android-watch closed an Android app that hung.
     AndroidHung(String),
+    /// An Android app was uninstalled: (package, name).
+    AndroidRemoved(String, String),
     /// Android can't start apps any more (android-watch): restart it.
     AndroidStuck,
     /// The stuck Android session has stopped: start a fresh one.
@@ -1361,7 +1363,16 @@ impl ShellApp {
                     }
                     AppSource::Android { package } => {
                         self.show_toast(ctx, &format!("Removing {}…", app.name));
-                        self.job(move |r| android::remove_app(r, &package));
+                        let home = self.home.clone();
+                        self.jobs.spawn(move || {
+                            match android::remove_app(&mut SystemRunner, &package) {
+                                Ok(()) => {
+                                    android::forget_app_desktops(&home, &package);
+                                    Msg::AndroidRemoved(package, app.name)
+                                }
+                                Err(e) => Msg::Toast(e.to_string()),
+                            }
+                        });
                     }
                     AppSource::Configured => {}
                 }
@@ -2513,6 +2524,15 @@ impl ShellApp {
                     ctx,
                     &format!("{name} stopped responding and was closed. Open it again"),
                 );
+            }
+            Msg::AndroidRemoved(pkg, name) => {
+                // Its tile goes now, not on Android's next app list.
+                self.discovered.retain(
+                    |a| !matches!(&a.source, AppSource::Android { package } if *package == pkg),
+                );
+                self.rebuild_apps();
+                self.refresh_soon();
+                self.show_toast(ctx, &format!("{name} removed"));
             }
             Msg::AndroidStuck => {
                 if self.foreground.as_deref().is_some_and(|f| {

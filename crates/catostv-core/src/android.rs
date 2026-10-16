@@ -584,6 +584,18 @@ pub fn tv_desktop_path(home: &Path, pkg: &str) -> PathBuf {
         .join(format!("{TV_DESKTOP_PREFIX}{pkg}.desktop"))
 }
 
+/// After an uninstall: delete the app's Home entries (CatosTV's TV-only
+/// file and Waydroid's own) at once, rather than waiting for Android to
+/// list its apps again, when Android is slow to answer, the tile stayed
+/// on Home and opening it failed.
+pub fn forget_app_desktops(home: &Path, pkg: &str) {
+    let _ = std::fs::remove_file(tv_desktop_path(home, pkg));
+    let _ = std::fs::remove_file(
+        home.join(".local/share/applications")
+            .join(format!("waydroid.{pkg}.desktop")),
+    );
+}
+
 /// The desktop file for a TV-only app. The Exec line is the same as
 /// Waydroid's (that is what `desktop::scan_waydroid` accepts); CatosTV starts
 /// such apps through [`tv_launch_cmd`] instead.
