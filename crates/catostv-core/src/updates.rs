@@ -414,4 +414,12 @@ mod tests {
                 .contains("Server = https://archive.archlinux.org/repos/2026/10/15/$repo/os/$arch")
         );
     }
+
+    #[test]
+    fn a_fix_release_takes_a_fourth_number() {
+        // TVs read "-suffix" as a pre-release: 1.0.3-2 is older than 1.0.3.
+        assert!(newer("1.0.3.1", "1.0.3"));
+        assert!(!newer("1.0.3-2", "1.0.3"));
+        assert!(newer("1.0.4", "1.0.3.1"));
+    }
 }
