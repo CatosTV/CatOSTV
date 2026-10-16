@@ -196,6 +196,19 @@ pub fn bt_connected(sys: &crate::settings::SystemSnapshot, mac: &str) -> bool {
         .any(|d| d.address == mac && d.connected)
 }
 
+/// "Connected", with the battery level when the device reports one.
+pub fn bt_connected_label(sys: &crate::settings::SystemSnapshot, mac: &str) -> String {
+    match sys
+        .bt_details
+        .iter()
+        .find(|d| d.address == mac)
+        .and_then(|d| d.battery)
+    {
+        Some(b) => format!("Connected · {b}%"),
+        None => "Connected".into(),
+    }
+}
+
 /// The rows of Quick settings → Bluetooth: the switch, then (when on) the
 /// paired devices and "Pair a new device".
 pub fn quick_bt_rows(ctx: &ShellContext) -> Vec<BtRow> {

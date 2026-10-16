@@ -416,11 +416,16 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                     .bt_details
                     .iter()
                     .any(|x| x.address == d.address && x.connected);
+                let state = if connected {
+                    crate::shell::bt_connected_label(sys, &d.address)
+                } else {
+                    "Paired".into()
+                };
                 v.push(row(
                     RowId::BtDevice(i),
                     &d.name,
                     "",
-                    if connected { "Connected" } else { "Paired" },
+                    &state,
                     RowKind::Action,
                 ));
             }

@@ -1610,7 +1610,15 @@ impl ShellApp {
             Effect::SetAdaptiveSync { output, on } => {
                 self.job(move |r| display::set_adaptive_sync(r, &output, on))
             }
-            Effect::SetSink(id) => self.job(move |r| audio::set_default_sink(r, id)),
+            Effect::SetSink(id) => {
+                // Shown at once; the switch itself is quick, the next full
+                // refresh is not.
+                self.sys
+                    .sinks
+                    .iter_mut()
+                    .for_each(|x| x.is_default = x.id == id);
+                self.job(move |r| audio::set_default_sink(r, id));
+            }
             Effect::ApplyHdmiProfile => {
                 if let Some(h) = self.sys.hdmi_hint.clone() {
                     self.job(move |r| audio::set_card_profile(r, &h.card, &h.profile));
@@ -2734,7 +2742,13 @@ impl ShellApp {
             // own speakers (HDMI) once per start.
             let prefs = self.display.clone();
             let outputs = s.outputs.clone();
-            let sink = audio::preferred_tv_sink(&s.sinks);
+            // Not while Bluetooth headphones are connected (they get the
+            // sound, see route_on_change).
+            let sink = if s.sinks.iter().any(|x| x.kind == audio::SinkKind::Bluetooth) {
+                None
+            } else {
+                audio::preferred_tv_sink(&s.sinks)
+            };
             self.jobs.spawn(move || {
                 let mut r = SystemRunner;
                 if let Err(e) = display::apply_prefs(&mut r, &prefs, &outputs) {
@@ -2785,6 +2799,17 @@ impl ShellApp {
             }
         } else if !s.android.session {
             self.android_running.clear();
+        }
+        // Bluetooth headphones or a speaker connected: the sound goes there;
+        // disconnected: back to the TV.
+        if self.appliance
+            && let Some(id) = audio::route_on_change(&self.sys.sinks, &s.sinks)
+        {
+            s.sinks.iter_mut().for_each(|x| x.is_default = x.id == id);
+            self.jobs.spawn(move || {
+                let _ = audio::set_default_sink(&mut SystemRunner, id);
+                Msg::Nothing
+            });
         }
         self.sys = s;
         self.autostart_android(ctx);
@@ -2913,6 +2938,24 @@ impl ShellApp {
             || self.sys.android_repairing
             || self.shell.bt_busy.is_some()
             || !self.shell.store_jobs.is_empty()
+            || self.bluetooth_on_screen()
+    }
+
+    /// Quick settings or Settings → Bluetooth / Audio is open: a device
+    /// that connects shows up within a couple of seconds.
+    fn bluetooth_on_screen(&self) -> bool {
+        use catostv_core::settings::Category;
+        matches!(
+            self.shell.overlay(),
+            Some(
+                catostv_core::shell::Overlay::Quick { .. }
+                    | catostv_core::shell::Overlay::QuickBluetooth { .. }
+            )
+        ) || (self.shell.page == Page::Settings
+            && matches!(
+                self.shell.current_category(),
+                Category::Bluetooth | Category::Sound
+            ))
     }
 
     /// Something on screen is animating (spinners, search radar).
