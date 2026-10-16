@@ -211,14 +211,20 @@ fn card_thumbnail(
     Some((path.to_string_lossy().into_owned(), w, h))
 }
 
-/// The episode after `item` in series order, across seasons: not
-/// Jellyfin's "Next up", which can jump back to an older unwatched one.
-fn next_episode(device: &str, a: &Account, item: &Item) -> Option<Item> {
+/// The episodes before and after `item` in series order, across seasons
+/// not Jellyfin's "Next up", which can jump back to an older
+/// unwatched one. One request for both.
+fn neighbours(device: &str, a: &Account, item: &Item) -> (Option<Item>, Option<Item>) {
     if item.kind() != jf::Kind::Episode || item.series_id.is_empty() {
-        return None;
+        return (None, None);
     }
-    let list = items(device, a, &jf::series_episodes_url(a, &item.series_id)).ok()?;
-    catostv_core::upnext::next_in_order(&list, &item.id)
+    let Ok(list) = items(device, a, &jf::series_episodes_url(a, &item.series_id)) else {
+        return (None, None);
+    };
+    (
+        catostv_core::upnext::prev_in_order(&list, &item.id),
+        catostv_core::upnext::next_in_order(&list, &item.id),
+    )
 }
 
 /// Tell the control bar what to draw (`catfyn-card …`).
@@ -346,10 +352,16 @@ pub fn spawn_reporter(
                 send(&item, Report::Start, last.0, last.1);
                 // The card's plan: the next episode in order, and where the
                 // credits start (server segments, else the last 30 s).
-                let next = autoplay
-                    .enabled
-                    .then(|| next_episode(&device, &a, &item))
-                    .flatten();
+                let (prev, following) = neighbours(&device, &a, &item);
+                let next = following.filter(|_| autoplay.enabled);
+                // The control bar's "Previous episode" button shows only when
+                // there is one.
+                let _ = conn.command(&[
+                    Arg::Str("script-message-to"),
+                    Arg::Str("catfyn_osd"),
+                    Arg::Str("catfyn-episodes"),
+                    Arg::Str(if prev.is_some() { "yes" } else { "no" }),
+                ]);
                 let segments = next
                     .as_ref()
                     .and_then(|_| call(&device, &a, &jf::segments_url(&a, &item.id), None).ok());
@@ -374,6 +386,35 @@ pub fn spawn_reporter(
                     }
                     if let Some(p) = pos {
                         last = (p, paused);
+                    }
+                    // "Previous episode" on the control bar: the one before
+                    // starts here, from the beginning (where this one was is
+                    // reported first).
+                    let wants_prev = msgs.iter().any(|m| {
+                        m.first().map(String::as_str) == Some("catfyn-episode")
+                            && m.get(1).map(String::as_str) == Some("prev")
+                    });
+                    if let Some(p) = prev.clone().filter(|_| wants_prev) {
+                        send(&item, Report::Stopped, last.0, false);
+                        card(&mut conn, &["hide"]);
+                        let mut p = call(&device, &a, &jf::item_url(&a, &p.id), None)
+                            .ok()
+                            .and_then(|b| jf::parse_single_item(&b))
+                            .unwrap_or(p);
+                        p.position = 0.0;
+                        match load_in_player(&mut conn, &device, &a, &p) {
+                            Ok(subs) => {
+                                subs_to_add = subs;
+                                item = p;
+                                streak = 0;
+                                continue 'episodes;
+                            }
+                            Err(_) => {
+                                let _ = conn.command(&[Arg::Str("quit")]);
+                                done(None);
+                                return;
+                            }
+                        }
                     }
                     if up.is_none() && next.is_some() {
                         let runtime = conn
