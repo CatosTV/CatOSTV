@@ -2615,10 +2615,10 @@ impl ShellApp {
         // An update was just installed: the new interface takes over.
         if let Some(catostv_core::updates::InstallState::Done(v)) = &s.updates.install
             && catostv_core::updates::newer(v, catostv_core::env::version())
-            && !matches!(
-                self.sys.updates.install,
-                Some(catostv_core::updates::InstallState::Done(_))
-            )
+            // Once per update: a "done" left over from an earlier update
+            // (another version) must not stop this one.
+            && self.sys.updates.install.as_ref()
+                != Some(&catostv_core::updates::InstallState::Done(v.clone()))
         {
             self.show_toast(ctx, &format!("Updated to {v}. Restarting the interface"));
             self.restart_after_update = Some(Instant::now());
