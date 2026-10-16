@@ -945,6 +945,14 @@ impl ShellApp {
         self.last_refresh = None;
     }
 
+    /// You left an Android app for CatosTV: Android goes to its own home
+    /// screen, so the app pauses (see android-home).
+    fn send_android_home(&self) {
+        if self.appliance && self.sys.android.session {
+            self.job(|r| r.run_ok(&android::home_cmd()).map(|_| ()));
+        }
+    }
+
     fn return_to_shell(&self) {
         if self.appliance {
             self.jobs.spawn(|| {
@@ -1487,6 +1495,9 @@ impl ShellApp {
                 // Escape gesture from catostv-inputd. Only act when an app is
                 // in front: inside CatosTV, Back already navigates.
                 if !keys::window_focused(ctx) {
+                    if self.foreground_android().is_some() {
+                        self.send_android_home();
+                    }
                     self.shell.go_home();
                     self.return_to_shell();
                 }
@@ -2256,6 +2267,11 @@ impl ShellApp {
             }
             Msg::Ipc(cmd, _) => {
                 self.mapper.reset();
+                // Home (key, remote, controller Guide) from an Android app:
+                // tell Android too, or the app keeps playing unseen.
+                if cmd == ShellCommand::Home && self.foreground_android().is_some() {
+                    self.send_android_home();
+                }
                 for e in self.shell.handle_ipc(cmd) {
                     self.apply(ctx, e);
                 }
@@ -2483,6 +2499,9 @@ impl ShellApp {
                 self.shell.quick_app = Some((name, fullscreen));
             }
             Msg::AndroidHome => {
+                // Backed out of an Android app: an app that was open
+                // underneath (shown now) goes to the background too.
+                self.send_android_home();
                 self.foreground = None;
                 self.shell.go_home();
             }
