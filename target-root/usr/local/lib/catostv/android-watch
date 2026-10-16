@@ -55,6 +55,44 @@ while true; do
   fi
   sleep 0.2
 done'
+# Evidence trap: Android's framework once restarted after "rust_binder:
+# Failed to allocate buffer" bursts in the kernel log and the graphics
+# allocator aborting on "mmap failed: Out of memory" (16 Oct). To tell a
+# kernel binder fault from an app flooding the allocator, the first binder
+# failure of a burst and every screen-service restart save what's needed
+# in /var/lib/catostv/android-evidence/<time>-<reason>/ (root only): kernel
+# log, Android's log, every Android process with memory and threads, stacks
+# of the allocator and surfaceflinger, the TV's memory. At most one capture
+# per 10 minutes; the newest 5 are kept.
+EVIDENCE=/var/lib/catostv/android-evidence
+in_android_long() {
+  timeout 30 lxc-attach "${LXC[@]}" "${ANDROID_ENV[@]}" -- /system/bin/sh -c "$1" 2>/dev/null
+}
+save_evidence() {
+  local reason=$1 now last d svc p
+  now=$(date +%s)
+  last=$(stat -c %Y "$EVIDENCE/.last" 2>/dev/null || echo 0)
+  (( now - last >= 600 )) || return 0
+  mkdir -p -m 700 "$EVIDENCE" && touch "$EVIDENCE/.last" || return 0
+  d="$EVIDENCE/$(date +%Y%m%d-%H%M%S)-$reason"
+  mkdir -m 700 "$d" || return 0
+  echo "saving evidence ($reason) in $d" >&2
+  journalctl -k -b -n 400 --no-pager -o short-iso >"$d/kernel.log" 2>&1
+  in_android_long 'logcat -d -v time -t 4000' >"$d/logcat.txt"
+  in_android_long 'ps -A -o PID,PPID,VSZ,RSS,THCNT,ETIME,NAME' >"$d/android-ps.txt"
+  for svc in android.hardware.graphics.allocator@4.0-service.minigbm surfaceflinger; do
+    p=$(in_android "pidof $svc" | tr -d '\r')
+    [[ "$p" =~ ^[0-9]+$ ]] && in_android_long "debuggerd -b $p" >"$d/stack-${svc##*.}.txt"
+  done
+  cp /proc/meminfo "$d/meminfo.txt"
+  ls -1dt "$EVIDENCE"/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf --one-file-system
+}
+kernel_watch() {
+  journalctl -k -f -n 0 -o cat 2>/dev/null \
+    | grep --line-buffered "rust_binder: Failed to allocate buffer" \
+    | while read -r _; do save_evidence binder-failure; done
+}
+KW=""
 publish_sf() {
   local pid=$1 restarts=0 prev
   if [[ -r $SF ]]; then
@@ -63,6 +101,7 @@ publish_sf() {
     if [[ -n "${prev:-}" && "$prev" != "$pid" ]]; then
       restarts=$((restarts + 1))
       echo "surfaceflinger restarted (pid $prev -> $pid), restart #$restarts" >&2
+      save_evidence screen-service-restart &
     fi
   fi
   printf '%s %s\n' "$pid" "$restarts" >"$SF.tmp" && chmod 644 "$SF.tmp" && mv -f "$SF.tmp" "$SF"
@@ -230,7 +269,9 @@ cap_android_pids() {
     echo "Android's process IDs capped at 65535 (container init $init)" >&2
   fi
 }
-trap 'stop_watchdog; stop_hung_watch; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp"; exit' EXIT TERM INT
+kernel_watch &
+KW=$!
+trap '[[ -n "$KW" ]] && { pkill -P "$KW" 2>/dev/null; kill "$KW" 2>/dev/null; }; stop_watchdog; stop_hung_watch; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp"; exit' EXIT TERM INT
 while true; do
   if [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" != RUNNING ]]; then
     publish ""
