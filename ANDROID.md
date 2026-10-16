@@ -10,10 +10,10 @@ second home screen to deal with.
 
 1. Open **Settings → Android** and choose **Set up Android TV**.
 2. Pick an app store:
-   - **Google Play**, the real Play Store with your Google account. Google
+   - **Google Play**: the real Play Store with your Google account. Google
      has to be told about the TV once (see *Google Play certification*
      below).
-   - **Aurora Store**, installs the same apps from Google Play without a
+   - **Aurora Store**: installs the same apps from Google Play without a
      Google account. Good if you'd rather not sign in to Google on your TV.
 3. CatosTV downloads Android (about 1 GB) and sets it up. The page shows
    each step and the download as it goes. It takes a few minutes.
@@ -58,7 +58,7 @@ pleasant on a TV. Phone-only apps open but may expect a touch screen.
   Esc is Back.)
 - **Home**: the Home key (or Guide on a controller) always takes you to
   CatosTV Home. The app keeps running and waits in **Recents**.
-- **Switching**: open another app from Home or go back to it from Recents,
+- **Switching**: open another app from Home or go back to it from Recents;
   Android apps resume where you left them.
 - **Controllers**: while an Android app or game is in front, every button
   goes to it, except **Guide**, which is always CatosTV's Home.
@@ -78,7 +78,7 @@ pleasant on a TV. Phone-only apps open but may expect a touch screen.
   data and sets Android up again from scratch (a few minutes). CatosTV, your
   media and your settings aren't touched. A copy of the old Android data is
   kept until the next reset. With Google Play you'll need to register the
-  TV again, the page shows the new ID.
+  TV again. The page shows the new ID.
 
 ## Good to know
 
@@ -91,6 +91,6 @@ pleasant on a TV. Phone-only apps open but may expect a touch screen.
   service's choice, not something CatosTV can change.
 - **Casting to Android apps**: Android's built-in Chromecast receiver isn't
   available. CatosTV's own casting (DLNA, YouTube "link with TV") still
-  works, see the [manual](MANUAL.md#your-phone-remote-casting-kde-connect).
+  works. See the [manual](MANUAL.md#your-phone-remote-casting-kde-connect).
 - **Storage**: Android apps and their data live on CatosTV's disk; Settings
   → System shows how much space is left.

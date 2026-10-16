@@ -1,7 +1,7 @@
 # The CatosTV manual
 
 Everything you need to install CatosTV and live with it. If something
-here doesn't match what you see on your TV, that's a bug, please open an
+here doesn't match what you see on your TV, that's a bug, so please open an
 issue.
 
 - [Installing](#installing)
@@ -30,7 +30,7 @@ Boot the PC from the CatosTV USB stick. A menu appears for ten seconds:
 | **Install CatosTV** | Almost always. The installer looks at your graphics card and picks the drivers. |
 | **…with NVIDIA graphics** | Force NVIDIA's own driver (GeForce GTX 16 / RTX 20 or newer). |
 | **…with open graphics drivers** | Use the open-source drivers even on an NVIDIA card. |
-| **…with safe graphics** | The screen stays black or garbled with the others. Everything is drawn without acceleration, fine for installing, too slow for films. |
+| **…with safe graphics** | The screen stays black or garbled with the others. Everything is drawn without acceleration: fine for installing, too slow for films. |
 | **Start from this computer's disk** | Leave the stick in but boot what's already installed. |
 | **Firmware settings** | Opens your PC's UEFI setup (to change boot order, for example). |
 
@@ -41,20 +41,20 @@ installer follows.
 
 You can use a keyboard, a mouse or a game controller.
 
-1. **Welcome**, *Let's go*.
-2. **Keyboard**, pick your layout. There's a field to try it out.
-3. **Network**, with a cable plugged in you're already online; otherwise
+1. **Welcome**: *Let's go*.
+2. **Keyboard**: pick your layout. There's a field to try it out.
+3. **Network**: with a cable plugged in you're already online; otherwise
    choose your Wi-Fi and type its password. CatosTV downloads its system
    during installation, so this step is required.
-4. **Disk**, choose where CatosTV goes. **The whole disk is erased.** The
+4. **Disk**: choose where CatosTV goes. **The whole disk is erased.** The
    installer refuses the USB stick it runs from and warns you about
    removable drives and disks that already have files on them.
 5. **Time zone.**
-6. **Ready to install?**, the disk, your choices and the graphics drivers
+6. **Ready to install?**: the disk, your choices and the graphics drivers
    it will set up. *Erase and install* starts; *Cancel* goes back.
-7. It works through about a dozen steps (10–30 minutes, mostly
+7. It works through about a dozen steps (10 to 30 minutes, mostly
    downloading). Keep the TV on and the stick in.
-8. **You're all set**, remove the stick and choose *Restart now*.
+8. **You're all set**: remove the stick and choose *Restart now*.
 
 The installed CatosTV starts straight into its home screen. There's no
 login and no account.
@@ -84,14 +84,14 @@ you forget.
 The bar at the top has **Home · Recents · Apps · Store · Search**. Press Up
 from the page to reach it; the tab you're on lights up.
 
-- **Home**, your apps in a row, and *Continue watching* from Catfyn.
-- **Recents**, the apps that are open, each with a picture of what it was
+- **Home**: your apps in a row, and *Continue watching* from Catfyn.
+- **Recents**: the apps that are open, each with a picture of what it was
   showing and how much CPU and memory it uses. OK goes back to it; Up
   reaches its **×** to close it; *Close all* is underneath. When nothing is
   open it says *No background apps*.
-- **Apps**, every app, in a grid.
-- **Store**, apps to install (see below).
-- **Search**, apps, settings and your Jellyfin library.
+- **Apps**: every app, in a grid.
+- **Store**: apps to install (see below).
+- **Search**: apps, settings and your Jellyfin library.
 
 ### App options
 
@@ -117,7 +117,7 @@ place, or *Uninstall* in the app's options.
 **Settings → Apps** lists everything installed (with a search field) and
 has *Update apps* to update them all.
 
-Steam has a tile on Home from the start, marked *Not installed*, install
+Steam has a tile on Home from the start, marked *Not installed*. Install
 it from the Store first, then it opens in its TV mode (Big Picture).
 
 ---
@@ -145,10 +145,10 @@ Then:
 
 **Catfyn's settings** are behind the account button at the top right (the
 one with your name and a gear): your accounts (switch, add, sign out, or
-*Incognito*, nothing you watch is marked as watched), whether the next
+*Incognito*: nothing you watch is marked as watched), whether the next
 episode plays automatically, and how long the countdown is.
 
-If loading fails (server off, network down), Catfyn says so, press OK to
+If loading fails (server off, network down), Catfyn says so. Press OK to
 try again.
 
 ---
@@ -156,8 +156,8 @@ try again.
 ## Android apps
 
 CatosTV can run Android TV apps natively, right next to everything else.
-Setting it up takes one trip to Settings. Everything about it, setup,
-Google Play or Aurora Store, installing apps, controllers, fixing problems,
+Setting it up takes one trip to Settings. Everything about it (setup,
+Google Play or Aurora Store, installing apps, controllers, fixing problems)
 is in **[ANDROID.md](ANDROID.md)**.
 
 ---
@@ -190,7 +190,7 @@ phone's notification, share links and files to the TV, and use the
 phone's clipboard. In **Settings → Cast & remote**, OK on your phone gives
 *Ring phone* (find it in the sofa) and *Unpair*.
 
-KDE Connect's own mouse/keyboard remote doesn't work on CatosTV, use the
+KDE Connect's own mouse/keyboard remote doesn't work on CatosTV. Use the
 phone remote above for that.
 
 ---
@@ -218,8 +218,8 @@ every other button goes to the app or game.
 - *Pair a controller or remote* (Bluetooth: put it in pairing mode first).
 - Each connected controller: switch to the **Nintendo layout** (A and B
   swapped).
-- *Use controllers in CatosTV*, turn off if you only want them in games.
-- *Controller: …*, choose a different button for OK, Back, Options, Home
+- *Use controllers in CatosTV*: turn off if you only want them in games.
+- *Controller: …*: choose a different button for OK, Back, Options, Home
   or Quick settings.
 
 ### Your TV's remote (HDMI-CEC)
@@ -240,41 +240,43 @@ Bluetooth**.
 ## Quick settings
 
 Press **F10** (keyboard), **X / Select** (controller) or the **Settings**
-key (TV remote). It works over apps too, then it also has *Back to app*,
+key (TV remote). It works over apps too, and then it also has *Back to app*,
 *Full screen* and *Close* for the app.
 
-- **Network**, shows *Ethernet* or your Wi-Fi network. OK opens it: Wi-Fi
+- **Network**: shows *Ethernet* or your Wi-Fi network. OK opens it: Wi-Fi
   on/off, nearby networks (OK to join), and **Ethernet** with its details
   and IP settings.
-- **Bluetooth**, shows the connected device. OK opens it: on/off, your
+- **Bluetooth**: shows the connected device. OK opens it: on/off, your
   paired devices (OK connects or disconnects) and *Pair a new device*.
-- **Mute**, **Settings**, **Sleep**, **Power**.
+- **Mute**, **Settings**, **Sleep**, **Power**. One press on the
+  keyboard, remote or controller wakes the TV from Sleep (with a USB-CEC
+  adapter, the TV's own remote too).
 - The volume bar underneath: Left/Right to change, OK to mute.
 
 ---
 
 ## Settings, page by page
 
-- **Network**, Wi-Fi on/off, the connection, *Choose a network*, and
-  **Ethernet**: status, gateway, DNS, MAC, and IP settings, *Automatic*
-  or *Manual* (address like `192.168.1.50/24`, gateway, DNS servers),
-  then *Save*. The TV reconnects with the new settings.
-- **Bluetooth**, on/off, paired devices, pair new ones.
-- **Display**, resolution (it asks whether to keep a new one and goes back
+- **Network**: Wi-Fi on/off, the connection, *Choose a network*, and
+  **Ethernet**: status, gateway, DNS, MAC, and IP settings, either
+  *Automatic* or *Manual* (address like `192.168.1.50/24`, gateway, DNS
+  servers), then *Save*. The TV reconnects with the new settings.
+- **Bluetooth**: on/off, paired devices, pair new ones.
+- **Display**: resolution (it asks whether to keep a new one and goes back
   by itself if you don't answer), *Interface size*, *Picture fit* (shrink
   the picture if the edges are cut off), adaptive sync, HDR.
-- **Sound**, volume, mute, output device, and *Use TV speakers (HDMI)*
+- **Sound**: volume, mute, output device, and *Use TV speakers (HDMI)*
   for when the TV stays silent.
-- **Customization**, accent colour, 12/24-hour clock, the glow behind the
+- **Customization**: accent colour, 12/24-hour clock, the glow behind the
   focused app on Home.
-- **Apps**, installed apps, search, *Update apps*.
-- **Android**, set up and manage Android ([ANDROID.md](ANDROID.md)).
-- **Cast & remote**, casting, phone remote, KDE Connect devices.
-- **Navigation & controllers**, pairing, controller layouts and buttons,
+- **Apps**: installed apps, search, *Update apps*.
+- **Android**: set up and manage Android ([ANDROID.md](ANDROID.md)).
+- **Cast & remote**: casting, phone remote, KDE Connect devices.
+- **Navigation & controllers**: pairing, controller layouts and buttons,
   the key guide.
-- **System**, version, IP address, storage, restart, power off.
-- **Updates**, see below.
-- **Debug**, for tinkerers, see below.
+- **System**: version, IP address, storage, restart, power off.
+- **Updates**: see below.
+- **Debug**: for tinkerers, see below.
 
 ---
 
@@ -283,12 +285,17 @@ key (TV remote). It works over apps too, then it also has *Back to app*,
 **Settings → Updates** checks for a new CatosTV version when you open it
 and shows what's new. *Install* downloads it, checks it was really made by
 CatosTV (it's signed), updates the system and CatosTV, and restarts the
-interface. It refuses while something is playing, close it first.
+interface. It refuses while something is playing, so close it first.
 
-If it says *Updates aren't set up yet*, this build has no update channel;
-install a newer ISO from the [Releases](../../releases) page instead
-(your apps and Android are on the disk that gets erased, so note what you
-had).
+CatosTV is a rolling release. Each update brings the Arch Linux packages
+it was tested with, so the system underneath only changes together with
+CatosTV, never on its own. You never need a new ISO either: the installer
+looks for updates before it starts and installs the newest version.
+
+If it says *Updates aren't set up yet*, the TV was installed from 1.0.0,
+which shipped without the update settings. Reinstalling from a newer
+ISO fixes that (your apps and Android are on the disk that gets erased, so
+note what you had).
 
 ---
 
@@ -302,7 +309,7 @@ ssh catostv@<the TV's IP address>      # Settings → System shows it
 ```
 
 The password is `catostv` until you change it with *Change password* on
-the same page, do that first; anyone on your network who knows the
+the same page. Do that first: anyone on your network who knows the
 default could otherwise log in and become administrator. `sudo` works with
 the same password while Debug SSH is on.
 
