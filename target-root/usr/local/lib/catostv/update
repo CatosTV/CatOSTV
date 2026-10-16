@@ -168,7 +168,9 @@ def main():
             shutil.chown(os.path.join(TV_HOME, rel), "catostv", "catostv")
     subprocess.run(["systemctl", "daemon-reload"])
     subprocess.run(["udevadm", "control", "--reload"])
-    subprocess.run(["systemctl", "enable", "catostv-android-watch.service", "catostv-debug-boot.service"])
+    # The version's own setup steps (shared with the installer).
+    if os.access("/usr/local/lib/catostv/post-install", os.X_OK):
+        run(["/usr/local/lib/catostv/post-install"], "Setting up the new version failed")
     if os.access("/usr/local/lib/catostv/boot-splash-setup", os.X_OK):
         subprocess.run(["/usr/local/lib/catostv/boot-splash-setup"])
     shutil.rmtree(WORK, ignore_errors=True)
