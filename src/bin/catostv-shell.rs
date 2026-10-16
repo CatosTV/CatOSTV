@@ -2676,6 +2676,27 @@ impl ShellApp {
         }
     }
 
+    /// A new install state, from the progress poll or a refresh. When an
+    /// update has just finished, the new interface takes over. Both paths
+    /// come here: the poll often sees "done" first, and the refresh after
+    /// it would then find nothing new and never restart.
+    fn follow_install(
+        &mut self,
+        ctx: &egui::Context,
+        st: Option<catostv_core::updates::InstallState>,
+    ) {
+        if let Some(catostv_core::updates::InstallState::Done(v)) = &st
+            && catostv_core::updates::newer(v, catostv_core::env::version())
+            // Once per update: a "done" left over from an earlier update
+            // (another version) must not stop this one.
+            && self.sys.updates.install != st
+            && self.restart_after_update.is_none()
+        {
+            self.show_toast(ctx, &format!("Updated to {v}. Restarting the interface"));
+            self.restart_after_update = Some(Instant::now());
+        }
+    }
+
     fn on_snapshot(
         &mut self,
         ctx: &egui::Context,
@@ -2694,17 +2715,7 @@ impl ShellApp {
         // The last update check lives here, not in the snapshot.
         s.updates.checking = self.sys.updates.checking;
         s.updates.check = self.sys.updates.check.clone();
-        // An update was just installed: the new interface takes over.
-        if let Some(catostv_core::updates::InstallState::Done(v)) = &s.updates.install
-            && catostv_core::updates::newer(v, catostv_core::env::version())
-            // Once per update: a "done" left over from an earlier update
-            // (another version) must not stop this one.
-            && self.sys.updates.install.as_ref()
-                != Some(&catostv_core::updates::InstallState::Done(v.clone()))
-        {
-            self.show_toast(ctx, &format!("Updated to {v}. Restarting the interface"));
-            self.restart_after_update = Some(Instant::now());
-        }
+        self.follow_install(ctx, s.updates.install.clone());
         let first = std::mem::take(&mut self.first_snapshot);
         if !first && self.appliance && self.pending_scale.is_none() {
             // A TV connected or switched to 4K later still gets its size.
@@ -3053,6 +3064,7 @@ impl eframe::App for ShellApp {
             Some(catostv_core::updates::InstallState::Running(_))
         ) {
             if let Some(st) = catostv_core::updates::read_state() {
+                self.follow_install(&ctx, Some(st.clone()));
                 self.sys.updates.install = Some(st);
             }
             ctx.request_repaint_after(Duration::from_secs(2));
