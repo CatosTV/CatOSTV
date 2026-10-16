@@ -53,7 +53,12 @@ for dev in /dev/input/event*; do
   maj=$((16#$(stat -c %t "$dev")))
   min=$((16#$(stat -c %T "$dev")))
   # Android's input service runs as system with the input group (1004).
-  in_android "rm -f /dev/input/$name; mknod /dev/input/$name c $maj $min && chown 1000:1004 /dev/input/$name && chmod 0660 /dev/input/$name" \
+  # It opens a node the moment it appears and never retries, so the node
+  # must be openable from its first instant: made 0666, then given to
+  # system:input 0660. (Made root-only first, the open lost the race:
+  # "EventHub: could not open /dev/input/event22, Permission denied", and
+  # the controller did nothing in Android apps.)
+  in_android "rm -f /dev/input/$name; mknod -m 0666 /dev/input/$name c $maj $min && chown 1000:1004 /dev/input/$name && chmod 0660 /dev/input/$name" \
     && echo "controller $name ($(udevadm info -q property "$dev" | sed -n 's/^NAME=//p' | tr -d '"')) available to Android"
   keep+="$name "
 done

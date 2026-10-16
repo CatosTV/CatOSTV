@@ -2634,8 +2634,9 @@ NAME="sr0" KNAME="sr0" PATH="/dev/sr0" PKNAME="" TYPE="rom" SIZE="1073741312" RO
     #[test]
     fn controllers_only_go_to_android() {
         let pads = include_str!("../../../target-root/usr/local/lib/catostv/android-pads");
-        // Re-made on every plug-in so Android sees a new node.
-        assert!(pads.contains("rm -f /dev/input/$name; mknod /dev/input/$name"));
+        // Re-made on every plug-in so Android sees a new node, and
+        // openable from its first instant (Android opens it at once).
+        assert!(pads.contains("rm -f /dev/input/$name; mknod -m 0666 /dev/input/$name"));
         // Joysticks only, never virtual devices or CatosTV's own keyboards.
         assert!(pads.contains("^ID_INPUT_JOYSTICK=1"));
         assert!(pads.contains("^DEVPATH=/devices/virtual/"));
