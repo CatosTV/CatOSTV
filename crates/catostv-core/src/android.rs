@@ -958,6 +958,20 @@ pub fn parse_hung(s: &str) -> Option<(u32, String)> {
         .then(|| (count, pkg.to_string()))
 }
 
+/// Published by `android-watch`: "<count>", how often Android stopped
+/// being able to start apps (new app processes never attach). The shell
+/// watches the count and restarts Android.
+pub const STUCK_PATH: &str = "/run/catostv/android-stuck";
+
+/// The count from [`STUCK_PATH`], if published.
+pub fn read_stuck() -> Option<u32> {
+    std::fs::read_to_string(STUCK_PATH)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Root-only diagnostics script (`sudo catostv-diag android` runs it).
 pub const DIAG_SCRIPT: &str = "/usr/local/lib/catostv/android-diag";
 

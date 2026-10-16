@@ -159,7 +159,32 @@ publish_gsf() {
 # (/run/catostv/android-hung: "<count> <pkg>") so it can say so; the next
 # open starts the app fresh. Android itself and launchers are never closed.
 HUNG=/run/catostv/android-hung
-HUNG_LOOP='logcat -b system -T "$(date +%m-%d\ %H:%M:%S).000" -v brief ActivityTaskManager:W ActivityManager:E "*:S" 2>/dev/null'
+HUNG_LOOP='logcat -b system -T "$(date +%m-%d\ %H:%M:%S).000" -v brief ActivityTaskManager:W ActivityManager:W "*:S" 2>/dev/null'
+# Android can't start apps any more: every new app process hangs before it
+# reaches Android ("Process … failed to attach", then "start timeout"),
+# seen when the 32-bit zygote kept its library loader's lock locked, so
+# all its children were born deadlocked (SmartTube, Play services) while
+# running 64-bit apps carried on. Restarting the zygote alone left Android
+# half up; a fresh Android session fixes it. Three such starts within 90 s
+# publish /run/catostv/android-stuck ("<count>") and the shell restarts
+# Android; then 5 minutes' rest, so a broken app can't loop it.
+STUCK=/run/catostv/android-stuck
+stuck_count=0
+attach_fails=()
+stuck_quiet_until=0
+attach_failed() {
+  local now kept=() t
+  now=$(date +%s)
+  (( now < stuck_quiet_until )) && return 0
+  for t in "${attach_fails[@]}"; do (( now - t < 90 )) && kept+=("$t"); done
+  attach_fails=("${kept[@]}" "$now")
+  (( ${#attach_fails[@]} >= 3 )) || return 0
+  echo "Android can't start apps (${#attach_fails[@]} processes failed to attach): asking for a restart" >&2
+  attach_fails=()
+  stuck_quiet_until=$((now + 300))
+  stuck_count=$((stuck_count + 1))
+  printf '%s\n' "$stuck_count" >"$STUCK.tmp" && chmod 644 "$STUCK.tmp" && mv -f "$STUCK.tmp" "$STUCK"
+}
 hung_count=0
 close_hung() {
   local pkg=$1
@@ -176,6 +201,7 @@ hung_watch() {
     | while IFS= read -r line; do
         case "$line" in
           *"ANR in "*) close_hung "$(sed -n 's/.*ANR in \([A-Za-z0-9_.]*\).*/\1/p' <<<"$line")" ;;
+          *"} failed to attach"*) attach_failed ;;
           *"Activity stop timeout for ActivityRecord{"*)
             close_hung "$(sed -n 's/.*ActivityRecord{[^ ]* u[0-9]* \([A-Za-z0-9_.]*\)\/.*/\1/p' <<<"$line")" ;;
         esac
@@ -188,7 +214,7 @@ stop_hung_watch() {
   kill "$HW" 2>/dev/null || true
   HW=""
 }
-trap 'stop_watchdog; stop_hung_watch; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp"; exit' EXIT TERM INT
+trap 'stop_watchdog; stop_hung_watch; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp"; exit' EXIT TERM INT
 while true; do
   if [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" != RUNNING ]]; then
     publish ""
