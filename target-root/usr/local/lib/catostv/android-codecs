@@ -3,8 +3,11 @@
 # decodes. The image's decoders (c2.ffmpeg) decode on the GPU through
 # VA-API and fall back to the CPU when it can't, but the fallback frames
 # still go out as GPU buffers and show green. So, from `vainfo`:
-#  * VP9 in hardware: the decoder says 4K at 60 fps (the image says 30,
-#    so YouTube stopped at 1440p60 for 60 fps videos);
+#  * VP9 in hardware: the decoder says 4K at 60 fps. The image says 4K at
+#    30 fps and VP9 level 5 at most (level 5 is 4K30), so YouTube asked
+#    "VP9 level 5.1, 3840x2160 at 60?", got no and stopped at 1440p60.
+#    The fps figure is in the codec list; the level is built into the
+#    codec service, where one byte raises the top level to 5.1;
 #  * no AV1 in hardware (Intel before Tiger Lake, older AMD): the c2.ffmpeg
 #    AV1 decoder goes, so apps pick VP9 or Android's own AV1 decoder
 #    (YouTube's ads were AV1 and showed green).
@@ -13,6 +16,8 @@
 set -euo pipefail
 FILE=etc/media_codecs_ffmpeg_c2.xml
 OVERLAY=/var/lib/waydroid/overlay/vendor/$FILE
+SERVICE=bin/hw/android.hardware.media.c2-ffmpeg-service
+SERVICE_OVERLAY=/var/lib/waydroid/overlay/vendor/$SERVICE
 
 # VA-API decode profiles, from the TV's vainfo or else Android's.
 caps() {
@@ -23,8 +28,8 @@ caps() {
 }
 
 if [[ -e /etc/catostv/android-software-rendering ]] || ! CAPS=$(caps) || [[ -z $CAPS ]]; then
-  if [[ -e $OVERLAY ]]; then
-    rm -f "$OVERLAY"
+  if [[ -e $OVERLAY || -e $SERVICE_OVERLAY ]]; then
+    rm -f "$OVERLAY" "$SERVICE_OVERLAY"
     echo "Android video decoders: stock list (takes effect when Android restarts)"
   fi
   exit 0
@@ -41,14 +46,44 @@ img=/var/lib/waydroid/images/vendor.img
 mnt=$(mktemp -d /run/catostv-vendor.XXXXXX)
 mount -o loop,ro "$img" "$mnt"
 tmp=$(mktemp /run/catostv-codecs.XXXXXX)
-for src in "$mnt/$FILE" "$mnt/vendor/$FILE"; do
-  [[ -r $src ]] && cp "$src" "$tmp" && break
+svc=$(mktemp /run/catostv-codecs.XXXXXX)
+for root in "$mnt" "$mnt/vendor"; do
+  [[ -r $root/$FILE ]] && cp "$root/$FILE" "$tmp" && cp "$root/$SERVICE" "$svc" 2>/dev/null
+  [[ -s $tmp ]] && break
 done
 umount "$mnt"
 rmdir "$mnt"
-[[ -s $tmp ]] || { rm -f "$tmp"; echo "no $FILE in the vendor image" >&2; exit 1; }
+[[ -s $tmp ]] || { rm -f "$tmp" "$svc"; echo "no $FILE in the vendor image" >&2; exit 1; }
 stock=$tmp
-trap 'rm -f "$tmp"' EXIT
+trap 'rm -f "$tmp" "$svc"' EXIT
+
+# VP9 level 5.1 in the codec service: it lists levels 1 to 4.1 from a table
+# and adds level 5 (C2 0x7008) with one `movl $0x7008, -0x50(%rbp)`; 0x7009
+# is level 5.1. Only a service with that instruction exactly once is
+# patched; another build keeps level 5 and is reported.
+if ((vp9)) && [[ -s $svc ]]; then
+  python3 -I - "$svc" "$SERVICE_OVERLAY" <<'PY' || true
+import hashlib, pathlib, re, sys
+stock, overlay = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+data = bytearray(stock.read_bytes())
+hits = list(re.finditer(rb"\xc7\x45.\x08\x70\x00\x00", bytes(data), re.S))
+if len(hits) != 1:
+    print(f"VP9 level not raised: expected one level-5 entry, found {len(hits)} "
+          f"(build {hashlib.sha256(bytes(data)).hexdigest()[:16]})")
+    sys.exit(2)
+data[hits[0].start() + 3] = 0x09
+if overlay.exists() and overlay.read_bytes() == bytes(data):
+    sys.exit(0)
+overlay.parent.mkdir(parents=True, exist_ok=True)
+tmp = overlay.with_suffix(".tmp")
+tmp.write_bytes(bytes(data))
+tmp.chmod(0o755)
+tmp.replace(overlay)
+print("VP9 level 5.1 in Android's codec service (takes effect when Android restarts)")
+PY
+else
+  rm -f "$SERVICE_OVERLAY"
+fi
 
 mkdir -p "$(dirname "$OVERLAY")"
 script=()
