@@ -51,7 +51,9 @@ git ls-files -z target-root | while IFS= read -r -d '' f; do
 done
 # What this version needs installed (updater and installer add what's missing).
 target/release/catostv-diag packages > "$STAGE/root/usr/share/catostv/packages.txt"
-PKG="catostv-$VERSION.tar.zst"
+# The commit in the name: CDNs cache packages forever (publish-update.sh),
+# so a rebuilt package must never reuse an earlier name.
+PKG="catostv-$VERSION-$(git rev-parse --short=8 HEAD).tar.zst"
 tar --zstd -cf "$OUT/$PKG" -C "$STAGE" --owner=0 --group=0 bin root
 SHA="$(sha256sum "$OUT/$PKG" | cut -d' ' -f1)"
 
