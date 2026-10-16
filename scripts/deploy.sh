@@ -236,13 +236,13 @@ PY
     sudo install -D -m 644 /usr/share/catostv/android-display.prop "$PROP"
     RESTART_ANDROID=1
   fi
-  # Display-HAL hotplug patch and Escape → Back: read from
+  # Display-HAL hotplug patch, Escape → Back and 4K60 decoding: read from
   # the running container or the downloaded image; a restart applies them.
   if [ -e /var/lib/waydroid/images/system.img ]; then
     # The HAL byte patch is for the stock image's build only; the TV
     # image's HAL differs and is left alone.
-    FIXES="android-keymap"
-    sudo grep -qs '^atv' /var/lib/catostv/android/image || FIXES="android-hwc-patch android-keymap"
+    FIXES="android-keymap android-codecs"
+    sudo grep -qs '^atv' /var/lib/catostv/android/image || FIXES="android-hwc-patch $FIXES"
     for fix in $FIXES; do
       out=$(sudo /usr/local/lib/catostv/$fix 2>&1) || true
       echo "$out"

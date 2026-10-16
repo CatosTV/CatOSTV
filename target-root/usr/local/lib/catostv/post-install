@@ -2,7 +2,7 @@
 # CatosTV: what this version needs set up on a system once its files are in
 # place. Run as root by the installer (inside the new system) and by the
 # updater (on the TV), so whatever a release adds reaches new installs from
-# an older ISO and existing TVs alike, CatosTV ships rolling, the ISO is
+# an older ISO and existing TVs alike. CatosTV ships rolling; the ISO is
 # only a starting point. Must be safe to run any number of times.
 #
 # Add each release's new setup steps here, never only to the installer.
@@ -19,5 +19,10 @@ if ! systemd-detect-virt --chroot >/dev/null 2>&1; then
   # The name Bluetooth devices see. BlueZ keeps the name from the first
   # start, so TVs set up before the rename kept their old name.
   timeout 5 bluetoothctl system-alias CatosTV >/dev/null 2>&1 || true
+  # 4K60 in Android apps on Intel and AMD graphics (android-codecs). New
+  # setups get it from android-setup; the next Android start applies it.
+  if [[ -e /var/lib/waydroid/images/vendor.img ]]; then
+    /usr/local/lib/catostv/android-codecs >/dev/null 2>&1 || true
+  fi
 fi
 exit 0

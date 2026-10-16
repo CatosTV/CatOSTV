@@ -403,12 +403,13 @@ case $ANDROID_VERSION in
     ;;
 *) fail "Unsupported Android version '${ANDROID_VERSION:-unknown}'" ;;
 esac
-# Two fixes read from the downloaded image and applied through Waydroid's
-# overlay before Android's first start: the display-HAL hotplug patch
-# and Escape → Back in Android's key layout.
+# Fixes read from the downloaded image and applied through Waydroid's
+# overlay before Android's first start: the display-HAL hotplug patch,
+# Escape → Back in Android's key layout and 4K60 video decoding.
 # (The display-HAL byte patch, is for the stock image's build; the
 # TV image's HAL is a different build and is left as shipped.)
 /usr/local/lib/catostv/android-keymap || echo "key layout skipped" >&2
+/usr/local/lib/catostv/android-codecs || echo "video decoder limits skipped" >&2
 
 # ---------------------------------------------------------------------------
 step 4 "Waiting for Android TV to start"
