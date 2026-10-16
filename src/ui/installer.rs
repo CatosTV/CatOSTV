@@ -188,7 +188,7 @@ fn draw_welcome(c: &C, f: &Installer, now: f64) {
         X0 + 2.0,
         282.0,
         Align2::LEFT_TOP,
-        "Welcome to the libre TV experience. Open, private and distraction-free.",
+        "Welcome to the libre TV experience. Open, private and free of distractions.",
         19.0,
         theme::text2(),
         Weight::Regular,
