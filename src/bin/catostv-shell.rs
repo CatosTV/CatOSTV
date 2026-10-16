@@ -975,6 +975,25 @@ impl ShellApp {
         self.last_refresh = None;
     }
 
+    /// You left Catfyn's player for Home: pause it (it keeps running in the
+    /// background, and its tile resumes it). Nothing when no film plays.
+    fn pause_catfyn_player(&self) {
+        if !self.mgr().is_running(catfyn::PLAYER_ID) {
+            return;
+        }
+        self.jobs.spawn(|| {
+            let _ = catostv_core::mpv::ipc_request(
+                &catostv_core::jellyfin::player_socket(),
+                &[
+                    catostv_core::mpv::Arg::Str("set_property"),
+                    catostv_core::mpv::Arg::Str("pause"),
+                    catostv_core::mpv::Arg::Bool(true),
+                ],
+            );
+            Msg::Nothing
+        });
+    }
+
     /// You left an Android app for CatosTV: Android goes to its own home
     /// screen, so the app pauses (see android-home).
     fn send_android_home(&self) {
@@ -1528,6 +1547,7 @@ impl ShellApp {
                     if self.foreground_android().is_some() {
                         self.send_android_home();
                     }
+                    self.pause_catfyn_player();
                     self.shell.go_home();
                     self.return_to_shell();
                 }
@@ -2301,6 +2321,10 @@ impl ShellApp {
                 // tell Android too, or the app keeps playing unseen.
                 if cmd == ShellCommand::Home && self.foreground_android().is_some() {
                     self.send_android_home();
+                }
+                // …and Catfyn's player pauses, so the film waits for you.
+                if cmd == ShellCommand::Home {
+                    self.pause_catfyn_player();
                 }
                 for e in self.shell.handle_ipc(cmd) {
                     self.apply(ctx, e);
