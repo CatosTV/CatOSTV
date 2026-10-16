@@ -1416,9 +1416,14 @@ impl ShellApp {
                 }
             }
             Effect::InstallUpdate => {
-                // Never during playback: anything running counts (an app,
-                // Catfyn's player, an Android app).
-                let busy = !self.mgr().running_ids().is_empty();
+                // Never during playback: any app counts (Catfyn's player
+                // included), but not Android's background session, which
+                // runs whenever Android is set up.
+                let busy = self
+                    .mgr()
+                    .running_ids()
+                    .iter()
+                    .any(|id| id != android::SESSION_APP_ID);
                 if busy {
                     self.show_toast(ctx, "Close what's playing first, then install the update");
                 } else {
