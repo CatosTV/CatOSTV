@@ -85,6 +85,10 @@ enum Msg {
     AndroidScreenRestart,
     /// android-watch closed an Android app that hung.
     AndroidHung(String),
+    /// Android can't start apps any more (android-watch): restart it.
+    AndroidStuck,
+    /// The stuck Android session has stopped: start a fresh one.
+    AndroidRestarted,
     /// Quick settings key while an app was in front.
     QuickOverApp,
     /// Catfyn results.
@@ -211,6 +215,7 @@ fn spawn_app_watcher(
         let mut opened_seen = false;
         let mut sf_restarts: Option<u32> = None;
         let mut hung_count: Option<u32> = None;
+        let mut stuck_count: Option<u32> = None;
         let mut was_hidden = false;
         let mut tidy_tick = 0u8;
         let mut apps_stamp: Option<String> = None;
@@ -287,6 +292,16 @@ fn spawn_app_watcher(
                     ctx.request_repaint();
                 }
                 sf_restarts = Some(restarts);
+            }
+            // Android stopped being able to start apps (android-watch).
+            if let Some(count) = android::read_stuck() {
+                if stuck_count.is_some_and(|c| count > c) && appliance {
+                    let _ = tx.send(Msg::AndroidStuck);
+                    ctx.request_repaint();
+                }
+                stuck_count = Some(count);
+            } else {
+                stuck_count = Some(0);
             }
             // An Android app hung and android-watch closed it.
             if let Some((count, pkg)) = android::read_hung() {
@@ -2483,6 +2498,33 @@ impl ShellApp {
                     ctx,
                     &format!("{name} stopped responding and was closed. Open it again"),
                 );
+            }
+            Msg::AndroidStuck => {
+                if self.foreground.as_deref().is_some_and(|f| {
+                    f == android::SESSION_APP_ID
+                        || self
+                            .apps
+                            .iter()
+                            .any(|a| a.id == f && matches!(a.source, AppSource::Android { .. }))
+                }) {
+                    let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
+                    hide_android_window();
+                    self.foreground = None;
+                    self.shell.go_home();
+                }
+                self.show_toast(ctx, "Android stopped opening apps. Restarting it");
+                self.jobs.spawn(|| {
+                    let mut sleep = |d: Duration| std::thread::sleep(d);
+                    match android::stop_stale_session(&mut SystemRunner, &mut sleep) {
+                        Ok(()) => Msg::AndroidRestarted,
+                        Err(e) => Msg::Toast(e.to_string()),
+                    }
+                });
+            }
+            Msg::AndroidRestarted => {
+                self.sys.android.session = false;
+                self.android_started = false;
+                self.ensure_android_session(ctx, true);
             }
             Msg::AndroidRetry(task) => {
                 self.sys.android.session = false;
