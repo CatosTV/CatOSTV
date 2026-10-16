@@ -947,6 +947,9 @@ pub struct Shell {
     pub settings_cat: usize,
     pub settings_row: usize,
     pub settings_rows_focus: bool,
+    /// Settings → Customization: the swatch the selection ring is on, before
+    /// OK picks it (`None`: on the current colour).
+    pub accent_pick: Option<usize>,
     pub search_osk: Osk,
     pub search_focus: SearchFocus,
     pub search_index: usize,
@@ -1047,6 +1050,7 @@ impl Shell {
             settings_cat: 0,
             settings_row: 0,
             settings_rows_focus: false,
+            accent_pick: None,
             search_osk: Osk::new(false, "Search"),
             search_focus: SearchFocus::Keyboard,
             search_index: 0,
@@ -1162,7 +1166,12 @@ impl Shell {
         self.top_index = top_index_of(page);
         match page {
             Page::Search => self.search_focus = SearchFocus::Keyboard,
-            Page::Settings => self.settings_rows_focus = false,
+            // Settings opens on its category list, at the top.
+            Page::Settings => {
+                self.settings_rows_focus = false;
+                self.settings_cat = 0;
+                self.settings_row = 0;
+            }
             Page::Store => self.store_grid = false,
             Page::Recents => {
                 self.recents_index = 0;
@@ -2088,7 +2097,28 @@ impl Shell {
             return vec![];
         };
         let adjustable = matches!(row.kind, RowKind::Slider(_) | RowKind::Choice);
+        // Leaving the accent row (or the list) forgets an unchosen colour.
+        if row.id != RowId::Accent
+            || !matches!(
+                action,
+                Action::Left | Action::Right | Action::Ok | Action::OkLong
+            )
+        {
+            self.accent_pick = None;
+        }
         match action {
+            Action::Left | Action::Right if row.id == RowId::Accent => {
+                let n = prefs::ACCENTS.len();
+                let from = self
+                    .accent_pick
+                    .unwrap_or_else(|| prefs::accent_index(&ctx.prefs.accent));
+                self.accent_pick = Some(if action == Action::Left {
+                    (from + n - 1) % n
+                } else {
+                    (from + 1) % n
+                });
+                vec![]
+            }
             Action::Left | Action::Right if adjustable => {
                 let d = if action == Action::Left { -1 } else { 1 };
                 self.adjust_row(row.id, d, ctx).unwrap_or_default()
@@ -2104,6 +2134,14 @@ impl Shell {
             Action::Down => {
                 self.settings_row = step(self.settings_row, 1, rows.len());
                 vec![]
+            }
+            // The accent colour: Left/Right move a selection ring over the
+            // swatches (nothing changes yet), OK picks that colour.
+            Action::Ok | Action::OkLong if row.id == RowId::Accent => {
+                match self.accent_pick.take() {
+                    Some(i) => vec![Effect::SetAccent(prefs::ACCENTS[i].0.to_string())],
+                    None => vec![],
+                }
             }
             Action::Ok | Action::OkLong if row.kind == RowKind::Choice => {
                 self.adjust_row(row.id, 1, ctx).unwrap_or_default()

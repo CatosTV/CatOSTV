@@ -241,20 +241,15 @@ fn settings_sliders_choices_and_soon_rows() {
     press(&mut s, &f, &[Back]);
     assert_eq!(s.page, Page::Home);
 
-    // Accent: Left/Right and OK cycle; nothing else moves.
+    // Accent: Left/Right move the ring, OK picks; nothing else moves.
     open_settings(&mut s, &f, Category::Customization);
-    assert_eq!(
-        press(&mut s, &f, &[Right]),
-        vec![Effect::SetAccent("periwinkle".into())]
-    );
-    assert_eq!(
-        press(&mut s, &f, &[Left]),
-        vec![Effect::SetAccent("silver".into())]
-    );
+    assert_eq!(press(&mut s, &f, &[Right]), vec![]);
     assert_eq!(
         press(&mut s, &f, &[Ok]),
         vec![Effect::SetAccent("periwinkle".into())]
     );
+    // OK alone doesn't change the colour (see accent_colour_slides_then_ok_picks).
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![]);
     assert!(s.settings_rows_focus);
 
     // Updates: "Check for updates" asks for a check.
@@ -861,10 +856,8 @@ fn pointer_hover_focuses_and_click_activates() {
         &f.ctx(),
     );
     assert!(s.settings_rows_focus);
-    assert_eq!(
-        s.pointer(Target::SettingsRow(0), true, &f.ctx()),
-        vec![Effect::SetAccent("periwinkle".into())]
-    );
+    // A click on the accent row only focuses it (no colour jump).
+    assert_eq!(s.pointer(Target::SettingsRow(0), true, &f.ctx()), vec![]);
     // On-screen keyboard keys.
     s.handle_ipc(ShellCommand::Search);
     s.pointer(Target::SearchKey(1, 0), true, &f.ctx());
@@ -1287,8 +1280,34 @@ fn quick_settings_network_ethernet_and_bluetooth() {
 }
 
 #[test]
+fn accent_colour_slides_then_ok_picks() {
+    // On the accent row Left/Right move a ring over the swatches without
+    // changing anything; OK picks; moving off the row forgets the ring.
+    let f = Fixture::new();
+    let mut s = Shell::new();
+    open_settings(&mut s, &f, Category::Customization);
+    let at = crate::settings::rows(Category::Customization, &f.ctx())
+        .iter()
+        .position(|r| r.id == RowId::Accent)
+        .unwrap();
+    s.settings_row = at;
+    let original = f.ctx().prefs.accent.clone();
+    assert_eq!(press(&mut s, &f, &[Right, Right]), vec![]);
+    let two = crate::prefs::cycle_accent(&original, 2).to_string();
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::SetAccent(two)]);
+    assert!(s.overlay().is_none());
+    // OK with no ring moved does nothing (it used to jump a colour).
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![]);
+    press(&mut s, &f, &[Left]);
+    assert!(s.accent_pick.is_some());
+    press(&mut s, &f, &[Back]);
+    assert!(s.accent_pick.is_none());
+}
+
+#[test]
 fn updates_page_offers_the_found_version() {
-    // Plan C: a check that found a version shows Install and its notes.
+    // Plan C: a check that found a version shows Install (its notes are
+    // drawn as one box under the rows, not as rows).
     let mut f = Fixture::new();
     f.sys.updates.check = Some(Result::Ok(crate::updates::Check::Available(
         crate::updates::Manifest {
@@ -1306,7 +1325,6 @@ fn updates_page_offers_the_found_version() {
         [
             RowId::UpdateStatus,
             RowId::UpdateInstall,
-            RowId::UpdateNote(0),
             RowId::UpdateCheck
         ]
     );

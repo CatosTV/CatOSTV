@@ -1101,7 +1101,6 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::Reboot => "refresh",
         R::PowerOff => "power",
         R::UpdateStatus | R::UpdateCheck | R::UpdateInstall => "download",
-        R::UpdateNote(_) => "spark",
         R::Storage => "disk",
         R::ClockFormat => "spark",
         R::Glow => "palette",
@@ -1137,13 +1136,18 @@ fn category_status(cat: Category, ctx: &ShellContext) -> Option<(String, Option<
     }
 }
 
+/// Settings' category list: row pitch and height (design units).
+const CAT_STEP: f32 = 49.0;
+const CAT_H: f32 = 43.0;
+
 fn draw_settings(c: &C, v: &ShellView) {
     let s = v.shell;
     let no_overlay = s.overlay().is_none();
     widgets::title(c, 64.0, 40.0, "Settings", 30.0);
     for (i, cat) in Category::ALL.iter().enumerate() {
-        // 11 categories (Catfyn) fit above the 720 edge.
-        let rect = c.r(52.0, 96.0 + i as f32 * 54.0, 268.0, 46.0);
+        // All 12 categories (Debug included) end at 678, inside the
+        // right panel's 688 edge: 49 px apart.
+        let rect = c.r(52.0, 96.0 + i as f32 * CAT_STEP, 268.0, CAT_H);
         let selected = s.settings_cat == i;
         let t = focus_t(
             c,
@@ -1153,11 +1157,11 @@ fn draw_settings(c: &C, v: &ShellView) {
         // The open category keeps a quiet pane; focus is glass, inside
         // the pill.
         if selected {
-            c.fill(rect, 23.0, theme::rgba(theme::WHITE, 18));
+            c.fill(rect, CAT_H / 2.0, theme::rgba(theme::WHITE, 18));
         }
-        widgets::focus_pill(c, rect, 23.0, t);
+        widgets::focus_pill(c, rect, CAT_H / 2.0, t);
         c.hit(rect, Target::SettingsCat(i));
-        let y = 119.0 + i as f32 * 54.0;
+        let y = 96.0 + CAT_H / 2.0 + i as f32 * CAT_STEP;
         icons::draw(
             c,
             cat.icon(),
@@ -1175,17 +1179,15 @@ fn draw_settings(c: &C, v: &ShellView) {
             y,
             Align2::LEFT_CENTER,
             cat.title(),
-            16.5,
+            16.0,
             if selected {
                 theme::text()
             } else {
                 theme::text2()
             },
-            if selected {
-                Weight::Semibold
-            } else {
-                Weight::Medium
-            },
+            // One weight for every entry: the pill and colour mark the
+            // selected one, so the list doesn't change size as you move.
+            Weight::Medium,
         );
     }
 
@@ -1278,15 +1280,61 @@ fn draw_settings(c: &C, v: &ShellView) {
             );
         }
         if accent_row {
-            draw_accent_swatches(&list, v, 1180.0, y + row_h / 2.0);
+            let pick = if s.settings_rows_focus && s.settings_row == k {
+                s.accent_pick
+            } else {
+                None
+            };
+            draw_accent_swatches(&list, v, 1180.0, y + row_h / 2.0, pick);
         }
         if y > top - row_h * 0.5 && y < top + visible as f32 * step - row_h * 0.5 {
             c.hit(rect, Target::SettingsRow(k));
         }
     }
+    // Updates: the release notes as one box under the buttons.
+    if cat == Category::Updates
+        && let Some(Ok(check)) = &v.ctx.sys.updates.check
+        && let Some((version, notes)) = catostv_core::updates::shown_notes(check)
+        && !notes.is_empty()
+    {
+        let y0 = top + rows.len() as f32 * step + 14.0;
+        let h = (58.0 + notes.len() as f32 * 34.0).min(668.0 - y0);
+        if h > 70.0 {
+            let rect = list.r(368.0, y0, 836.0, h);
+            list.fill(rect, widgets::ROW_RADIUS, theme::rgba(theme::WHITE, 10));
+            list.frost_edge(rect, widgets::ROW_RADIUS, 0.5);
+            list.text(
+                392.0,
+                y0 + 28.0,
+                Align2::LEFT_CENTER,
+                &format!("What's new in {version}"),
+                17.0,
+                theme::text(),
+                Weight::Semibold,
+            );
+            for (i, n) in notes.iter().enumerate() {
+                let ny = y0 + 62.0 + i as f32 * 34.0;
+                if ny > y0 + h - 12.0 {
+                    break;
+                }
+                list.circle(400.0, ny, 3.5, theme::accent());
+                list.text(
+                    416.0,
+                    ny,
+                    Align2::LEFT_CENTER,
+                    &list.fit(n, 770.0, 15.5, Weight::Regular),
+                    15.5,
+                    theme::text2(),
+                    Weight::Regular,
+                );
+            }
+        }
+    }
 }
 
-fn draw_accent_swatches(c: &C, v: &ShellView, right: f32, cy: f32) {
+/// The accent swatches: the current colour has a check; `pick` (Left/Right
+/// on the row, before OK) a ring.
+fn draw_accent_swatches(c: &C, v: &ShellView, right: f32, cy: f32, pick: Option<usize>) {
     let current = &v.ctx.prefs.accent;
     let n = prefs::ACCENTS.len() as f32;
     let step = 34.0;
@@ -1305,6 +1353,9 @@ fn draw_accent_swatches(c: &C, v: &ShellView, right: f32, cy: f32) {
             c.circle(x, cy, 12.0, theme::rgb(col));
             c.ring(x, cy, 16.0, 2.0, theme::text());
             icons::draw(c, "check", x, cy, 12.0, theme::rgb((12, 14, 22)));
+        } else if pick == Some(i) {
+            c.circle(x, cy, 12.0, theme::rgb(col));
+            c.ring(x, cy, 16.0, 2.0, theme::text());
         } else {
             c.circle(x, cy, 10.0, theme::rgb(col));
         }
