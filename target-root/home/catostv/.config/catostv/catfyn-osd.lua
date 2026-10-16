@@ -463,6 +463,24 @@ mp.register_script_message("catfyn-card", function(cmd, a1, a2, a3, a4, a5)
     render()
 end)
 
+-- "Previous episode" (series only): the player loop says whether there is
+-- one for what's playing (`catfyn-episodes yes|no`); the button sits after
+-- "+10 s" and asks the loop for it (`script-message catfyn-episode prev`).
+local prev_button = {
+    label = "Previous episode",
+    act = function() mp.commandv("script-message", "catfyn-episode", "prev") end,
+}
+mp.register_script_message("catfyn-episodes", function(has_prev)
+    local present = buttons[4] == prev_button
+    if has_prev == "yes" and not present then
+        table.insert(buttons, 4, prev_button)
+    elseif has_prev ~= "yes" and present then
+        table.remove(buttons, 4)
+    end
+    if focus > #buttons then focus = #buttons end
+    if shown then render() end
+end)
+
 -- Subtitle names of the next episode's external tracks (same player).
 mp.register_script_message("catfyn-subs", function(names)
     sub_names = {}

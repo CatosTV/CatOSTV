@@ -46,6 +46,23 @@ pub fn next_in_order(episodes: &[Item], current_id: &str) -> Option<Item> {
         .cloned()
 }
 
+/// The episode before `current_id` in series order (the player's
+/// "Previous episode" button): like [`next_in_order`], backwards. Specials
+/// (season 0) are skipped unless the current one is a special too.
+pub fn prev_in_order(episodes: &[Item], current_id: &str) -> Option<Item> {
+    let at = episodes.iter().position(|e| e.id == current_id)?;
+    let current = &episodes[at];
+    if current.kind() != Kind::Episode {
+        return None;
+    }
+    let special = current.season == Some(0);
+    episodes[..at]
+        .iter()
+        .rev()
+        .find(|e| e.kind() == Kind::Episode && (special || e.season != Some(0)))
+        .cloned()
+}
+
 /// Seconds at which the end credits start: the first `Outro` segment of a
 /// `/MediaSegments` reply, else [`FALLBACK_SECS`] before `runtime`. `None`
 /// when neither is known (runtime unknown or too short to matter).
@@ -281,6 +298,24 @@ mod tests {
         movie.kind_raw = "Movie".into();
         assert_eq!(next_in_order(&[movie, ep("x", 1, 2)], "m"), None);
         assert_eq!(card_label(&list[3]), "S2 · E1 · Episode 1");
+    }
+
+    #[test]
+    fn previous_episode_in_series_order() {
+        let list = vec![
+            ep("s1e1", 1, 1),
+            ep("s1e2", 1, 2),
+            ep("sp1", 0, 1),
+            ep("s2e1", 2, 1),
+        ];
+        assert_eq!(prev_in_order(&list, "s1e2").unwrap().id, "s1e1");
+        // Back across seasons, past a special listed between.
+        assert_eq!(prev_in_order(&list, "s2e1").unwrap().id, "s1e2");
+        // The first episode has none; an unknown id has none.
+        assert_eq!(prev_in_order(&list, "s1e1"), None);
+        assert_eq!(prev_in_order(&list, "nope"), None);
+        // A special goes back in list order.
+        assert_eq!(prev_in_order(&list, "sp1").unwrap().id, "s1e2");
     }
 
     #[test]
