@@ -412,6 +412,22 @@ pub struct DeviceInfo {
     /// freedesktop icon name from the device class, e.g. `input-keyboard`,
     /// `input-gaming`, `audio-headset`, `audio-headphones`, `audio-card`.
     pub icon: Option<String>,
+    /// Battery level in percent, when the device reports it
+    /// ("Battery Percentage: 0x64 (100)").
+    pub battery: Option<u8>,
+}
+
+/// "Battery Percentage: 0x64 (100)" -> 100.
+fn parse_battery(v: &str) -> Option<u8> {
+    let n = match v.split_once('(') {
+        Some((_, rest)) => rest.trim_end_matches(')').trim(),
+        None => v.trim(),
+    };
+    let n = match n.strip_prefix("0x") {
+        Some(hex) => u8::from_str_radix(hex, 16).ok()?,
+        None => n.parse().ok()?,
+    };
+    (n <= 100).then_some(n)
 }
 
 /// Parse `bluetoothctl info MAC`:
@@ -452,6 +468,7 @@ pub fn parse_info(text: &str) -> Option<DeviceInfo> {
             "Paired" => i.paired = v == "yes",
             "Trusted" => i.trusted = v == "yes",
             "Connected" => i.connected = v == "yes",
+            "Battery Percentage" => i.battery = parse_battery(v),
             _ => {}
         }
     }
@@ -476,6 +493,19 @@ pub fn info(r: &mut dyn Runner, mac: &str) -> Result<DeviceInfo> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn battery_level() {
+        let text = "Device 2C:BE:EE:3A:D7:46 (public)\n\tName: CMF Buds 2a\n\tIcon: audio-headset\n\tPaired: yes\n\tConnected: yes\n\tBattery Percentage: 0x64 (100)\n";
+        let i = super::parse_info(text).unwrap();
+        assert!(i.connected);
+        assert_eq!(i.battery, Some(100));
+        assert_eq!(super::parse_battery("0x2a (42)"), Some(42));
+        assert_eq!(super::parse_battery("rubbish"), None);
+        let none =
+            super::parse_info("Device 2C:BE:EE:3A:D7:46 (public)\n\tConnected: yes\n").unwrap();
+        assert_eq!(none.battery, None);
+    }
+
     use super::*;
     use crate::process::{Output, fake::FakeRunner};
 
@@ -791,6 +821,7 @@ mod tests {
                 trusted: false,
                 connected: true,
                 icon: Some("input-gaming".into()),
+                battery: None,
             }
         );
         let no_alias = parse_info("Device 11:22:33:44:55:66\n\tPaired: no\n").unwrap();

@@ -258,6 +258,29 @@ pub fn preferred_tv_sink(sinks: &[Sink]) -> Option<u32> {
         .map(|s| s.id)
 }
 
+/// Where sound should go after the outputs changed from `before` to `now`:
+/// a Bluetooth output that just appeared (headphones, a speaker) takes the
+/// sound; when the Bluetooth output that had it goes away, sound goes back to
+/// the TV (HDMI). `None` when nothing needs to change.
+pub fn route_on_change(before: &[Sink], now: &[Sink]) -> Option<u32> {
+    let key = |s: &Sink| s.node_name.clone().unwrap_or_else(|| s.name.clone());
+    let was = |s: &Sink| before.iter().any(|b| key(b) == key(s));
+    if let Some(new) = now
+        .iter()
+        .find(|s| s.kind == SinkKind::Bluetooth && !was(s))
+    {
+        return (!new.is_default).then_some(new.id);
+    }
+    let lost_bt = before
+        .iter()
+        .any(|b| b.kind == SinkKind::Bluetooth && !now.iter().any(|s| key(s) == key(b)));
+    let default_kind = now.iter().find(|s| s.is_default).map(|s| s.kind);
+    if lost_bt && !matches!(default_kind, Some(SinkKind::Hdmi | SinkKind::Bluetooth)) {
+        return now.iter().find(|s| s.kind == SinkKind::Hdmi).map(|s| s.id);
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Card profiles (pactl, via pipewire-pulse)
 // ---------------------------------------------------------------------------
@@ -639,6 +662,39 @@ Audio
         assert_eq!(s[1].kind, SinkKind::Hdmi);
         // Default "Other" is not protected → suggest the HDMI sink.
         assert_eq!(preferred_tv_sink(&s), Some(62));
+    }
+
+    #[test]
+    fn bluetooth_takes_the_sound_and_gives_it_back() {
+        let sink = |id, kind, default| Sink {
+            id,
+            name: format!("sink {id}"),
+            node_name: Some(format!("node{id}")),
+            is_default: default,
+            kind,
+        };
+        let tv = vec![sink(53, SinkKind::Hdmi, true)];
+        let buds = vec![
+            sink(53, SinkKind::Hdmi, true),
+            sink(65, SinkKind::Bluetooth, false),
+        ];
+        assert_eq!(route_on_change(&tv, &buds), Some(65), "buds connect");
+        assert_eq!(route_on_change(&buds, &buds), None, "nothing changed");
+        // Disconnected: WirePlumber may fall back to another output.
+        let after = vec![
+            sink(53, SinkKind::Hdmi, false),
+            sink(54, SinkKind::Analog, true),
+        ];
+        let had = vec![
+            sink(53, SinkKind::Hdmi, false),
+            sink(54, SinkKind::Analog, false),
+            sink(65, SinkKind::Bluetooth, true),
+        ];
+        assert_eq!(route_on_change(&had, &after), Some(53), "back to the TV");
+        let hdmi_already = vec![sink(53, SinkKind::Hdmi, true)];
+        assert_eq!(route_on_change(&had, &hdmi_already), None);
+        // At start-up (nothing known yet) connected buds get the sound.
+        assert_eq!(route_on_change(&[], &buds), Some(65));
     }
 
     #[test]

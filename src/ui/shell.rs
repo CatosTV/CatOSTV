@@ -1397,12 +1397,7 @@ fn quick_tile(item: QuickItem, ctx: &ShellContext) -> (&'static str, &'static st
             )
         }
         QuickItem::Bluetooth => {
-            let connected: Vec<&str> = sys
-                .bt_details
-                .iter()
-                .filter(|d| d.connected)
-                .map(|d| d.name.as_str())
-                .collect();
+            let connected: Vec<_> = sys.bt_details.iter().filter(|d| d.connected).collect();
             (
                 "bluetooth",
                 "Bluetooth",
@@ -1413,7 +1408,10 @@ fn quick_tile(item: QuickItem, ctx: &ShellContext) -> (&'static str, &'static st
                 } else {
                     match connected.as_slice() {
                         [] => "On".into(),
-                        [one] => one.to_string(),
+                        [one] => match one.battery {
+                            Some(b) => format!("{} · {b}%", one.name),
+                            None => one.name.clone(),
+                        },
                         many => format!("{} devices", many.len()),
                     }
                 },
@@ -1873,6 +1871,19 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
             let sys = ctx.sys;
             let rows_ids = shell::quick_bt_rows(ctx);
             let names: Vec<String> = sys.bt_devices.iter().map(|d| d.name.clone()).collect();
+            let states: Vec<String> = sys
+                .bt_devices
+                .iter()
+                .map(|d| {
+                    if s.bt_busy.as_deref() == Some(d.address.as_str()) {
+                        "…".into()
+                    } else if shell::bt_connected(sys, &d.address) {
+                        shell::bt_connected_label(sys, &d.address)
+                    } else {
+                        "Not connected".into()
+                    }
+                })
+                .collect();
             let rows: Vec<ListRow> = rows_ids
                 .iter()
                 .map(|r| match r {
@@ -1881,21 +1892,11 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                         kind: Some(RowKind::Toggle(Some(sys.bluetooth.powered))),
                         ..ListRow::simple("Bluetooth")
                     },
-                    shell::BtRow::Device(i) => {
-                        let d = &sys.bt_devices[*i];
-                        let busy = s.bt_busy.as_deref() == Some(d.address.as_str());
-                        ListRow {
-                            icon: Some("bluetooth"),
-                            subtitle: if busy {
-                                "…"
-                            } else if shell::bt_connected(sys, &d.address) {
-                                "Connected"
-                            } else {
-                                "Not connected"
-                            },
-                            ..ListRow::simple(&names[*i])
-                        }
-                    }
+                    shell::BtRow::Device(i) => ListRow {
+                        icon: Some("bluetooth"),
+                        subtitle: &states[*i],
+                        ..ListRow::simple(&names[*i])
+                    },
                     shell::BtRow::Pair => ListRow {
                         icon: Some("plus"),
                         kind: Some(RowKind::Action),
