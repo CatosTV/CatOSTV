@@ -3087,6 +3087,19 @@ impl eframe::App for ShellApp {
         {
             eprintln!("catostv: woke from sleep");
             self.mapper.reset();
+            // The TV's DP-to-HDMI chip can come back with a blue tint;
+            // a full mode set puts its colours right.
+            if self.appliance {
+                self.jobs.spawn(|| {
+                    if let Err(e) = catostv_core::display::reset_modes(
+                        &mut SystemRunner,
+                        Duration::from_secs(1),
+                    ) {
+                        eprintln!("catostv: could not reset the screen after waking: {e}");
+                    }
+                    Msg::Nothing
+                });
+            }
         }
         let quiet = self.wake.input_blocked(mono);
         let events = keys::collect(&ctx);
