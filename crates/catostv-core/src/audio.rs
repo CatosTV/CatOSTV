@@ -40,7 +40,7 @@ pub fn get(r: &mut dyn Runner) -> Result<VolumeState> {
 }
 
 /// Change volume by `delta` percentage points (clamped to 0–100) and return
-/// the new state as reported by PipeWire.
+/// the new state as reported by PipeWire. Turning it up also unmutes.
 pub fn step(r: &mut dyn Runner, delta: i8) -> Result<VolumeState> {
     let arg = if delta >= 0 {
         format!("{delta}%+")
@@ -48,6 +48,9 @@ pub fn step(r: &mut dyn Runner, delta: i8) -> Result<VolumeState> {
         format!("{}%-", -(delta as i16))
     };
     r.run_ok(&Cmd::new("wpctl").args(["set-volume", "-l", "1.0", SINK, &arg]))?;
+    if delta > 0 {
+        r.run_ok(&Cmd::new("wpctl").args(["set-mute", SINK, "0"]))?;
+    }
     get(r)
 }
 
@@ -529,8 +532,16 @@ mod tests {
             r.seen[0].args,
             vec!["set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", "5%-"]
         );
-        step(&mut r, 5).ok();
+        r.push(Output::ok(""));
+        r.push(Output::ok(""));
+        r.push(Output::ok("Volume: 0.55"));
+        assert_eq!(step(&mut r, 5).unwrap().percent, 55);
         assert_eq!(r.seen[2].args[4], "5%+");
+        // Up unmutes.
+        assert_eq!(
+            r.seen[3].args,
+            vec!["set-mute", "@DEFAULT_AUDIO_SINK@", "0"]
+        );
     }
 
     /// `wpctl status` as posted on bbs.archlinux.org topic 305641
