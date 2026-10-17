@@ -55,8 +55,8 @@ impl Pictures {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Cats => "Cats",
-            Self::Photos => "Photos",
+            Self::Cats => "GOOOD CATS!",
+            Self::Photos => "Random photos",
         }
     }
 
@@ -265,6 +265,6 @@ mod tests {
         assert_eq!(cycle_minutes(7, 1), 5);
         assert_eq!(Pictures::from_key("photos"), Pictures::Photos);
         assert_eq!(Pictures::from_key("junk"), Pictures::Cats);
-        assert_eq!(Pictures::Cats.other().label(), "Photos");
+        assert_eq!(Pictures::Cats.other().label(), "Random photos");
     }
 }

@@ -2163,7 +2163,16 @@ impl Shell {
             self.settings_rows_focus = false;
             return vec![];
         };
-        let adjustable = matches!(row.kind, RowKind::Slider(_) | RowKind::Choice);
+        // A greyed-out row can be passed over, nothing more.
+        if row.disabled
+            && !matches!(
+                action,
+                Action::Up | Action::Down | Action::Left | Action::Back
+            )
+        {
+            return vec![];
+        }
+        let adjustable = !row.disabled && matches!(row.kind, RowKind::Slider(_) | RowKind::Choice);
         // Leaving the accent row (or the list) forgets an unchosen colour.
         if row.id != RowId::Accent
             || !matches!(

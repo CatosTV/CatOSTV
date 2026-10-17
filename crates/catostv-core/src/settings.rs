@@ -301,6 +301,8 @@ pub struct Row {
     pub subtitle: String,
     pub value: String,
     pub kind: RowKind,
+    /// Greyed out: it only matters while another setting is on.
+    pub disabled: bool,
 }
 
 fn row(id: RowId, title: &str, subtitle: &str, value: impl Into<String>, kind: RowKind) -> Row {
@@ -310,6 +312,14 @@ fn row(id: RowId, title: &str, subtitle: &str, value: impl Into<String>, kind: R
         subtitle: subtitle.into(),
         value: value.into(),
         kind,
+        disabled: false,
+    }
+}
+
+impl Row {
+    fn disabled_if(mut self, off: bool) -> Self {
+        self.disabled = off;
+        self
     }
 }
 
@@ -524,18 +534,20 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
             ),
             row(
                 RowId::SaverPictures,
-                "Pictures",
+                "Screensaver image type",
                 "",
                 crate::screensaver::Pictures::from_key(&ctx.prefs.saver_pictures).label(),
                 RowKind::Choice,
-            ),
+            )
+            .disabled_if(!ctx.prefs.screensaver),
             row(
                 RowId::SaverMinutes,
                 "Start after",
                 "",
                 format!("{} min", ctx.prefs.saver_minutes),
                 RowKind::Choice,
-            ),
+            )
+            .disabled_if(!ctx.prefs.screensaver),
         ],
         Category::Apps => {
             let needle = apps_filter.trim().to_lowercase();

@@ -1427,3 +1427,21 @@ fn volume_panel_takes_the_keys() {
     s.handle(Action::Home, &f.ctx());
     assert!(s.volume.is_none());
 }
+
+#[test]
+fn screensaver_options_grey_out_while_it_is_off() {
+    let mut f = Fixture::new();
+    let mut s = Shell::new();
+    open_settings(&mut s, &f, Category::Customization);
+    press(&mut s, &f, &[Down, Down, Down, Down]);
+    assert_eq!(
+        press(&mut s, &f, &[Right]),
+        vec![Effect::SetSaverPictures("photos".into())]
+    );
+    f.prefs.screensaver = false;
+    assert!(press(&mut s, &f, &[Right]).is_empty());
+    assert!(press(&mut s, &f, &[Ok]).is_empty());
+    // Still passed over to the next row.
+    press(&mut s, &f, &[Down]);
+    assert_eq!(s.settings_row, 5);
+}
