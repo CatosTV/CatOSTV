@@ -527,6 +527,8 @@ struct ShellApp {
     launch_cold: bool,
     /// The splash of a launch that just ended, fading out.
     launch_end: Option<(String, Instant)>,
+    /// Android was last started again after its session ended.
+    android_kept_at: Option<Instant>,
     /// When the shell started (start-up animation).
     started: Instant,
     /// Notices waking from Sleep (keys right after are ignored).
@@ -819,6 +821,7 @@ impl ShellApp {
             launching: None,
             launch_cold: false,
             launch_end: None,
+            android_kept_at: None,
             started: Instant::now(),
             wake: power::WakeGuard::default(),
             media: fin::Media {
@@ -1336,14 +1339,31 @@ impl ShellApp {
     /// background so Android apps open instantly, and make sure Aurora
     /// Store is installed (it then appears on Home).
     fn autostart_android(&mut self, ctx: &egui::Context) {
-        if self.android_started
-            || !self.sys.android.initialized
+        if !self.sys.android.initialized
             || self.sys.android_setup.as_ref().is_some_and(|s| s.running())
+            || self.sys.android_repairing
         {
             return;
         }
-        self.android(ctx, AndroidTask::InstallAurora);
-        self.android_started = true;
+        if !self.android_started {
+            self.android(ctx, AndroidTask::InstallAurora);
+            self.android_started = true;
+            self.android_kept_at = Some(Instant::now());
+            return;
+        }
+        // Keep it running: when the session ended (stopped by hand, or it
+        // fell over), start it again quietly, at most every 30 s.
+        let up =
+            self.sys.android.session || self.mgr().is_running(&android::session_app_entry().id);
+        if !up
+            && self.appliance
+            && self
+                .android_kept_at
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(30))
+        {
+            self.android_kept_at = Some(Instant::now());
+            self.ensure_android_session(ctx, true);
+        }
     }
 
     fn save_prefs(&mut self, ctx: &egui::Context) {
