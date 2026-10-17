@@ -280,8 +280,9 @@ screensaver comes on: a slideshow with the time, the date and the
 weather. Any button takes you back to Home. It never starts over an app
 or a film.
 
-In **Settings → Customization** you can turn it off, pick **Cats** or
-**Photos**, and change when it starts. Cat pictures come from TheCatAPI,
+In **Settings → Customization** you can turn it off, set the
+**Screensaver image type** to **GOOOD CATS!** or **Random photos**, and
+change when it starts. Cat pictures come from TheCatAPI,
 photos from Lorem Picsum and the weather from wttr.in, which works out
 roughly where you are from your internet address. Pictures are kept on
 the TV, so the slideshow still runs when the internet is down.

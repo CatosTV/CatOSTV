@@ -1521,7 +1521,7 @@ fn draw_settings(c: &C, v: &ShellView) {
                 } else {
                     row_icon(row.id)
                 },
-                disabled: row.kind == RowKind::Soon,
+                disabled: row.kind == RowKind::Soon || row.disabled,
             },
             t,
         );
