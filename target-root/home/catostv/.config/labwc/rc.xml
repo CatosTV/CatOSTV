@@ -41,10 +41,18 @@
   <keyboard>
     <!-- HOME always belongs to CatosTV, even if a running app is frozen. -->
     <keybind key="XF86HomePage">
+      <action name="ForEach">
+        <query identifier="catostv-shell" />
+        <then><action name="SendToDesktop" to="1" follow="no" /></then>
+      </action>
       <action name="GoToDesktop" to="1" />
       <action name="Execute" command="/usr/local/bin/catostv-ctl home" />
     </keybind>
     <keybind key="W-Home">
+      <action name="ForEach">
+        <query identifier="catostv-shell" />
+        <then><action name="SendToDesktop" to="1" follow="no" /></then>
+      </action>
       <action name="GoToDesktop" to="1" />
       <action name="Execute" command="/usr/local/bin/catostv-ctl home" />
     </keybind>
@@ -52,29 +60,37 @@
          Super often does not reach the TV (e.g. through a VNC console).
          Apps lose Home inside text fields; a TV needs a way out more. -->
     <keybind key="Home">
+      <action name="ForEach">
+        <query identifier="catostv-shell" />
+        <then><action name="SendToDesktop" to="1" follow="no" /></then>
+      </action>
       <action name="GoToDesktop" to="1" />
       <action name="Execute" command="/usr/local/bin/catostv-ctl home" />
     </keybind>
 
-    <!-- Control Center. -->
+    <!-- Control Center. Over an app the shell shows it on top of the app
+         itself (see W-A-F9 below), so these do not switch desktops. -->
     <keybind key="XF86Tools">
-      <action name="GoToDesktop" to="1" />
       <action name="Execute" command="/usr/local/bin/catostv-ctl quick" />
     </keybind>
     <keybind key="F10">
-      <action name="GoToDesktop" to="1" />
       <action name="Execute" command="/usr/local/bin/catostv-ctl quick" />
     </keybind>
 
     <!-- Power key opens the CatosTV power menu (logind ignores the key; see
          /etc/systemd/logind.conf.d/20-catostv.conf). -->
     <keybind key="XF86PowerOff">
+      <action name="ForEach">
+        <query identifier="catostv-shell" />
+        <then><action name="SendToDesktop" to="1" follow="no" /></then>
+      </action>
       <action name="GoToDesktop" to="1" />
       <action name="Execute" command="/usr/local/bin/catostv-ctl power" />
     </keybind>
 
-    <!-- Volume keys work everywhere, including inside apps, with an
-         on-screen level bar (catostv-ctl → wpctl + notify-send). -->
+    <!-- Volume keys work everywhere, including inside apps: the shell
+         shows its volume panel (catostv-ctl falls back to wpctl and a
+         notification when the shell is not running). -->
     <keybind key="XF86AudioRaiseVolume">
       <action name="Execute" command="/usr/local/bin/catostv-ctl volume-up" />
     </keybind>
@@ -87,16 +103,43 @@
 
     <!-- Search key on remotes / keyboards: CatosTV Search. -->
     <keybind key="XF86Search">
+      <action name="ForEach">
+        <query identifier="catostv-shell" />
+        <then><action name="SendToDesktop" to="1" follow="no" /></then>
+      </action>
       <action name="GoToDesktop" to="1" />
       <action name="Execute" command="/usr/local/bin/catostv-ctl search" />
     </keybind>
 
     <!-- RESERVED: pressed by catostv-shell through wtype. No remote sends these. -->
     <keybind key="W-A-F11">
+      <action name="ForEach">
+        <query identifier="catostv-shell" />
+        <then><action name="SendToDesktop" to="1" follow="no" /></then>
+      </action>
       <action name="GoToDesktop" to="1" />
     </keybind>
     <keybind key="W-A-F12">
       <action name="GoToDesktop" to="2" />
+    </keybind>
+    <!-- Quick settings or the volume panel over an app: the CatosTV window
+         comes onto the App desktop, on top, and takes the keys. -->
+    <keybind key="W-A-F9">
+      <action name="ForEach">
+        <query identifier="catostv-shell" />
+        <then>
+          <action name="SendToDesktop" to="2" follow="no" />
+          <action name="Raise" />
+          <action name="Focus" />
+        </then>
+      </action>
+    </keybind>
+    <!-- …and back to its own desktop when that closes. -->
+    <keybind key="W-A-F10">
+      <action name="ForEach">
+        <query identifier="catostv-shell" />
+        <then><action name="SendToDesktop" to="1" follow="no" /></then>
+      </action>
     </keybind>
 
     <!-- Full screen on/off for the app in front (keyboard; the remote
@@ -106,7 +149,11 @@
     </keybind>
 
     <!-- Development fallback keys (keyboard only). -->
-    <keybind key="W-1"><action name="GoToDesktop" to="1" /></keybind>
+    <keybind key="W-1"><action name="ForEach">
+        <query identifier="catostv-shell" />
+        <then><action name="SendToDesktop" to="1" follow="no" /></then>
+      </action>
+      <action name="GoToDesktop" to="1" /></keybind>
     <keybind key="W-2"><action name="GoToDesktop" to="2" /></keybind>
   </keyboard>
 

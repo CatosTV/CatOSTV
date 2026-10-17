@@ -8,7 +8,7 @@
 //! volume-down, volume-up, gear, power, moon, search, home, grid, display,
 //! play, media, game, music, stream, browser, tv, cat, catfyn, lock, chevron, check,
 //! refresh, disk, globe, spark, store, android, cast, keyboard, palette,
-//! phone, remote, download, trash, usb, plus, close, back.
+//! phone, remote, download, trash, usb, plus, close, back, headphones.
 //! Anything else is drawn as a monogram.
 
 use crate::canvas::Canvas;
@@ -86,6 +86,13 @@ pub fn draw<H: Copy>(c: &Canvas<H>, name: &str, cx: f32, cy: f32, size: f32, col
                         color,
                     );
                 }
+            }
+        }
+        "headphones" => {
+            c.polyline(&arc(cx, cy + 0.1 * u, 0.75 * u, PI, 2.0 * PI, 16), w, color);
+            for side in [-1.0_f32, 1.0] {
+                let (x0, y0) = at(if side < 0.0 { -0.9 } else { 0.55 }, 0.1);
+                c.fill(c.r(x0, y0, 0.35 * u, 0.7 * u), 0.12 * u, color);
             }
         }
         "gear" => {
