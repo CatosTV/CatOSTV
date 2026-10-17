@@ -149,6 +149,8 @@ struct Watch {
     foreground: Option<String>,
     /// `foreground` is an Android app (so the Android session ending counts).
     android_front: bool,
+    /// The window of `foreground` (see `ShellApp::window_pattern`).
+    foreground_window: Option<String>,
     /// Last time the shell drew a frame; old = the shell is hidden.
     last_frame: Option<Instant>,
     appliance: bool,
@@ -240,15 +242,34 @@ fn spawn_app_watcher(
         loop {
             std::thread::sleep(TICK);
             let events = lock(&manager).poll();
-            let (fg, android_front, appliance, hidden) = {
+            let (fg, android_front, appliance, hidden, fg_window) = {
                 let w = lock(&watch);
                 (
                     w.foreground.clone(),
                     w.android_front,
                     w.appliance,
                     w.last_frame.is_none_or(|t| t.elapsed() > HIDDEN_AFTER),
+                    w.foreground_window.clone(),
                 )
             };
+            // Android opened its window over the app in front (its session
+            // starting, or its screen service coming back): new windows
+            // come to the front, and Android's home screen covered a film
+            // that went on playing. The app goes back on top; Android's
+            // window is only moved behind (resizing it re-plugs Android's
+            // display).
+            if appliance
+                && hidden
+                && !android_front
+                && let Some(w) = fg_window.as_deref().filter(|w| !is_android_window(w))
+                && catostv_core::toplevel::list().is_ok_and(|list| {
+                    list.iter()
+                        .any(|t| t.activated && is_android_window(&t.app_id))
+                })
+            {
+                eprintln!("catostv: Android came over {w}; back to {w}");
+                let _ = catostv_core::toplevel::activate(w);
+            }
             // What the remotes are talking to (catostv_core::uinput): Android
             // gets Android TV keys (Back = KEY_BACK).
             let now_front = match (hidden, android_front) {
@@ -3230,9 +3251,14 @@ impl ShellApp {
                     .iter()
                     .any(|a| a.id == f && matches!(a.source, AppSource::Android { .. }))
         });
+        let window = self
+            .foreground
+            .as_deref()
+            .and_then(|f| self.window_pattern(f));
         let mut w = lock(&self.watch);
         w.foreground = self.foreground.clone();
         w.android_front = android_front;
+        w.foreground_window = window;
     }
 
     fn busy(&self) -> bool {
