@@ -371,6 +371,39 @@ pub fn set_adaptive_sync(r: &mut dyn Runner, output: &str, on: bool) -> Result<(
     Ok(())
 }
 
+/// The mode to pass through when the current one has to be set again
+/// from scratch: the same size at about half the refresh rate (60 → 30),
+/// else any other mode. `None` without a current mode or an alternative.
+pub fn bounce_mode(output: &Output) -> Option<Mode> {
+    let cur = *output.current_mode()?;
+    let half = cur.refresh_mhz / 2;
+    let others = output.modes.iter().filter(|m| !m.same_timing(&cur));
+    others
+        .clone()
+        .filter(|m| m.width == cur.width && m.height == cur.height)
+        .min_by_key(|m| m.refresh_mhz.abs_diff(half))
+        .or_else(|| others.clone().next())
+        .copied()
+}
+
+/// Set every enabled output's mode again from scratch, by way of
+/// [`bounce_mode`]. Some DP-to-HDMI chips (a Chrontel CH7218 on the test
+/// TV) wake from sleep with the wrong colour conversion, a blue tint,
+/// until the next full mode set. Returns how many outputs were reset.
+pub fn reset_modes(r: &mut dyn Runner, pause: std::time::Duration) -> Result<usize> {
+    let mut done = 0;
+    for o in outputs(r)?.iter().filter(|o| o.enabled) {
+        let (Some(cur), Some(via)) = (o.current_mode().copied(), bounce_mode(o)) else {
+            continue;
+        };
+        set_mode(r, &o.name, &via)?;
+        std::thread::sleep(pause);
+        set_mode(r, &o.name, &cur)?;
+        done += 1;
+    }
+    Ok(done)
+}
+
 /// Modes for a TV menu: every mode the display reports, de-duplicated by
 /// timing (flags merged), sorted by resolution (pixel count, then width)
 /// descending, then refresh rate descending.
@@ -798,6 +831,28 @@ DP-1 \"SAC DP 0000000100000 (DP-1)\"
                 "wlr-randr --output HDMI-A-1 --adaptive-sync disabled",
             ]
         );
+    }
+
+    #[test]
+    fn reset_passes_through_half_the_refresh_rate() {
+        let mut r = FakeRunner::new();
+        r.push(CmdOutput::ok(TV));
+        assert_eq!(reset_modes(&mut r, std::time::Duration::ZERO).unwrap(), 1);
+        let shown: Vec<String> = r.seen.iter().map(Cmd::display).collect();
+        assert_eq!(
+            shown,
+            [
+                "wlr-randr",
+                "wlr-randr --output HDMI-A-1 --mode 3840x2160@30.000Hz",
+                "wlr-randr --output HDMI-A-1 --mode 3840x2160@60.000Hz",
+            ]
+        );
+        // Only one mode at that size: any other mode will do.
+        let mut one = parse_wlr_randr(TV).remove(0);
+        one.modes.retain(|m| m.width != 3840 || m.current);
+        assert_eq!(bounce_mode(&one).unwrap().width, 720);
+        one.modes.retain(|m| m.current);
+        assert_eq!(bounce_mode(&one), None);
     }
 
     #[test]
