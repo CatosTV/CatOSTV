@@ -24,6 +24,8 @@
 set -uo pipefail
 OUT=/run/catostv/android-top
 SF=/run/catostv/android-sf
+# When the current Android container started (seconds since the epoch).
+STARTED=/run/catostv/android-started
 APPS=/run/catostv/android-apps
 LXC=(-P /var/lib/waydroid/lxc -n waydroid)
 ANDROID_ENV=(--clear-env
@@ -88,22 +90,36 @@ save_evidence() {
   ls -1dt "$EVIDENCE"/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf --one-file-system
 }
 kernel_watch() {
+  # Every Android start logs binder failures while the previous session's
+  # processes go away: not worth a capture. Only once Android has run a
+  # minute, and only while it runs.
+  local started
   journalctl -k -f -n 0 -o cat 2>/dev/null \
     | grep --line-buffered "rust_binder: Failed to allocate buffer" \
-    | while read -r _; do save_evidence binder-failure; done
+    | while read -r _; do
+        started=$(cat "$STARTED" 2>/dev/null || echo 0)
+        [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" == RUNNING ]] || continue
+        (( $(date +%s) - started >= 60 )) || continue
+        save_evidence binder-failure
+      done
 }
 KW=""
+# A new watchdog runs for every Android session; its first pid is just
+# noted (the one before it belonged to the previous session). The counter
+# keeps going up across sessions: the shell compares it with what it saw.
+sf_seen=""
 publish_sf() {
   local pid=$1 restarts=0 prev
   if [[ -r $SF ]]; then
     read -r prev restarts <"$SF" || true
     restarts=${restarts:-0}
-    if [[ -n "${prev:-}" && "$prev" != "$pid" ]]; then
+    if [[ -n "$sf_seen" && -n "${prev:-}" && "$prev" != "$pid" ]]; then
       restarts=$((restarts + 1))
       echo "surfaceflinger restarted (pid $prev -> $pid), restart #$restarts" >&2
       save_evidence screen-service-restart &
     fi
   fi
+  sf_seen=1
   printf '%s %s\n' "$pid" "$restarts" >"$SF.tmp" && chmod 644 "$SF.tmp" && mv -f "$SF.tmp" "$SF"
 }
 watchdog() {
@@ -264,6 +280,7 @@ cap_android_pids() {
   local init
   init=$(lxc-info "${LXC[@]}" -pH 2>/dev/null)
   [[ "$init" =~ ^[0-9]+$ && "$init" != "$pids_capped" ]] || return 0
+  date +%s >"$STARTED" 2>/dev/null || true
   if nsenter -t "$init" -p -- sh -c 'echo 65535 > /proc/sys/kernel/pid_max' 2>/dev/null; then
     pids_capped=$init
     echo "Android's process IDs capped at 65535 (container init $init)" >&2
@@ -271,7 +288,7 @@ cap_android_pids() {
 }
 kernel_watch &
 KW=$!
-trap '[[ -n "$KW" ]] && { pkill -P "$KW" 2>/dev/null; kill "$KW" 2>/dev/null; }; stop_watchdog; stop_hung_watch; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp"; exit' EXIT TERM INT
+trap '[[ -n "$KW" ]] && { pkill -P "$KW" 2>/dev/null; kill "$KW" 2>/dev/null; }; stop_watchdog; stop_hung_watch; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp" "$STARTED"; exit' EXIT TERM INT
 while true; do
   if [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" != RUNNING ]]; then
     publish ""
