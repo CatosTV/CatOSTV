@@ -522,6 +522,11 @@ struct ShellApp {
     store_shots: HashMap<String, String>,
     /// The app being opened (launch bounce on its tile) and since when.
     launching: Option<(String, Instant)>,
+    /// The launch is an Android app while Android itself was not running
+    /// yet (the splash says "Starting Android" when it takes a while).
+    launch_cold: bool,
+    /// The splash of a launch that just ended, fading out.
+    launch_end: Option<(String, Instant)>,
     /// When the shell started (start-up animation).
     started: Instant,
     /// Notices waking from Sleep (keys right after are ignored).
@@ -812,6 +817,8 @@ impl ShellApp {
             android_running: Vec::new(),
             store_shots: HashMap::new(),
             launching: None,
+            launch_cold: false,
+            launch_end: None,
             started: Instant::now(),
             wake: power::WakeGuard::default(),
             media: fin::Media {
@@ -1164,7 +1171,17 @@ impl ShellApp {
             Ok(LaunchResult::AlreadyRunning) => {
                 self.show_toast(ctx, &format!("{} is still closing…", app.name))
             }
-            Err(e) => self.show_toast(ctx, e.message()),
+            Err(e) => {
+                self.end_launch();
+                self.show_toast(ctx, e.message());
+            }
+        }
+    }
+
+    /// The launched app is on screen, or will not be: the splash fades out.
+    fn end_launch(&mut self) {
+        if let Some((id, _)) = self.launching.take() {
+            self.launch_end = Some((id, Instant::now()));
         }
     }
 
@@ -1192,7 +1209,7 @@ impl ShellApp {
                 }
                 return false;
             }
-            if !quiet {
+            if !quiet && self.launching.is_none() {
                 self.show_toast(ctx, "Starting Android…");
             }
         }
@@ -1350,9 +1367,20 @@ impl ShellApp {
     }
 
     fn apply(&mut self, ctx: &egui::Context, effect: Effect) {
-        if let Effect::Launch(i) | Effect::Resume(i) = &effect
+        // A splash until the app is on screen. Not for Catfyn (it opens at
+        // once) or an app that is already running.
+        if let Effect::Launch(i) = &effect
             && let Some(app) = self.apps.get(*i)
+            && !app.is_builtin()
+            && !self.mgr().is_running(&app.id)
+            && !(matches!(app.source, AppSource::Android { .. })
+                && self
+                    .android_running
+                    .iter()
+                    .any(|p| matches!(&app.source, AppSource::Android { package } if package == p)))
         {
+            self.launch_cold =
+                matches!(app.source, AppSource::Android { .. }) && !self.sys.android.session;
             self.launching = Some((app.id.clone(), Instant::now()));
         }
         match effect {
@@ -2382,6 +2410,7 @@ impl ShellApp {
             }
             Msg::Apks(r) => self.shell.on_apks(r),
             Msg::AndroidOpened(pkg) => {
+                self.end_launch();
                 lock(&self.watch).android_opened = Some((pkg.clone(), Instant::now()));
                 if !self.android_running.contains(&pkg) {
                     self.android_running.push(pkg.clone());
@@ -2404,6 +2433,9 @@ impl ShellApp {
                 self.refresh_soon();
             }
             Msg::WindowSeen(id, window) => {
+                if self.launching.as_ref().is_some_and(|(l, _)| *l == id) {
+                    self.end_launch();
+                }
                 self.windows.insert(id, window);
             }
             Msg::AndroidAppsChanged => {
@@ -2568,6 +2600,7 @@ impl ShellApp {
                 self.shell.go_home();
             }
             Msg::AndroidDidNotStart(pkg) => {
+                self.end_launch();
                 self.foreground = None;
                 self.shell.go_home();
                 let name = self
@@ -2657,6 +2690,7 @@ impl ShellApp {
                 self.android(ctx, task);
             }
             Msg::AndroidNoWindow(name) => {
+                self.end_launch();
                 self.foreground = None;
                 self.shell.go_home();
                 self.show_toast(
@@ -3042,6 +3076,16 @@ impl eframe::App for ShellApp {
             self.mapper
                 .map(&events, keys::now(&ctx), self.shell.text_mode())
         };
+        // Back or Home while the splash shows: it goes, nothing else happens.
+        let mut actions = actions;
+        if self.launching.is_some()
+            && actions
+                .iter()
+                .any(|a| matches!(a, Action::Back | Action::Home))
+        {
+            actions.clear();
+            self.end_launch();
+        }
         let mut p = self.pointer.collect(&ctx);
         if quiet {
             p = Default::default();
@@ -3137,12 +3181,21 @@ impl eframe::App for ShellApp {
             let left = until.saturating_duration_since(now).as_secs_f32();
             (text.as_str(), (left / 0.3).clamp(0.0, 1.0))
         });
+        let limit = Duration::from_secs(if self.launch_cold { 60 } else { 30 });
         if self
             .launching
             .as_ref()
-            .is_some_and(|(_, t)| t.elapsed() > Duration::from_millis(2200))
+            .is_some_and(|(_, t)| t.elapsed() > limit)
+            && let Some((id, _)) = self.launching.take()
         {
-            self.launching = None;
+            self.launch_end = Some((id, Instant::now()));
+        }
+        if self
+            .launch_end
+            .as_ref()
+            .is_some_and(|(_, t)| t.elapsed() > Duration::from_millis(400))
+        {
+            self.launch_end = None;
         }
         let confirm_left = self
             .confirm_deadline
@@ -3184,6 +3237,17 @@ impl eframe::App for ShellApp {
                     .launching
                     .as_ref()
                     .map(|(id, t)| (id.as_str(), t.elapsed().as_secs_f32())),
+                launch_splash: self
+                    .launching
+                    .as_ref()
+                    .map(|(id, t)| (id.as_str(), t.elapsed().as_secs_f32(), 1.0))
+                    .or_else(|| {
+                        self.launch_end.as_ref().and_then(|(id, t)| {
+                            let k = 1.0 - t.elapsed().as_secs_f32() / 0.4;
+                            (k > 0.0).then_some((id.as_str(), 10.0, k))
+                        })
+                    }),
+                launch_cold: self.launch_cold,
                 since_start: self.started.elapsed().as_secs_f32(),
                 shell: &self.shell,
                 ctx: &sctx,
@@ -3219,6 +3283,7 @@ impl eframe::App for ShellApp {
             || fin_loading
             || !self.fin_fetching.is_empty()
             || self.launching.is_some()
+            || self.launch_end.is_some()
             || self.started.elapsed().as_secs_f32() < view::INTRO_SECS
             || confirm_left.is_some()
             || self.busy()

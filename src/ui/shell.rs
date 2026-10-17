@@ -38,6 +38,10 @@ pub struct ShellView<'a> {
     pub now: f64,
     /// The app being opened and seconds since OK (launch bounce).
     pub launching: Option<(&'a str, f32)>,
+    /// The launch splash: (app id, seconds since OK, opacity).
+    pub launch_splash: Option<(&'a str, f32, f32)>,
+    /// That launch also has to start Android.
+    pub launch_cold: bool,
     /// Seconds since the shell started (start-up animation).
     pub since_start: f32,
     /// Page-change transition, 0 → 1 over a fraction of a second.
@@ -126,6 +130,9 @@ pub fn draw(c: &C, v: &ShellView) {
     if let Some(o) = s.overlay() {
         c.hit(c.screen, Target::Outside);
         draw_overlay(c, v, o);
+    }
+    if let Some((id, secs, k)) = v.launch_splash {
+        draw_launch_splash(c, v, id, secs, k);
     }
     if let Some((text, alpha)) = v.toast {
         widgets::toast(c, text, alpha);
@@ -327,6 +334,61 @@ fn draw_top_bar(c: &C, v: &ShellView) {
 }
 
 // --------------------------------------------------------------------- home
+
+/// From OK until the app is on screen: the app's icon on its frosted card,
+/// its name, and after a moment a spinner. A line says what is going on
+/// when it takes a while.
+fn draw_launch_splash(c: &C, v: &ShellView, id: &str, secs: f32, fade: f32) {
+    let Some(app) = v.ctx.apps.iter().find(|a| a.entry.id == id) else {
+        return;
+    };
+    let ease = |x: f32| 1.0 - (1.0 - x.clamp(0.0, 1.0)).powi(3);
+    let k = ease(secs / 0.3) * fade;
+    let a = |x: f32| (x * k).round().clamp(0.0, 255.0) as u8;
+    let tint = theme::app_rgb(&app.entry.accent);
+    c.hit(c.screen, Target::Outside);
+    c.fill(c.screen, 0.0, theme::rgba(theme::BG_TOP, a(238.0)));
+    c.fill(c.screen, 0.0, theme::rgba(tint, a(26.0)));
+    let grow = 0.9 + 0.1 * ease(secs / 0.45);
+    let side = 196.0 * grow;
+    let (cx, cy) = (640.0, 300.0);
+    let card = c.r(cx - side / 2.0, cy - side / 2.0, side, side);
+    c.shadow(card, 48.0, 22.0, 60.0, theme::rgba(tint, a(90.0)));
+    c.fill(card, 48.0, theme::rgba(theme::BG_TOP, a(160.0)));
+    c.fill(card, 48.0, theme::rgba(tint, a(56.0)));
+    c.frost_edge(card, 48.0, 1.6);
+    widgets::app_icon(c, v.images, app, cx, cy, 104.0 * grow, a(255.0));
+    let name = c.fit(&app.entry.name, 720.0, 34.0, Weight::Semibold);
+    c.text(
+        cx,
+        cy + side / 2.0 + 30.0,
+        Align2::CENTER_TOP,
+        &name,
+        34.0,
+        theme::rgba(theme::INK, a(255.0)),
+        Weight::Semibold,
+    );
+    if fade >= 1.0 && secs > 0.6 {
+        widgets::spinner(c, cx, cy + side / 2.0 + 118.0, 16.0, v.now);
+    }
+    if fade >= 1.0 && secs > 3.0 {
+        let line = if v.launch_cold {
+            "Starting Android"
+        } else {
+            "Still opening"
+        };
+        let t = ease((secs - 3.0) / 0.4);
+        c.text(
+            cx,
+            cy + side / 2.0 + 156.0,
+            Align2::CENTER_TOP,
+            line,
+            22.0,
+            theme::rgba(theme::INK, (150.0 * t) as u8),
+            Weight::Regular,
+        );
+    }
+}
 
 fn draw_home(c: &C, v: &ShellView) {
     let s = v.shell;
