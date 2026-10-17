@@ -116,7 +116,7 @@ pub fn draw<H: Copy>(c: &Canvas<H>, v: &SaverView) {
 fn slide<H: Copy>(c: &Canvas<H>, s: &Slide, alpha: f32) {
     let t = (s.since.elapsed().as_secs_f32() / (ss::PICTURE_SECS + ss::FADE_SECS)).min(1.0);
     let zoom = 1.0 + 0.07 * t;
-    let drift = if s.n % 2 == 0 { 1.0 } else { -1.0 };
+    let drift = if s.n.is_multiple_of(2) { 1.0 } else { -1.0 };
     let size = c.screen.size() * zoom;
     let extra = size - c.screen.size();
     let centre = c.screen.center() + vec2(extra.x * 0.3 * drift * (t - 0.5), 0.0);
