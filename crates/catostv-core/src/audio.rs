@@ -54,6 +54,16 @@ pub fn step(r: &mut dyn Runner, delta: i8) -> Result<VolumeState> {
     get(r)
 }
 
+/// Set the volume to `percent` (0–100), unmuting too when `unmute`.
+pub fn set(r: &mut dyn Runner, percent: u8, unmute: bool) -> Result<VolumeState> {
+    let level = format!("{:.2}", f32::from(percent.min(100)) / 100.0);
+    r.run_ok(&Cmd::new("wpctl").args(["set-volume", SINK, &level]))?;
+    if unmute {
+        r.run_ok(&Cmd::new("wpctl").args(["set-mute", SINK, "0"]))?;
+    }
+    get(r)
+}
+
 pub fn toggle_mute(r: &mut dyn Runner) -> Result<VolumeState> {
     r.run_ok(&Cmd::new("wpctl").args(["set-mute", SINK, "toggle"]))?;
     get(r)
@@ -542,6 +552,15 @@ mod tests {
             r.seen[3].args,
             vec!["set-mute", "@DEFAULT_AUDIO_SINK@", "0"]
         );
+        let mut r = FakeRunner::new();
+        r.push(Output::ok(""));
+        r.push(Output::ok("Volume: 0.95"));
+        assert_eq!(set(&mut r, 95, false).unwrap().percent, 95);
+        assert_eq!(
+            r.seen[0].args,
+            vec!["set-volume", "@DEFAULT_AUDIO_SINK@", "0.95"]
+        );
+        assert_eq!(r.seen.len(), 2);
     }
 
     /// `wpctl status` as posted on bbs.archlinux.org topic 305641

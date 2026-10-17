@@ -166,6 +166,10 @@ struct Watch {
 /// means it did not start (Android's own start timeout is 10 s).
 const ANDROID_START_GRACE: Duration = Duration::from_secs(12);
 
+/// Volume changes: the newest one's number, and one at a time.
+static VOLUME_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static VOLUME_LOCK: Mutex<()> = Mutex::new(());
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -1635,9 +1639,33 @@ impl ShellApp {
             }
             Effect::SetWifi(on) => self.job(move |r| net::set_wifi(r, on)),
             Effect::SetBluetooth(on) => self.job(move |r| bluetooth::set_power(r, on)),
-            Effect::VolumeStep(delta) => self.jobs.spawn(move || {
-                Msg::Volume(audio::step(&mut SystemRunner, delta).map_err(|e| e.to_string()))
-            }),
+            // From the level on screen, so quick presses add up in order
+            // (parallel relative steps finished in any order), and only
+            // the newest one is applied.
+            Effect::VolumeStep(delta) => match self.sys.volume {
+                Some(v) => {
+                    let percent = (i16::from(v.percent) + i16::from(delta)).clamp(0, 100) as u8;
+                    let unmute = delta > 0;
+                    self.sys.volume = Some(audio::VolumeState {
+                        percent,
+                        muted: v.muted && !unmute,
+                    });
+                    let seq = VOLUME_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    self.jobs.spawn(move || {
+                        let _guard = lock(&VOLUME_LOCK);
+                        if VOLUME_SEQ.load(std::sync::atomic::Ordering::SeqCst) != seq {
+                            return Msg::Nothing;
+                        }
+                        Msg::Volume(
+                            audio::set(&mut SystemRunner, percent, unmute)
+                                .map_err(|e| e.to_string()),
+                        )
+                    })
+                }
+                None => self.jobs.spawn(move || {
+                    Msg::Volume(audio::step(&mut SystemRunner, delta).map_err(|e| e.to_string()))
+                }),
+            },
             Effect::ToggleMute => self.jobs.spawn(|| {
                 Msg::Volume(audio::toggle_mute(&mut SystemRunner).map_err(|e| e.to_string()))
             }),
