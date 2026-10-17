@@ -62,6 +62,8 @@ pub struct ShellView<'a> {
     pub blank: bool,
     /// Volume panel slide-in, 0 → 1.
     pub volume_t: f32,
+    /// The screensaver, over everything but the volume panel.
+    pub saver: Option<crate::ui::saver::SaverView<'a>>,
 }
 
 pub struct Clock {
@@ -101,6 +103,11 @@ pub fn draw(c: &C, v: &ShellView) {
         if let Some((text, alpha)) = v.toast {
             widgets::toast(c, text, alpha);
         }
+        return;
+    }
+    if let Some(sv) = &v.saver {
+        crate::ui::saver::draw(c, sv);
+        draw_volume_panel(c, v);
         return;
     }
     let tint = match s.page {
@@ -1329,6 +1336,8 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::Storage => "disk",
         R::ClockFormat => "spark",
         R::Glow => "palette",
+        R::Screensaver | R::SaverPictures => "cat",
+        R::SaverMinutes => "moon",
         R::IpAddress => "globe",
         R::DebugSsh | R::DebugLogin | R::DebugPassword | R::DebugRemoveOld => "lock",
         R::DebugRelay => "android",

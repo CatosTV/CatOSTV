@@ -63,6 +63,13 @@ pub struct UiPrefs {
     pub fin_autoplay: bool,
     /// Seconds the "Next episode" card counts down: 5, 10 or 15.
     pub fin_countdown: u32,
+    /// The screensaver starts after a while without input, and Sleep
+    /// shows it instead of putting the TV to sleep.
+    pub screensaver: bool,
+    /// "cats" or "photos" (`screensaver::Pictures`).
+    pub saver_pictures: String,
+    /// Minutes without input, one of `screensaver::MINUTES`.
+    pub saver_minutes: u32,
 }
 
 /// The countdown lengths Settings → Catfyn offers.
@@ -92,6 +99,9 @@ impl Default for UiPrefs {
             android_variant: "gapps".into(),
             fin_autoplay: true,
             fin_countdown: 10,
+            screensaver: true,
+            saver_pictures: "cats".into(),
+            saver_minutes: crate::screensaver::DEFAULT_MINUTES,
         }
     }
 }
@@ -182,6 +192,17 @@ impl UiPrefs {
                         p.fin_countdown = n;
                     }
                 }
+                "screensaver" => p.screensaver = v != "false",
+                "screensaver_pictures" if v == "cats" || v == "photos" => {
+                    p.saver_pictures = v.to_string()
+                }
+                "screensaver_minutes" => {
+                    if let Ok(n) = v.parse::<u32>()
+                        && crate::screensaver::MINUTES.contains(&n)
+                    {
+                        p.saver_minutes = n;
+                    }
+                }
                 "android_variant" if v == "gapps" || v == "vanilla" => {
                     p.android_variant = v.to_string()
                 }
@@ -215,6 +236,10 @@ impl UiPrefs {
         s.push_str(&format!(
             "fin_autoplay = {}\nfin_countdown = {}\n",
             self.fin_autoplay, self.fin_countdown
+        ));
+        s.push_str(&format!(
+            "screensaver = {}\nscreensaver_pictures = {}\nscreensaver_minutes = {}\n",
+            self.screensaver, self.saver_pictures, self.saver_minutes
         ));
         for (a, c) in &self.pad_bindings {
             s.push_str(&format!("pad_bind = {a} 0x{c:x}\n"));
@@ -283,6 +308,9 @@ mod tests {
             android_variant: "vanilla".into(),
             fin_autoplay: false,
             fin_countdown: 15,
+            screensaver: false,
+            saver_pictures: "photos".into(),
+            saver_minutes: 10,
         };
         assert_eq!(UiPrefs::from_conf(&p.to_conf()), p);
         // Catfyn autoplay: on, 10 s by default; only 5/10/15.
@@ -290,6 +318,14 @@ mod tests {
         assert!(d.fin_autoplay);
         assert_eq!(d.fin_countdown, 10);
         assert_eq!(UiPrefs::from_conf("fin_countdown = 7\n").fin_countdown, 10);
+        // Screensaver: on, cats, 3 minutes by default.
+        assert!(d.screensaver);
+        assert_eq!((d.saver_pictures.as_str(), d.saver_minutes), ("cats", 3));
+        let junk = UiPrefs::from_conf("screensaver_minutes = 2\nscreensaver_pictures = dogs\n");
+        assert_eq!(
+            (junk.saver_pictures.as_str(), junk.saver_minutes),
+            ("cats", 3)
+        );
         assert_eq!(cycle_countdown(10, 1), 15);
         assert_eq!(cycle_countdown(15, 1), 15);
         assert_eq!(cycle_countdown(10, -1), 5);

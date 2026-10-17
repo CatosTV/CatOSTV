@@ -95,6 +95,9 @@ enum Msg {
     /// Quick settings or a volume key while an app is in front: the window
     /// has just been put on top of the app.
     OverApp(ShellCommand),
+    /// New screensaver pictures on disk.
+    SaverPictures(Vec<PathBuf>),
+    Weather(Option<catostv_core::screensaver::Weather>),
     /// Catfyn results.
     FinServers(Vec<jf::Server>),
     FinLogin(Result<jf::Account, String>),
@@ -574,6 +577,12 @@ struct ShellApp {
     /// The volume panel closes then, and since when it shows.
     volume_until: Option<Instant>,
     volume_since: Instant,
+    /// The screensaver while it shows, the last weather and when it came,
+    /// and the last key, click or app change (for the idle start).
+    saver: Option<catostv::saver::Slideshow>,
+    weather: Option<(catostv_core::screensaver::Weather, Instant)>,
+    saver_fetching: bool,
+    last_input: Instant,
     appliance: bool,
     home: PathBuf,
 }
@@ -866,6 +875,10 @@ impl ShellApp {
             leaving: None,
             volume_until: None,
             volume_since: Instant::now(),
+            saver: None,
+            weather: None,
+            saver_fetching: false,
+            last_input: Instant::now(),
             appliance,
             home: home_dir(),
         };
@@ -1016,6 +1029,30 @@ impl ShellApp {
         self.shell.quick_app = Some((name, fullscreen));
     }
 
+    /// Show the screensaver: the pictures on disk at once, a few new ones
+    /// and the weather in the background.
+    fn start_saver(&mut self) {
+        use catostv_core::screensaver::{self as ss, Pictures};
+        let kind = Pictures::from_key(&self.prefs.saver_pictures);
+        let dir = ss::cache_dir(&self.home, kind);
+        eprintln!("catostv: screensaver");
+        self.saver = Some(catostv::saver::Slideshow::new(ss::cached(&dir)));
+        if !self.saver_fetching {
+            self.saver_fetching = true;
+            let home = self.home.clone();
+            self.jobs
+                .spawn(move || Msg::SaverPictures(catostv::saver::fetch(&home, kind)));
+        }
+        if self
+            .weather
+            .as_ref()
+            .is_none_or(|(_, at)| at.elapsed() > Duration::from_secs(30 * 60))
+        {
+            self.jobs
+                .spawn(|| Msg::Weather(catostv::saver::fetch_weather()));
+        }
+    }
+
     /// A volume key: change the level and show the panel (or keep it).
     fn volume_key(&mut self, ctx: &egui::Context, cmd: ShellCommand) {
         use catostv_core::volume_panel::{STEP, VolumePanel};
@@ -1032,6 +1069,25 @@ impl ShellApp {
         }
         self.keep_volume_panel();
         self.apply(ctx, e);
+    }
+
+    /// Time for the screensaver: it is on, CatosTV is in front with nothing
+    /// going on, and nobody has pressed anything for a while.
+    fn saver_due(&self) -> bool {
+        self.saver.is_none()
+            && self.prefs.screensaver
+            && self.last_input.elapsed()
+                >= Duration::from_secs(u64::from(self.prefs.saver_minutes) * 60)
+            && self.over_app.is_none()
+            && self.launching.is_none()
+            && self.confirm_deadline.is_none()
+            && self.shell.volume.is_none()
+            && !self.sys.android_setup.as_ref().is_some_and(|s| s.running())
+            && !self.sys.android_repairing
+            && !matches!(
+                self.sys.updates.install,
+                Some(catostv_core::updates::InstallState::Running(_))
+            )
     }
 
     fn keep_volume_panel(&mut self) {
@@ -1777,6 +1833,23 @@ impl ShellApp {
                 self.prefs.glow = on;
                 self.save_prefs(ctx);
             }
+            Effect::SetScreensaver(on) => {
+                self.prefs.screensaver = on;
+                self.save_prefs(ctx);
+            }
+            Effect::SetSaverPictures(kind) => {
+                self.prefs.saver_pictures = kind;
+                self.save_prefs(ctx);
+            }
+            Effect::SetSaverMinutes(m) => {
+                self.prefs.saver_minutes = m;
+                self.save_prefs(ctx);
+            }
+            Effect::Screensaver => {
+                self.leave_to_shell = true;
+                self.shell.go_home();
+                self.start_saver();
+            }
             Effect::SetFinAutoplay(on) => {
                 self.prefs.fin_autoplay = on;
                 self.save_prefs(ctx);
@@ -2483,6 +2556,8 @@ impl ShellApp {
                 self.over_app = None;
                 self.leaving = None;
                 lock(&self.watch).blank = None;
+                self.saver = None;
+                self.last_input = Instant::now();
                 // Home (key, remote, controller Guide) from an Android app:
                 // tell Android too, or the app keeps playing unseen.
                 if cmd == ShellCommand::Home && self.foreground_android().is_some() {
@@ -2694,6 +2769,17 @@ impl ShellApp {
                     .is_some_and(|f| matches!(f.screen(), Some(fin::Screen::Browse)))
                 {
                     self.fin_effect(ctx, FinEffect::LoadHome);
+                }
+            }
+            Msg::SaverPictures(new) => {
+                self.saver_fetching = false;
+                if let Some(s) = self.saver.as_mut() {
+                    s.add(new);
+                }
+            }
+            Msg::Weather(w) => {
+                if let Some(w) = w {
+                    self.weather = Some((w, Instant::now()));
                 }
             }
             Msg::OverApp(cmd) => {
@@ -3183,6 +3269,15 @@ impl eframe::App for ShellApp {
         if !focused && self.was_focused {
             self.mapper.reset();
         }
+        // Back from an app (no frames while it was in front): the idle
+        // time starts now.
+        if focused && !self.was_focused
+            || lock(&self.watch)
+                .last_frame
+                .is_some_and(|t| t.elapsed() > Duration::from_secs(2))
+        {
+            self.last_input = Instant::now();
+        }
         // The window has the keys again (Home, or over the app): show
         // something again. Also when it never lost them (no app came).
         {
@@ -3246,6 +3341,25 @@ impl eframe::App for ShellApp {
         if quiet {
             p = Default::default();
             self.pending_nav.clear();
+        }
+        let touched = !actions.is_empty()
+            || !self.pending_nav.is_empty()
+            || p.moved_to.is_some()
+            || p.click.is_some()
+            || p.back
+            || p.wheel != 0;
+        if touched || !focused || self.over_app.is_some() {
+            self.last_input = Instant::now();
+        }
+        // Any key on the screensaver: back to Home, and that is all it does.
+        if touched && self.saver.take().is_some() {
+            actions.clear();
+            self.pending_nav.clear();
+            p = Default::default();
+            self.shell.go_home();
+        }
+        if self.saver_due() {
+            self.start_saver();
         }
         let mut effects = Vec::new();
         {
@@ -3376,6 +3490,11 @@ impl eframe::App for ShellApp {
         {
             self.launch_end = None;
         }
+        if let Some(s) = self.saver.as_mut() {
+            let px = ctx.content_rect().size() * ctx.pixels_per_point();
+            s.tick(&ctx, [px.x.round() as u32, px.y.round() as u32]);
+        }
+        let saver_clock = view::clock(self.prefs.clock_24h);
         let confirm_left = self
             .confirm_deadline
             .map(|d| d.saturating_duration_since(now).as_secs() + 1);
@@ -3438,8 +3557,24 @@ impl eframe::App for ShellApp {
                 over_app: self.over_app.is_some(),
                 blank: lock(&self.watch).blank.is_some(),
                 volume_t: self.volume_since.elapsed().as_secs_f32() / 0.22,
+                saver: self
+                    .saver
+                    .as_ref()
+                    .map(|show| catostv::ui::saver::SaverView {
+                        show,
+                        weather: self.weather.as_ref().map(|(w, _)| w),
+                        time: &saver_clock.time,
+                        date: &saver_clock.date,
+                        night: !(6..19).contains(&saver_clock.hour),
+                        glow: self.prefs.glow,
+                        now: keys::now(&ctx),
+                    }),
             },
         );
+        if self.saver.is_some() {
+            // The slow zoom and the cross-fades.
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
         // The Home backdrop drifts slowly: keep frames coming while
         // Home is on screen; ~30 fps is plenty for slow light.
         if self.prefs.glow && self.shell.page == catostv_core::shell::Page::Home {

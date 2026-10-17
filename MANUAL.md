@@ -13,6 +13,7 @@ issue.
 - [Controllers and remotes](#controllers-and-remotes)
 - [Quick settings](#quick-settings)
 - [Volume](#volume)
+- [Screensaver](#screensaver)
 - [Settings, page by page](#settings-page-by-page)
 - [Updates](#updates)
 - [For tinkerers: Debug SSH](#for-tinkerers-debug-ssh)
@@ -250,9 +251,10 @@ the app.
   and IP settings.
 - **Bluetooth**: shows the connected device. OK opens it: on/off, your
   paired devices (OK connects or disconnects) and *Pair a new device*.
-- **Mute**, **Settings**, **Sleep**, **Power**. One press on the
-  keyboard, remote or controller wakes the TV from Sleep (with a USB-CEC
-  adapter, the TV's own remote too).
+- **Mute**, **Settings**, **Sleep**, **Power**. Sleep shows the
+  screensaver. With the screensaver turned off, it puts the TV to sleep
+  instead, and one press on the keyboard, remote or controller wakes it
+  (with a USB-CEC adapter, the TV's own remote too).
 - The volume bar underneath: Left/Right to change, OK to mute.
 
 ---
@@ -271,6 +273,21 @@ apps too. While it's there:
 
 ---
 
+## Screensaver
+
+After 3 minutes without a key press on CatosTV's own screens, the
+screensaver comes on: a slideshow with the time, the date and the
+weather. Any button takes you back to Home. It never starts over an app
+or a film.
+
+In **Settings → Customization** you can turn it off, pick **Cats** or
+**Photos**, and change when it starts. Cat pictures come from TheCatAPI,
+photos from Lorem Picsum and the weather from wttr.in, which works out
+roughly where you are from your internet address. Pictures are kept on
+the TV, so the slideshow still runs when the internet is down.
+
+---
+
 ## Settings, page by page
 
 - **Network**: Wi-Fi on/off, the connection, *Choose a network*, and
@@ -284,7 +301,7 @@ apps too. While it's there:
 - **Sound**: volume, mute, output device, and *Use TV speakers (HDMI)*
   for when the TV stays silent.
 - **Customization**: accent colour, 12/24-hour clock, the glow behind the
-  focused app on Home.
+  focused app on Home, and the screensaver.
 - **Apps**: installed apps, search, *Update apps*.
 - **Android**: set up and manage Android ([ANDROID.md](ANDROID.md)).
 - **Cast & remote**: casting, phone remote, KDE Connect devices.

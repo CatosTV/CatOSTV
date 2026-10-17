@@ -22,8 +22,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # used to verify every call). `glow` is included so
 # CATOSTV_RENDERER=glow can fall back to OpenGL on machines without Vulkan.
 eframe = { version = "=0.36.2", default-features = false, features = ["default_fonts", "wgpu", "glow", "wayland", "x11"] }
-# PNG app icons (Flatpak / Android / store). PNG only, no default features.
-image = { version = "0.25", default-features = false, features = ["png"] }
+# PNG app icons (Flatpak / Android / store) and JPEG screensaver pictures.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
 
