@@ -32,6 +32,9 @@
 --   pick from) and the panel is drawn here, so the shell's window never
 --   comes over the film. While it shows: Up / Down change the volume, OK
 --   mutes, Left opens the outputs list (the shell's), Back closes it.
+--   Loading: a spinner while playback waits for the network without being
+--   paused (a new audio or subtitle track is read from the server again, a
+--   seek, a slow connection); OK does not pause then.
 --
 -- Drawn as ASS on a 1920x1080 canvas (scaled by mpv), accent from
 -- --script-opts=catfyn_osd-accent=RRGGBB.
@@ -73,7 +76,12 @@ end
 -- Three groups: episodes on the left, playback in the middle, tracks on
 -- the right. The episode buttons show only when there is one
 -- (`catfyn-episodes PREV NEXT`, each "yes" or "no").
-local pause_button = { label = "Pause", group = "play", act = function() mp.commandv("cycle", "pause") end }
+local loading = false -- waiting for the network (the spinner shows)
+local pause_button = { label = "Pause", group = "play", act = function()
+    -- Waiting for the network looks like a pause already: pausing for
+    -- real then took a second press to play again.
+    if not loading then mp.commandv("cycle", "pause") end
+end }
 local buttons = {
     { label = "Previous episode", group = "ep", hidden = true, act = function() episode("prev") end },
     { label = "Next episode",     group = "ep", hidden = true, act = function() episode("next") end },
@@ -140,7 +148,7 @@ local function text_width(label, size)
     return #label * size * 0.56
 end
 
-local render_menu, render_card, render_volume -- below
+local render_menu, render_card, render_volume, render_loading -- below
 local vol = nil -- { pct, muted, output, more } while the volume panel shows
 
 -- Everything drawn goes through here, so the Next episode card and the
@@ -155,6 +163,11 @@ local function set_osd(text)
         local v = assdraw.ass_new()
         render_volume(v)
         text = (text ~= "" and (text .. "\n") or "") .. v.text
+    end
+    if loading then
+        local l = assdraw.ass_new()
+        render_loading(l)
+        text = (text ~= "" and (text .. "\n") or "") .. l.text
     end
     mp.set_osd_ass(W, H, text)
 end
@@ -626,6 +639,53 @@ render_volume = function(a)
     end
 end
 
+-- ------------------------------------------------------------ loading
+
+-- Twelve dots in a ring, the brightest one going round.
+local spin_step = 0
+render_loading = function(a)
+    local n = 12
+    for i = 0, n - 1 do
+        local angle = i / n * 2 * math.pi
+        local x = W / 2 + math.sin(angle) * 46
+        local y = H / 2 - math.cos(angle) * 46
+        local age = (spin_step - i) % n -- 0 = the brightest
+        a:new_event()
+        a:append(string.format("{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&H%02X&}",
+            math.min(0xE0, 0x10 + age * 0x16)))
+        a:draw_start()
+        rect(a, x - 7, y - 7, 14, 14, 7)
+        a:draw_stop()
+    end
+end
+
+local spin_timer, spin_wait = nil, nil
+local function set_loading(on)
+    if spin_wait then spin_wait:kill(); spin_wait = nil end
+    if not on then
+        if spin_timer then spin_timer:kill(); spin_timer = nil end
+        if loading then loading = false; render() end
+        return
+    end
+    if loading then return end
+    -- Not for a refill that is over at once.
+    spin_wait = mp.add_timeout(0.25, function()
+        spin_wait = nil
+        loading = true
+        spin_timer = mp.add_periodic_timer(0.08, function()
+            spin_step = spin_step + 1
+            render()
+        end)
+        render()
+    end)
+end
+
+local function check_loading()
+    set_loading(mp.get_property_native("paused-for-cache", false)
+        and not mp.get_property_native("pause", false))
+end
+mp.observe_property("paused-for-cache", "native", check_loading)
+
 local vol_timer = nil
 local function vol_hide()
     if vol_timer then vol_timer:kill(); vol_timer = nil end
@@ -860,5 +920,6 @@ mp.add_forced_key_binding("BS", "catfyn-back-bs", on_back)
 -- Media keys keep working through the input conf; the bar follows pause.
 mp.observe_property("pause", "native", function(_, paused)
     if paused then show() elseif shown then arm_hide() end
+    check_loading()
     render()
 end)
