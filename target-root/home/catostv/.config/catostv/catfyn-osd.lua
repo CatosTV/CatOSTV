@@ -5,7 +5,10 @@
 --   controls hidden:  OK / Up / Down  show the controls (Pause focused)
 --                     Left / Right    scrub 10 s back / forward
 --                     Back            stop
---   controls shown:   Left / Right    move over the buttons
+--   controls shown:   Left / Right    move over the buttons: Previous /
+--                                     Next episode on the left (when there
+--                                     is one), −10 s / Pause / +10 s in the
+--                                     middle, Subtitles / Audio / Stop right
 --                     OK              press the button (Pause first)
 --                     Up              focus the seek bar: Left / Right scrub
 --                                     (10 s, 60 s when held), Down returns
@@ -46,7 +49,7 @@ local card = nil -- { kind = "next"|"still", label, left, focus, thumb }
 
 local W, H = 1920, 1080
 local shown = false
-local focus = 2 -- Pause
+local focus = 1 -- index into visible_buttons(); set to Pause when shown
 local on_bar = false -- the seek bar has focus
 local scrubs = 0 -- consecutive scrubs while held: step grows
 local hide_timer = nil
@@ -58,14 +61,39 @@ end
 
 local open_menu -- defined below (the buttons table refers to it)
 
+local function episode(which)
+    mp.commandv("script-message", "catfyn-episode", which)
+end
+
+-- Three groups: episodes on the left, playback in the middle, tracks on
+-- the right. The episode buttons show only when there is one
+-- (`catfyn-episodes PREV NEXT`, each "yes" or "no").
+local pause_button = { label = "Pause", group = "play", act = function() mp.commandv("cycle", "pause") end }
 local buttons = {
-    { label = "−10 s",     act = function() seek(-10) end },
-    { label = "Pause",     act = function() mp.commandv("cycle", "pause") end, toggles = true },
-    { label = "+10 s",     act = function() seek(10) end },
-    { label = "Subtitles", act = function() open_menu("sub") end },
-    { label = "Audio",     act = function() open_menu("audio") end },
-    { label = "Stop",      act = function() mp.commandv("quit") end },
+    { label = "Previous episode", group = "ep", hidden = true, act = function() episode("prev") end },
+    { label = "Next episode",     group = "ep", hidden = true, act = function() episode("next") end },
+    { label = "−10 s",            group = "play", act = function() seek(-10) end },
+    pause_button,
+    { label = "+10 s",            group = "play", act = function() seek(10) end },
+    { label = "Subtitles",        group = "track", act = function() open_menu("sub") end },
+    { label = "Audio",            group = "track", act = function() open_menu("audio") end },
+    { label = "Stop",             group = "track", act = function() mp.commandv("quit") end },
 }
+
+local function visible_buttons()
+    local v = {}
+    for _, b in ipairs(buttons) do
+        if not b.hidden then v[#v + 1] = b end
+    end
+    return v
+end
+
+local function pause_index()
+    for i, b in ipairs(visible_buttons()) do
+        if b == pause_button then return i end
+    end
+    return 1
+end
 
 -- "RRGGBB" → ASS "&HBBGGRR&"
 local function ass_rgb(hex)
@@ -135,19 +163,33 @@ local function render()
     local dur = mp.get_property_number("duration", 0)
     local paused = mp.get_property_native("pause", false)
     local title = mp.get_property("media-title", "")
-    buttons[2].label = paused and "Play" or "Pause"
+    pause_button.label = paused and "Play" or "Pause"
 
     local a = assdraw.ass_new()
-    -- Dark veil along the bottom.
+    -- A dark band along the bottom with a soft top edge.
     a:new_event()
-    a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H000000&\\1a&H50&}")
+    a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\blur80\\1c&H000000&\\1a&H48&}")
     a:draw_start()
-    a:rect_cw(0, 820, W, H)
+    a:rect_cw(-200, 820, W + 200, H + 200)
     a:draw_stop()
-    -- Title.
-    a:new_event()
+    -- Title: "Series · S1:E3 · Name" becomes a small "Series · S1:E3"
+    -- over the episode's name.
     local clean = title:gsub("[{}]", "")
-    a:append("{\\an1\\pos(120,900)\\bord0\\shad0\\fs40\\b1\\1c&HFFFFFF&\\1a&H10&}" .. clean)
+    local series, ep, name = clean:match("^(.-) · (S%d+:E%d+) · (.+)$")
+    if series then
+        a:new_event()
+        a:append("{\\an1\\pos(120,852)\\bord0\\shad0\\fs28\\1c&HFFFFFF&\\1a&H50&}" .. series .. " · " .. ep)
+        clean = name
+    end
+    a:new_event()
+    a:append("{\\an1\\pos(120,904)\\bord0\\shad0\\fs44\\b1\\1c&HFFFFFF&\\1a&H08&}" .. clean)
+    -- When it ends, like a TV guide.
+    if dur > 0 then
+        local speed = mp.get_property_number("speed", 1)
+        local ends = os.time() + math.max(0, dur - pos) / (speed > 0 and speed or 1)
+        a:new_event()
+        a:append("{\\an3\\pos(1800,904)\\bord0\\shad0\\fs28\\1c&HFFFFFF&\\1a&H40&}Ends at " .. os.date("%H:%M", math.floor(ends)))
+    end
     -- Progress track and fill.
     local tx, ty, tw, th = 120, 930, 1680, 8
     a:new_event()
@@ -180,17 +222,20 @@ local function render()
     a:append(string.format("{\\an7\\pos(120,950)\\bord0\\shad0\\fs28\\1c&HFFFFFF&\\1a&H30&}%s", clock(pos)))
     a:new_event()
     a:append(string.format("{\\an9\\pos(1800,950)\\bord0\\shad0\\fs28\\1c&HFFFFFF&\\1a&H30&}%s", clock(dur)))
-    -- Buttons, centred.
-    local size, pad, gap, bh = 30, 44, 18, 62
-    local widths, total = {}, 0
-    for i, b in ipairs(buttons) do
+    -- Buttons: episodes from the left edge, playback centred, tracks to
+    -- the right edge.
+    local size, pad, gap, bh = 28, 40, 16, 60
+    local shown_buttons = visible_buttons()
+    local widths, group_w = {}, { ep = 0, play = 0, track = 0 }
+    for i, b in ipairs(shown_buttons) do
         widths[i] = text_width(b.label, size) + pad
-        total = total + widths[i]
+        group_w[b.group] = group_w[b.group] + widths[i] + (group_w[b.group] > 0 and gap or 0)
     end
-    total = total + gap * (#buttons - 1)
-    local x = (W - total) / 2
+    local start = { ep = 120, play = (W - group_w.play) / 2, track = W - 120 - group_w.track }
     local by = 992
-    for i, b in ipairs(buttons) do
+    for i, b in ipairs(shown_buttons) do
+        local x = start[b.group]
+        start[b.group] = x + widths[i] + gap
         local focused = i == focus and not on_bar
         a:new_event()
         if focused then
@@ -205,7 +250,6 @@ local function render()
         a:append(string.format("{\\an5\\pos(%d,%d)\\bord0\\shad0\\fs%d\\b%d\\1c&H%s&\\1a&H00&}%s",
             math.floor(x + widths[i] / 2), math.floor(by + bh / 2), size, focused and 1 or 0,
             focused and "101018" or "FFFFFF", b.label))
-        x = x + widths[i] + gap
     end
     if menu then render_menu(a) end
     set_osd(a.text)
@@ -463,21 +507,16 @@ mp.register_script_message("catfyn-card", function(cmd, a1, a2, a3, a4, a5)
     render()
 end)
 
--- "Previous episode" (series only): the player loop says whether there is
--- one for what's playing (`catfyn-episodes yes|no`); the button sits after
--- "+10 s" and asks the loop for it (`script-message catfyn-episode prev`).
-local prev_button = {
-    label = "Previous episode",
-    act = function() mp.commandv("script-message", "catfyn-episode", "prev") end,
-}
-mp.register_script_message("catfyn-episodes", function(has_prev)
-    local present = buttons[4] == prev_button
-    if has_prev == "yes" and not present then
-        table.insert(buttons, 4, prev_button)
-    elseif has_prev ~= "yes" and present then
-        table.remove(buttons, 4)
+-- The player loop says which episode buttons apply:
+-- `catfyn-episodes PREV NEXT`, each "yes" or "no".
+mp.register_script_message("catfyn-episodes", function(has_prev, has_next)
+    local focused = visible_buttons()[focus]
+    buttons[1].hidden = has_prev ~= "yes"
+    buttons[2].hidden = has_next ~= "yes"
+    focus = pause_index()
+    for i, b in ipairs(visible_buttons()) do
+        if b == focused then focus = i end
     end
-    if focus > #buttons then focus = #buttons end
     if shown then render() end
 end)
 
@@ -534,6 +573,12 @@ local function arm_hide()
 end
 
 local function show()
+    -- Coming up from hidden (OK, an arrow, or a pause from a media key):
+    -- focus starts on Play / Pause.
+    if not shown then
+        focus = pause_index()
+        on_bar = false
+    end
     shown = true
     render()
     if not tick_timer then
@@ -547,14 +592,15 @@ local function on_ok()
     if card then card_ok(); return end
     if menu then menu_pick(); return end
     if not shown then
-        focus = 2
+        focus = pause_index()
         show()
         return
     end
     if on_bar then
         mp.commandv("cycle", "pause")
     else
-        buttons[focus].act()
+        local b = visible_buttons()[focus]
+        if b then b.act() end
     end
     render()
     arm_hide()
@@ -575,7 +621,7 @@ local function on_left()
     if shown and on_bar then
         scrub(-1)
     elseif shown then
-        focus = (focus - 2) % #buttons + 1
+        focus = (focus - 2) % #visible_buttons() + 1
         render()
         arm_hide()
     else
@@ -591,7 +637,7 @@ local function on_right()
     if shown and on_bar then
         scrub(1)
     elseif shown then
-        focus = focus % #buttons + 1
+        focus = focus % #visible_buttons() + 1
         render()
         arm_hide()
     else
@@ -609,7 +655,7 @@ local function on_up()
         return
     end
     if not shown then
-        focus = 2
+        focus = pause_index()
         show()
     elseif not on_bar then
         on_bar = true
@@ -630,7 +676,7 @@ local function on_down()
         return
     end
     if not shown then
-        focus = 2
+        focus = pause_index()
         show()
     elseif on_bar then
         on_bar = false

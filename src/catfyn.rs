@@ -353,14 +353,16 @@ pub fn spawn_reporter(
                 // The card's plan: the next episode in order, and where the
                 // credits start (server segments, else the last 30 s).
                 let (prev, following) = neighbours(&device, &a, &item);
-                let next = following.filter(|_| autoplay.enabled);
-                // The control bar's "Previous episode" button shows only when
-                // there is one.
+                let next = following.clone().filter(|_| autoplay.enabled);
+                // The control bar's Previous / Next episode buttons show only
+                // when there is one.
+                let yes_no = |o: &Option<Item>| if o.is_some() { "yes" } else { "no" };
                 let _ = conn.command(&[
                     Arg::Str("script-message-to"),
                     Arg::Str("catfyn_osd"),
                     Arg::Str("catfyn-episodes"),
-                    Arg::Str(if prev.is_some() { "yes" } else { "no" }),
+                    Arg::Str(yes_no(&prev)),
+                    Arg::Str(yes_no(&following)),
                 ]);
                 let segments = next
                     .as_ref()
@@ -390,18 +392,29 @@ pub fn spawn_reporter(
                     // "Previous episode" on the control bar: the one before
                     // starts here, from the beginning (where this one was is
                     // reported first).
-                    let wants_prev = msgs.iter().any(|m| {
-                        m.first().map(String::as_str) == Some("catfyn-episode")
-                            && m.get(1).map(String::as_str) == Some("prev")
-                    });
-                    if let Some(p) = prev.clone().filter(|_| wants_prev) {
+                    // "Next episode" plays the following one the same way, from
+                    // where it was left (usually the start).
+                    let wants = |which: &str| {
+                        msgs.iter().any(|m| {
+                            m.first().map(String::as_str) == Some("catfyn-episode")
+                                && m.get(1).map(String::as_str) == Some(which)
+                        })
+                    };
+                    let jump = match (wants("prev"), wants("next")) {
+                        (true, _) => prev.clone().map(|p| (p, true)),
+                        (_, true) => following.clone().map(|n| (n, false)),
+                        _ => None,
+                    };
+                    if let Some((p, from_start)) = jump {
                         send(&item, Report::Stopped, last.0, false);
                         card(&mut conn, &["hide"]);
                         let mut p = call(&device, &a, &jf::item_url(&a, &p.id), None)
                             .ok()
                             .and_then(|b| jf::parse_single_item(&b))
                             .unwrap_or(p);
-                        p.position = 0.0;
+                        if from_start {
+                            p.position = 0.0;
+                        }
                         match load_in_player(&mut conn, &device, &a, &p) {
                             Ok(subs) => {
                                 subs_to_add = subs;
