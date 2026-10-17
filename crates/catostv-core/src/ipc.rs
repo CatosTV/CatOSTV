@@ -46,10 +46,13 @@ pub enum ShellCommand {
     VolumeUp,
     VolumeDown,
     Mute,
+    /// The volume panel with its list of sound outputs open (Left on the
+    /// panel the Catfyn player draws).
+    VolumeOutputs,
 }
 
 impl ShellCommand {
-    pub const ALL: [ShellCommand; 19] = [
+    pub const ALL: [ShellCommand; 20] = [
         Self::Home,
         Self::Quick,
         Self::Settings,
@@ -69,6 +72,7 @@ impl ShellCommand {
         Self::VolumeUp,
         Self::VolumeDown,
         Self::Mute,
+        Self::VolumeOutputs,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -92,6 +96,7 @@ impl ShellCommand {
             Self::VolumeUp => "volume-up",
             Self::VolumeDown => "volume-down",
             Self::Mute => "mute",
+            Self::VolumeOutputs => "volume-outputs",
         }
     }
 

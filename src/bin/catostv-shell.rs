@@ -922,15 +922,23 @@ impl ShellApp {
                     | ShellCommand::VolumeUp
                     | ShellCommand::VolumeDown
                     | ShellCommand::Mute
+                    | ShellCommand::VolumeOutputs
             ) {
-                let (appliance, hidden) = {
+                let (appliance, hidden, player) = {
                     let w = lock(&watch);
                     (
                         w.appliance,
                         w.last_frame
                             .is_none_or(|t| t.elapsed() > Duration::from_millis(1500)),
+                        w.foreground.as_deref() == Some(catfyn::PLAYER_ID),
                     )
                 };
+                // A film plays: its control bar draws the volume panel, so
+                // the window never comes over the film (two 4K layers to
+                // blend made the picture stutter, and it flashed).
+                if appliance && hidden && player && catfyn::player_volume(cmd) {
+                    return;
+                }
                 if appliance && hidden {
                     let _ = compositor::shell_over_app(&mut SystemRunner, true);
                     let _ = tx.send(Msg::OverApp(cmd));
@@ -1068,9 +1076,10 @@ impl ShellApp {
     fn volume_key(&mut self, ctx: &egui::Context, cmd: ShellCommand) {
         use catostv_core::volume_panel::{STEP, VolumePanel};
         let e = match cmd {
-            ShellCommand::VolumeUp => Effect::VolumeStep(STEP),
-            ShellCommand::VolumeDown => Effect::VolumeStep(-STEP),
-            _ => Effect::ToggleMute,
+            ShellCommand::VolumeUp => Some(Effect::VolumeStep(STEP)),
+            ShellCommand::VolumeDown => Some(Effect::VolumeStep(-STEP)),
+            ShellCommand::VolumeOutputs => None,
+            _ => Some(Effect::ToggleMute),
         };
         if self.shell.volume.is_none() {
             self.shell.volume = Some(VolumePanel::default());
@@ -1078,8 +1087,21 @@ impl ShellApp {
             // The outputs list wants fresh sinks.
             self.refresh_soon();
         }
+        if cmd == ShellCommand::VolumeOutputs
+            && let Some(p) = self.shell.volume.as_mut()
+        {
+            p.outputs = Some(
+                self.sys
+                    .sinks
+                    .iter()
+                    .position(|s| s.is_default)
+                    .unwrap_or(0),
+            );
+        }
         self.keep_volume_panel();
-        self.apply(ctx, e);
+        if let Some(e) = e {
+            self.apply(ctx, e);
+        }
     }
 
     /// Time for the screensaver: it is on, CatosTV is in front with nothing
@@ -2577,7 +2599,10 @@ impl ShellApp {
                 }
             }
             Msg::Ipc(
-                cmd @ (ShellCommand::VolumeUp | ShellCommand::VolumeDown | ShellCommand::Mute),
+                cmd @ (ShellCommand::VolumeUp
+                | ShellCommand::VolumeDown
+                | ShellCommand::Mute
+                | ShellCommand::VolumeOutputs),
                 _,
             ) => self.volume_key(ctx, cmd),
             Msg::Ipc(ShellCommand::Quick, _) if self.over_app.is_some() => {

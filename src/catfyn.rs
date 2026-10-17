@@ -168,6 +168,55 @@ pub fn player_entry_with(
     })
 }
 
+/// A volume key while a film plays: change the volume and have the
+/// player's control bar draw the panel (`catfyn-volume PCT MUTED OUTPUT
+/// MORE`, see catfyn-osd.lua). `volume-outputs` is not handled here (the
+/// list is the shell's own). False when the player does not answer: the
+/// shell's panel shows instead.
+pub fn player_volume(cmd: catostv_core::ipc::ShellCommand) -> bool {
+    use catostv_core::audio;
+    use catostv_core::ipc::ShellCommand;
+    use catostv_core::volume_panel::{STEP, sink_label};
+    // One change at a time, so quick presses land in order.
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let socket = jf::player_socket();
+    // The player answers first: the volume changes only once.
+    if mpv::ipc_request(&socket, &[Arg::Str("client_name")]).is_err() {
+        return false;
+    }
+    let mut r = SystemRunner;
+    let state = match cmd {
+        ShellCommand::VolumeUp => audio::step(&mut r, STEP),
+        ShellCommand::VolumeDown => audio::step(&mut r, -STEP),
+        ShellCommand::Mute => audio::toggle_mute(&mut r),
+        _ => return false,
+    };
+    let Ok(v) = state else {
+        return false;
+    };
+    let sinks = audio::sinks(&mut r).unwrap_or_default();
+    let output = sinks
+        .iter()
+        .position(|s| s.is_default)
+        .map(|i| sink_label(&sinks, i))
+        .unwrap_or_default();
+    let yes_no = |b: bool| if b { "yes" } else { "no" };
+    let _ = mpv::ipc_request(
+        &socket,
+        &[
+            Arg::Str("script-message-to"),
+            Arg::Str("catfyn_osd"),
+            Arg::Str("catfyn-volume"),
+            Arg::Str(&v.percent.to_string()),
+            Arg::Str(yes_no(v.muted)),
+            Arg::Str(&output),
+            Arg::Str(yes_no(sinks.len() > 1)),
+        ],
+    );
+    true
+}
+
 /// "Series · S1 · E3 · Episode name", or the movie's name.
 fn play_title(item: &Item) -> String {
     match item.episode_label() {

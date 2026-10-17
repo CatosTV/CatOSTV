@@ -27,6 +27,11 @@
 --   `script-message catfyn-card-result play|cancel|continue|stop`. Every
 --   key also sends `catfyn-input` (the "still watching" counter). New
 --   subtitle names for the next episode arrive as `catfyn-subs A;B`.
+--   Volume: the shell sends `catfyn-volume PCT MUTED OUTPUT MORE` after
+--   every volume key (MUTED and MORE "yes"/"no", MORE = other outputs to
+--   pick from) and the panel is drawn here, so the shell's window never
+--   comes over the film. While it shows: Up / Down change the volume, OK
+--   mutes, Left opens the outputs list (the shell's), Back closes it.
 --
 -- Drawn as ASS on a 1920x1080 canvas (scaled by mpv), accent from
 -- --script-opts=catfyn_osd-accent=RRGGBB.
@@ -135,15 +140,21 @@ local function text_width(label, size)
     return #label * size * 0.56
 end
 
-local render_menu, render_card -- below
+local render_menu, render_card, render_volume -- below
+local vol = nil -- { pct, muted, output, more } while the volume panel shows
 
--- Everything drawn goes through here, so the Next episode card is drawn
--- over whatever else shows.
+-- Everything drawn goes through here, so the Next episode card and the
+-- volume panel are drawn over whatever else shows.
 local function set_osd(text)
     if card then
         local c = assdraw.ass_new()
         render_card(c)
         text = (text ~= "" and (text .. "\n") or "") .. c.text
+    end
+    if vol then
+        local v = assdraw.ass_new()
+        render_volume(v)
+        text = (text ~= "" and (text .. "\n") or "") .. v.text
     end
     mp.set_osd_ass(W, H, text)
 end
@@ -528,6 +539,143 @@ mp.register_script_message("catfyn-subs", function(names)
     end
 end)
 
+-- ------------------------------------------------------------- volume
+
+-- The shell's volume panel, at the right edge: the mute button on top,
+-- the level filled from the bottom, the percent under it, and the output
+-- it plays on beside it (with a ‹ when Left can change it).
+render_volume = function(a)
+    local w, h = 96, 420
+    local x, y = W - 42 - w, 330
+    local cx = x + w / 2
+    a:new_event()
+    a:append("{\\an7\\pos(0,0)\\bord3\\shad0\\1c&H101018&\\1a&H28&\\3c&HFFFFFF&\\3a&H69&}")
+    a:draw_start()
+    rect(a, x, y, w, h, w / 2)
+    a:draw_stop()
+    -- Mute: lit while muted.
+    local my = y + 54
+    a:new_event()
+    if vol.muted then
+        a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c" .. ACCENT .. "\\1a&H00&}")
+    else
+        a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&HED&}")
+    end
+    a:draw_start()
+    rect(a, cx - 33, my - 33, 66, 66, 33)
+    a:draw_stop()
+    -- A speaker; struck through while muted.
+    local ink = vol.muted and "101018" or "FFFFFF"
+    a:new_event()
+    a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H" .. ink .. "&\\1a&H00&}")
+    a:draw_start()
+    a:move_to(cx - 15, my - 7)
+    a:line_to(cx - 7, my - 7)
+    a:line_to(cx + 3, my - 15)
+    a:line_to(cx + 3, my + 15)
+    a:line_to(cx - 7, my + 7)
+    a:line_to(cx - 15, my + 7)
+    if vol.muted then
+        a:move_to(cx + 7, my - 9)
+        a:line_to(cx + 10, my - 9)
+        a:line_to(cx + 19, my + 9)
+        a:line_to(cx + 16, my + 9)
+    else
+        rect(a, cx + 8, my - 7, 4, 14, 2)
+        rect(a, cx + 15, my - 12, 4, 24, 2)
+    end
+    a:draw_stop()
+    -- The level.
+    local tw, ty, th = 42, y + 105, 240
+    a:new_event()
+    a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&HE9&}")
+    a:draw_start()
+    rect(a, cx - tw / 2, ty, tw, th, tw / 2)
+    a:draw_stop()
+    if vol.pct > 0 then
+        local fh = math.max(th * math.min(vol.pct, 100) / 100, tw)
+        a:new_event()
+        a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c" ..
+            (vol.muted and "&H8C8C8C&" or ACCENT) .. "\\1a&H00&}")
+        a:draw_start()
+        rect(a, cx - tw / 2, ty + th - fh, tw, fh, tw / 2)
+        a:draw_stop()
+    end
+    a:new_event()
+    a:append(string.format("{\\an5\\pos(%d,%d)\\bord0\\shad0\\fs26\\b1\\1c&H%s&\\1a&H00&}%d",
+        cx, y + h - 39, vol.muted and "8C8C8C" or "FFFFFF", vol.pct))
+    -- The output.
+    if vol.output ~= "" then
+        local name = fit(clean(vol.output), 22, 340)
+        local cw = (vol.more and 76 or 48) + text_width(name, 22)
+        local left = x - 18 - cw
+        local ly = y + h - 37
+        a:new_event()
+        a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H101018&\\1a&H28&}")
+        a:draw_start()
+        rect(a, left, y + h - 75, cw, 75, 37)
+        a:draw_stop()
+        local tx = left + 26
+        if vol.more then
+            a:new_event()
+            a:append(string.format("{\\an4\\pos(%d,%d)\\bord0\\shad0\\fs30\\1c&HFFFFFF&\\1a&H70&}‹", tx, ly))
+            tx = tx + 30
+        end
+        a:new_event()
+        a:append(string.format("{\\an4\\pos(%d,%d)\\bord0\\shad0\\fs22\\1c&HFFFFFF&\\1a&H30&}%s", tx, ly, name))
+    end
+end
+
+local vol_timer = nil
+local function vol_hide()
+    if vol_timer then vol_timer:kill(); vol_timer = nil end
+    vol = nil
+    render()
+end
+
+local function vol_arm()
+    if vol_timer then vol_timer:kill() end
+    vol_timer = mp.add_timeout(3, vol_hide)
+end
+
+mp.register_script_message("catfyn-volume", function(pct, muted, output, more)
+    vol = {
+        pct = tonumber(pct) or 0,
+        muted = muted == "yes",
+        output = output or "",
+        more = more == "yes",
+    }
+    vol_arm()
+    render()
+end)
+
+-- The shell changes the volume (and answers with `catfyn-volume`).
+local function ctl(cmd)
+    mp.command_native_async({ name = "subprocess", args = { "catostv-ctl", cmd },
+        playback_only = false }, function() end)
+end
+
+-- A key while the volume panel shows: it is the panel's.
+local function vol_key(k)
+    if k == "up" then
+        ctl("volume-up")
+    elseif k == "down" then
+        ctl("volume-down")
+    elseif k == "ok" then
+        ctl("mute")
+    elseif k == "left" then
+        if vol.more then
+            vol_hide()
+            ctl("volume-outputs")
+        end
+        return
+    elseif k == "back" then
+        vol_hide()
+        return
+    end
+    vol_arm()
+end
+
 local function card_ok()
     if card.kind == "still" then
         card_result(card.focus == 1 and "continue" or "stop")
@@ -588,6 +736,7 @@ local function show()
 end
 
 local function on_ok()
+    if vol then vol_key("ok"); return end
     notify()
     if card then card_ok(); return end
     if menu then menu_pick(); return end
@@ -615,6 +764,7 @@ local function scrub(dir)
 end
 
 local function on_left()
+    if vol then vol_key("left"); return end
     notify()
     if card then card_move(-1); return end
     if menu then return end
@@ -631,6 +781,7 @@ local function on_left()
 end
 
 local function on_right()
+    if vol then vol_key("right"); return end
     notify()
     if card then card_move(1); return end
     if menu then return end
@@ -647,6 +798,7 @@ local function on_right()
 end
 
 local function on_up()
+    if vol then vol_key("up"); return end
     notify()
     if card then return end
     if menu then
@@ -668,6 +820,7 @@ local function on_up()
 end
 
 local function on_down()
+    if vol then vol_key("down"); return end
     notify()
     if card then return end
     if menu then
@@ -688,6 +841,7 @@ local function on_down()
 end
 
 local function on_back()
+    if vol then vol_key("back"); return end
     notify()
     if card then card_result("cancel"); return end
     if menu then menu = nil; render(); return end

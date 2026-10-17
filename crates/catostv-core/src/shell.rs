@@ -1586,7 +1586,8 @@ impl Shell {
             ShellCommand::PadCaptured
             | ShellCommand::VolumeUp
             | ShellCommand::VolumeDown
-            | ShellCommand::Mute => {}
+            | ShellCommand::Mute
+            | ShellCommand::VolumeOutputs => {}
         }
         vec![]
     }
