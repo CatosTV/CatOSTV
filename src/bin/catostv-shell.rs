@@ -92,7 +92,9 @@ enum Msg {
     /// The stuck Android session has stopped: start a fresh one.
     AndroidRestarted,
     /// Quick settings key while an app was in front.
-    QuickOverApp,
+    /// Quick settings or a volume key while an app is in front: the window
+    /// has just been put on top of the app.
+    OverApp(ShellCommand),
     /// Catfyn results.
     FinServers(Vec<jf::Server>),
     FinLogin(Result<jf::Account, String>),
@@ -150,6 +152,10 @@ struct Watch {
     /// The Android app CatosTV opened last, and when: an app that
     /// never comes to the front is noticed after [`ANDROID_START_GRACE`].
     android_opened: Option<(String, Instant)>,
+    /// Draw nothing, since then: the window is about to go behind an app,
+    /// and the picture it leaves there must not flash up when it next
+    /// comes over the app. Ends when the window has the keys again.
+    blank: Option<Instant>,
 }
 
 /// How long an Android app may take to come to the front after CatosTV
@@ -555,6 +561,19 @@ struct ShellApp {
     pending_scale: Option<(String, f32, Instant)>,
     first_snapshot: bool,
     was_focused: bool,
+    /// Quick settings or the volume panel is on top of an app (the window
+    /// is on the App desktop and draws only that), with the page and
+    /// whether Catfyn or Files was open when it came: when it closes on
+    /// a different screen, CatosTV comes to the front instead of the app.
+    over_app: Option<(Page, bool)>,
+    /// What closes it goes to CatosTV, not back to the app.
+    leave_to_shell: bool,
+    /// Leaving the app: back to it (true) or to CatosTV, after this many
+    /// more frames.
+    leaving: Option<(bool, u8)>,
+    /// The volume panel closes then, and since when it shows.
+    volume_until: Option<Instant>,
+    volume_since: Instant,
     appliance: bool,
     home: PathBuf,
 }
@@ -842,6 +861,11 @@ impl ShellApp {
             refits: 0,
             first_snapshot: true,
             was_focused: true,
+            over_app: None,
+            leave_to_shell: false,
+            leaving: None,
+            volume_until: None,
+            volume_since: Instant::now(),
             appliance,
             home: home_dir(),
         };
@@ -865,14 +889,27 @@ impl ShellApp {
                     hide_android_window();
                 }
             }
-            // Quick settings asked for while an app is in front: Back
-            // returns to that app.
-            if matches!(cmd, ShellCommand::Quick) {
-                let hidden = lock(&watch)
-                    .last_frame
-                    .is_none_or(|t| t.elapsed() > Duration::from_millis(1500));
-                if hidden {
-                    let _ = tx.send(Msg::QuickOverApp);
+            // Quick settings or a volume key while an app is in front:
+            // they show on top of the app. The window is moved there from
+            // here, its UI loop is paused while it is hidden.
+            if matches!(
+                cmd,
+                ShellCommand::Quick
+                    | ShellCommand::VolumeUp
+                    | ShellCommand::VolumeDown
+                    | ShellCommand::Mute
+            ) {
+                let (appliance, hidden) = {
+                    let w = lock(&watch);
+                    (
+                        w.appliance,
+                        w.last_frame
+                            .is_none_or(|t| t.elapsed() > Duration::from_millis(1500)),
+                    )
+                };
+                if appliance && hidden {
+                    let _ = compositor::shell_over_app(&mut SystemRunner, true);
+                    let _ = tx.send(Msg::OverApp(cmd));
                     ctx.request_repaint();
                     return;
                 }
@@ -957,6 +994,50 @@ impl ShellApp {
                         if self.android_running.contains(package)),
             })
             .collect()
+    }
+
+    /// Quick settings over the app in front, with that app's controls.
+    fn quick_over_app(&mut self) {
+        self.shell.open_quick(true);
+        // Which app, and is it full screen (for the controls row).
+        let name = self
+            .foreground
+            .as_deref()
+            .and_then(|f| self.apps.iter().find(|a| a.id == f))
+            .map(|a| a.name.clone())
+            .or_else(|| self.foreground.clone())
+            .unwrap_or_else(|| "App".into());
+        let fullscreen = self
+            .foreground
+            .as_deref()
+            .and_then(|f| self.window_pattern(f))
+            .and_then(|w| catostv_core::toplevel::is_fullscreen(&w))
+            .unwrap_or(false);
+        self.shell.quick_app = Some((name, fullscreen));
+    }
+
+    /// A volume key: change the level and show the panel (or keep it).
+    fn volume_key(&mut self, ctx: &egui::Context, cmd: ShellCommand) {
+        use catostv_core::volume_panel::{STEP, VolumePanel};
+        let e = match cmd {
+            ShellCommand::VolumeUp => Effect::VolumeStep(STEP),
+            ShellCommand::VolumeDown => Effect::VolumeStep(-STEP),
+            _ => Effect::ToggleMute,
+        };
+        if self.shell.volume.is_none() {
+            self.shell.volume = Some(VolumePanel::default());
+            self.volume_since = Instant::now();
+            // The outputs list wants fresh sinks.
+            self.refresh_soon();
+        }
+        self.keep_volume_panel();
+        self.apply(ctx, e);
+    }
+
+    fn keep_volume_panel(&mut self) {
+        if let Some(p) = &self.shell.volume {
+            self.volume_until = Some(Instant::now() + Duration::from_secs_f32(p.secs()));
+        }
     }
 
     fn show_toast(&mut self, ctx: &egui::Context, text: &str) {
@@ -1047,6 +1128,8 @@ impl ShellApp {
                 AppSource::Android { package } => Some(package.clone()),
                 _ => None,
             });
+        let watch = self.watch.clone();
+        let (_, ui) = self.jobs.sender();
         self.jobs.spawn(move || {
             // Android shows every app in Waydroid's one full-screen window
             // which takes seconds to appear on a cold start;
@@ -1069,7 +1152,15 @@ impl ShellApp {
             if let Some(pkg) = package.as_deref().filter(|_| android) {
                 wait_for_android_top(pkg, ANDROID_TOP_WAIT);
             }
+            // A blank frame first: what the window shows when it goes
+            // behind the app is what flashes up when it next comes over it.
+            lock(&watch).blank = Some(Instant::now());
+            ui.request_repaint();
+            std::thread::sleep(Duration::from_millis(60));
             let switched = compositor::show_app_workspace(&mut SystemRunner, true);
+            if switched.is_err() {
+                lock(&watch).blank = None;
+            }
             if let Some(w) = window {
                 if android {
                     // Raised only if it is not in front already; never
@@ -1495,6 +1586,7 @@ impl ShellApp {
                 Msg::Volume(audio::toggle_mute(&mut SystemRunner).map_err(|e| e.to_string()))
             }),
             Effect::Power(action) => {
+                self.leave_to_shell = true;
                 if action == power::PowerAction::Suspend {
                     if self
                         .wake
@@ -1871,6 +1963,9 @@ impl ShellApp {
             Effect::KdePing(id) => self.job(move |r| kdeconnect::ping(r, &id)),
             Effect::KdeUnpair(id) => self.job(move |r| kdeconnect::unpair(r, &id)),
             Effect::AppWindow(action) => {
+                if action == catostv_core::toplevel::WindowAction::Close {
+                    self.leave_to_shell = true;
+                }
                 // Android's one full-screen window is never closed or
                 // resized from CatosTV: once the compositor closes it, the
                 // display HAL ignores that Android task until it ends, and
@@ -1951,6 +2046,8 @@ impl ShellApp {
                 None => self.open_fin(ctx, None),
             },
             Effect::Fin(e) => self.fin_effect(ctx, e),
+            // Over the app already: closing what shows goes back to it.
+            Effect::ReturnToApp if self.over_app.is_some() => {}
             Effect::ReturnToApp => match self.foreground.clone() {
                 Some(id) => self.show_app(&id),
                 None => self.shell.go_home(),
@@ -2371,8 +2468,21 @@ impl ShellApp {
                     }
                 }
             }
+            Msg::Ipc(
+                cmd @ (ShellCommand::VolumeUp | ShellCommand::VolumeDown | ShellCommand::Mute),
+                _,
+            ) => self.volume_key(ctx, cmd),
+            Msg::Ipc(ShellCommand::Quick, _) if self.over_app.is_some() => {
+                self.mapper.reset();
+                self.quick_over_app();
+            }
             Msg::Ipc(cmd, _) => {
                 self.mapper.reset();
+                // Home, the power key and the like have already taken the
+                // window back to the CatosTV desktop (rc.xml).
+                self.over_app = None;
+                self.leaving = None;
+                lock(&self.watch).blank = None;
                 // Home (key, remote, controller Guide) from an Android app:
                 // tell Android too, or the app keeps playing unseen.
                 if cmd == ShellCommand::Home && self.foreground_android().is_some() {
@@ -2394,15 +2504,8 @@ impl ShellApp {
                 }
                 self.refresh_soon();
             }
-            Msg::Volume(Ok(v)) => {
-                self.sys.volume = Some(v);
-                let text = if v.muted {
-                    "Muted".to_string()
-                } else {
-                    format!("Volume {}%", v.percent)
-                };
-                self.show_toast(ctx, &text);
-            }
+            // The panel, Quick settings or Settings shows the level.
+            Msg::Volume(Ok(v)) => self.sys.volume = Some(v),
             Msg::BtScan(r) => self.shell.on_bt_scan(r),
             Msg::BtPaired(mac, r) => {
                 for e in self.shell.on_bt_paired(&mac, r) {
@@ -2593,24 +2696,22 @@ impl ShellApp {
                     self.fin_effect(ctx, FinEffect::LoadHome);
                 }
             }
-            Msg::QuickOverApp => {
+            Msg::OverApp(cmd) => {
                 self.mapper.reset();
-                self.shell.open_quick(true);
-                // Which app, and is it full screen (for the controls row).
-                let name = self
-                    .foreground
-                    .as_deref()
-                    .and_then(|f| self.apps.iter().find(|a| a.id == f))
-                    .map(|a| a.name.clone())
-                    .or_else(|| self.foreground.clone())
-                    .unwrap_or_else(|| "App".into());
-                let fullscreen = self
-                    .foreground
-                    .as_deref()
-                    .and_then(|f| self.window_pattern(f))
-                    .and_then(|w| catostv_core::toplevel::is_fullscreen(&w))
-                    .unwrap_or(false);
-                self.shell.quick_app = Some((name, fullscreen));
+                lock(&self.watch).blank = None;
+                self.leaving = None;
+                self.leave_to_shell = false;
+                if self.over_app.is_none() {
+                    self.over_app = Some((
+                        self.shell.page,
+                        self.shell.fin.is_some() || self.shell.files.is_some(),
+                    ));
+                }
+                if cmd == ShellCommand::Quick {
+                    self.quick_over_app();
+                } else {
+                    self.volume_key(ctx, cmd);
+                }
             }
             Msg::AndroidHome => {
                 // Backed out of an Android app: an app that was open
@@ -3026,6 +3127,12 @@ impl ShellApp {
 }
 
 impl eframe::App for ShellApp {
+    // The window is transparent: every screen paints its own backdrop,
+    // and over an app only the panel is drawn.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0; 4]
+    }
+
     /// Runs every frame while the shell is visible. While its window is on
     /// the hidden desktop it may not run at all (no frame callbacks), which
     /// is why app exits are handled by the app watcher thread.
@@ -3076,6 +3183,19 @@ impl eframe::App for ShellApp {
         if !focused && self.was_focused {
             self.mapper.reset();
         }
+        // The window has the keys again (Home, or over the app): show
+        // something again. Also when it never lost them (no app came).
+        {
+            let mut w = lock(&self.watch);
+            if focused
+                && (!self.was_focused
+                    || w.blank
+                        .is_some_and(|t| t.elapsed() > Duration::from_millis(1500)))
+                && self.leaving.is_none()
+            {
+                w.blank = None;
+            }
+        }
         self.was_focused = focused;
 
         // Just woke from Sleep: the waking key (and any pressed while the
@@ -3118,6 +3238,9 @@ impl eframe::App for ShellApp {
         {
             actions.clear();
             self.end_launch();
+        }
+        if !actions.is_empty() {
+            self.keep_volume_panel();
         }
         let mut p = self.pointer.collect(&ctx);
         if quiet {
@@ -3164,6 +3287,29 @@ impl eframe::App for ShellApp {
         }
         for e in effects {
             self.apply(&ctx, e);
+        }
+        if self.shell.volume.is_none() {
+            self.volume_until = None;
+        } else if self.volume_until.is_some_and(|t| Instant::now() >= t) {
+            self.shell.volume = None;
+            self.volume_until = None;
+        }
+        // Over an app and nothing left to show: back to the app, or to
+        // CatosTV when something there was opened.
+        if let Some((page, media)) = self.over_app
+            && self.leaving.is_none()
+            && self.shell.volume.is_none()
+            && self.shell.overlay().is_none()
+        {
+            let same = self.shell.page == page
+                && (self.shell.fin.is_some() || self.shell.files.is_some()) == media;
+            let to_app = same && !std::mem::take(&mut self.leave_to_shell);
+            self.leaving = Some((to_app, 2));
+            if to_app {
+                lock(&self.watch).blank = Some(Instant::now());
+            } else {
+                self.over_app = None;
+            }
         }
         if self.mapper.needs_tick() {
             ctx.request_repaint();
@@ -3289,6 +3435,9 @@ impl eframe::App for ShellApp {
                 toast,
                 confirm_left,
                 now: keys::now(&ctx),
+                over_app: self.over_app.is_some(),
+                blank: lock(&self.watch).blank.is_some(),
+                volume_t: self.volume_since.elapsed().as_secs_f32() / 0.22,
             },
         );
         // The Home backdrop drifts slowly: keep frames coming while
@@ -3313,6 +3462,8 @@ impl eframe::App for ShellApp {
                 )
         });
         let busy = toast.is_some()
+            || self.shell.volume.is_some()
+            || self.leaving.is_some()
             || fin_loading
             || !self.fin_fetching.is_empty()
             || self.launching.is_some()
@@ -3326,6 +3477,27 @@ impl eframe::App for ShellApp {
         self.fetch_fin_images();
         lock(&self.watch).last_frame = Some(Instant::now());
         self.sync_watch();
+        // A couple of frames after leaving began (blank, or CatosTV drawn
+        // in full again), the window moves.
+        if let Some((to_app, n)) = self.leaving {
+            if n > 0 {
+                self.leaving = Some((to_app, n - 1));
+                ctx.request_repaint();
+            } else {
+                self.leaving = None;
+                self.over_app = None;
+                match self.foreground.clone().filter(|_| to_app) {
+                    Some(id) => {
+                        let _ = compositor::shell_off_app(&mut SystemRunner, self.appliance);
+                        self.show_app(&id);
+                    }
+                    None => {
+                        lock(&self.watch).blank = None;
+                        let _ = compositor::show_shell_workspace(&mut SystemRunner, self.appliance);
+                    }
+                }
+            }
+        }
         if busy {
             ctx.request_repaint();
         }

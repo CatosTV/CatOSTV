@@ -4,10 +4,9 @@
 //! Used by labwc key bindings (Home, Control Center, power key, volume).
 //! Exit codes: 0 sent, 1 shell not reachable / volume failed, 2 usage error.
 //!
-//! `volume-up`, `volume-down` and `mute` are handled here, not by the shell
-//! (whose UI loop is paused while an app is in front): they change the
-//! default output with `wpctl` and show the level as an on-screen bar over
-//! any app (`notify-send`, drawn by mako).
+//! `volume-up`, `volume-down` and `mute` go to the shell, which shows its
+//! volume panel (over apps too). Without a shell they are handled here:
+//! `wpctl`, and the level as a notification drawn by mako.
 
 use catostv_core::audio;
 use catostv_core::ipc::{self, ShellCommand};
@@ -73,18 +72,22 @@ fn volume(arg: &str) -> Option<i32> {
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_else(|| "home".into());
     if matches!(arg.as_str(), "-h" | "--help" | "help") {
-        println!("{} | volume-up | volume-down | mute", ShellCommand::usage());
+        println!("{}", ShellCommand::usage());
         println!("socket: {}", ipc::socket_path().display());
         return;
     }
-    if let Some(code) = volume(&arg) {
-        std::process::exit(code);
-    }
     let Some(cmd) = ShellCommand::parse(&arg) else {
-        eprintln!("{} | volume-up | volume-down | mute", ShellCommand::usage());
+        eprintln!("{}", ShellCommand::usage());
         std::process::exit(2);
     };
+    let is_volume = matches!(
+        cmd,
+        ShellCommand::VolumeUp | ShellCommand::VolumeDown | ShellCommand::Mute
+    );
     if let Err(e) = ipc::send(cmd) {
+        if is_volume && let Some(code) = volume(&arg) {
+            std::process::exit(code);
+        }
         eprintln!("catostv-ctl: {e}");
         std::process::exit(1);
     }

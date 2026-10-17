@@ -977,6 +977,8 @@ pub struct Shell {
     /// Back goes back into that app, and a row of controls for
     /// that app sits at the top: back, full screen, close.
     pub quick_over_app: bool,
+    /// The volume panel, on top of everything while it shows.
+    pub volume: Option<crate::volume_panel::VolumePanel>,
     /// The app behind Quick settings: (name, is full screen).
     pub quick_app: Option<(String, bool)>,
     /// KDE Connect pairing requests already shown as a pop-up.
@@ -1071,6 +1073,7 @@ impl Shell {
             recents_close: false,
             recents_card: 0,
             quick_over_app: false,
+            volume: None,
             quick_app: None,
             kde_prompted: Vec::new(),
             fin: None,
@@ -1104,6 +1107,9 @@ impl Shell {
     /// True while an on-screen keyboard has focus (typed characters and
     /// Backspace edit text instead of navigating).
     pub fn text_mode(&self) -> bool {
+        if self.volume.is_some() {
+            return false;
+        }
         if self.overlay().is_none()
             && let Some(f) = &self.fin
         {
@@ -1160,6 +1166,7 @@ impl Shell {
 
     pub fn go_home(&mut self) {
         self.quick_over_app = false;
+        self.volume = None;
         self.fin = None;
         self.files = None;
         self.home_media = None;
@@ -1389,6 +1396,21 @@ impl Shell {
 
     pub fn handle(&mut self, action: Action, ctx: &ShellContext) -> Vec<Effect> {
         self.clamp(ctx);
+        if action != Action::Home
+            && let Some(p) = self.volume.as_mut()
+        {
+            use crate::volume_panel::PanelEffect;
+            let mut out = Vec::new();
+            for e in p.handle(action, &ctx.sys.sinks) {
+                match e {
+                    PanelEffect::Step(d) => out.push(Effect::VolumeStep(d)),
+                    PanelEffect::ToggleMute => out.push(Effect::ToggleMute),
+                    PanelEffect::SetSink(id) => out.push(Effect::SetSink(id)),
+                    PanelEffect::Close => self.volume = None,
+                }
+            }
+            return out;
+        }
         if action == Action::Home {
             self.go_home();
             return vec![];
@@ -1529,8 +1551,12 @@ impl Shell {
             | ShellCommand::NavOk
             | ShellCommand::NavBack
             | ShellCommand::NavMenu => {}
-            // Handled by the GUI (it reads the captured code).
-            ShellCommand::PadCaptured => {}
+            // Handled by the GUI (it reads the captured code, it changes
+            // the volume and shows the panel).
+            ShellCommand::PadCaptured
+            | ShellCommand::VolumeUp
+            | ShellCommand::VolumeDown
+            | ShellCommand::Mute => {}
         }
         vec![]
     }

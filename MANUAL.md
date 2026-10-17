@@ -12,6 +12,7 @@ issue.
 - [Your phone: remote, casting, KDE Connect](#your-phone-remote-casting-kde-connect)
 - [Controllers and remotes](#controllers-and-remotes)
 - [Quick settings](#quick-settings)
+- [Volume](#volume)
 - [Settings, page by page](#settings-page-by-page)
 - [Updates](#updates)
 - [For tinkerers: Debug SSH](#for-tinkerers-debug-ssh)
@@ -240,8 +241,9 @@ Bluetooth**.
 ## Quick settings
 
 Press **F10** (keyboard), **X / Select** (controller) or the **Settings**
-key (TV remote). It works over apps too, and then it also has *Back to app*,
-*Full screen* and *Close* for the app.
+key (TV remote). It works over apps too: it opens on top of whatever is
+playing, and then it also has *Back to app*, *Full screen* and *Close* for
+the app.
 
 - **Network**: shows *Ethernet* or your Wi-Fi network. OK opens it: Wi-Fi
   on/off, nearby networks (OK to join), and **Ethernet** with its details
@@ -252,6 +254,20 @@ key (TV remote). It works over apps too, and then it also has *Back to app*,
   keyboard, remote or controller wakes the TV from Sleep (with a USB-CEC
   adapter, the TV's own remote too).
 - The volume bar underneath: Left/Right to change, OK to mute.
+
+---
+
+## Volume
+
+The volume keys bring up a slider on the right edge of the screen, over
+apps too. While it's there:
+
+- **Up/Down** or the volume keys change the volume. Turning it up also
+  unmutes.
+- **OK** mutes and unmutes.
+- **Left** lists your sound outputs (TV, Bluetooth headphones and so on).
+  Pick one with OK.
+- **Back** closes it. It also goes away by itself after a few seconds.
 
 ---
 

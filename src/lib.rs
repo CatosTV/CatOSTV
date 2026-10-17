@@ -44,6 +44,8 @@ pub fn native_options(
         .with_app_id(app_id)
         .with_decorations(windowed)
         .with_fullscreen(!windowed)
+        // The shell draws Quick settings and the volume panel over apps.
+        .with_transparent(true)
         .with_inner_size([1280.0, 720.0]);
     eframe::NativeOptions {
         viewport,

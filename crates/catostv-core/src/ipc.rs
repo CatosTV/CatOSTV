@@ -42,10 +42,14 @@ pub enum ShellCommand {
     /// `catostv-inputd` captured a controller button for Settings →
     /// Controller navigation (the code is in `pad::CAPTURED_FILE`).
     PadCaptured,
+    /// The volume keys (labwc runs `catostv-ctl volume-up` and so on).
+    VolumeUp,
+    VolumeDown,
+    Mute,
 }
 
 impl ShellCommand {
-    pub const ALL: [ShellCommand; 16] = [
+    pub const ALL: [ShellCommand; 19] = [
         Self::Home,
         Self::Quick,
         Self::Settings,
@@ -62,6 +66,9 @@ impl ShellCommand {
         Self::NavBack,
         Self::NavMenu,
         Self::PadCaptured,
+        Self::VolumeUp,
+        Self::VolumeDown,
+        Self::Mute,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -82,6 +89,9 @@ impl ShellCommand {
             Self::NavBack => "nav-back",
             Self::NavMenu => "nav-menu",
             Self::PadCaptured => "pad-captured",
+            Self::VolumeUp => "volume-up",
+            Self::VolumeDown => "volume-down",
+            Self::Mute => "mute",
         }
     }
 

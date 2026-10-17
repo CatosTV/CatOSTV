@@ -9,9 +9,11 @@
 //! |--------------|---------------------|-----------------------------------|
 //! | `W-A-F11`    | GoToDesktop 1       | return to CatosTV after an app exits |
 //! | `W-A-F12`    | GoToDesktop 2       | resume a running app              |
+//! | `W-A-F9`     | shell window onto desktop 2, on top | Quick settings or the volume panel over an app |
+//! | `W-A-F10`    | shell window back to desktop 1 | that closed again           |
 //!
 //! The shell "presses" them with `wtype`. A unit test checks that rc.xml
-//! still contains both bindings.
+//! still contains the bindings.
 //!
 //! Status: designed against labwc's keyboard.c (virtual keyboards fall back
 //! to keysym matching). Runtime-UNVERIFIED until tested on an appliance.
@@ -21,6 +23,8 @@ use crate::process::{Cmd, Runner};
 
 pub const SHOW_SHELL_KEYBIND: &str = "W-A-F11";
 pub const SHOW_APP_KEYBIND: &str = "W-A-F12";
+pub const OVER_APP_KEYBIND: &str = "W-A-F9";
+pub const LEAVE_APP_KEYBIND: &str = "W-A-F10";
 
 fn chord(key: &str) -> Cmd {
     Cmd::new("wtype").args([
@@ -46,6 +50,17 @@ pub fn show_app_workspace(r: &mut dyn Runner, appliance: bool) -> Result<()> {
 /// Show the CatosTV workspace (e.g. after the foreground app exited).
 pub fn show_shell_workspace(r: &mut dyn Runner, appliance: bool) -> Result<()> {
     press(r, "F11", appliance)
+}
+
+/// Bring the CatosTV window onto the App desktop, on top of the app, with
+/// the keys (Quick settings or the volume panel over an app).
+pub fn shell_over_app(r: &mut dyn Runner, appliance: bool) -> Result<()> {
+    press(r, "F9", appliance)
+}
+
+/// Send the CatosTV window back to its own desktop (the app stays in front).
+pub fn shell_off_app(r: &mut dyn Runner, appliance: bool) -> Result<()> {
+    press(r, "F10", appliance)
 }
 
 #[cfg(test)]
@@ -100,14 +115,36 @@ mod tests {
             "/../../target-root/home/catostv/.config/labwc/rc.xml"
         ))
         .expect("rc.xml present in repo");
-        for (chord, desktop) in [(SHOW_SHELL_KEYBIND, "1"), (SHOW_APP_KEYBIND, "2")] {
+        let block = |chord: &str| {
             let start = rc
                 .find(&format!("key=\"{chord}\""))
                 .unwrap_or_else(|| panic!("rc.xml lacks keybind {chord}"));
-            let block = &rc[start..start + rc[start..].find("</keybind>").unwrap()];
+            rc[start..start + rc[start..].find("</keybind>").unwrap()].to_string()
+        };
+        for (chord, desktop) in [(SHOW_SHELL_KEYBIND, "1"), (SHOW_APP_KEYBIND, "2")] {
+            let b = block(chord);
             assert!(
-                block.contains(&format!("GoToDesktop\" to=\"{desktop}\"")),
-                "{chord} must go to desktop {desktop}: {block}"
+                b.contains(&format!("GoToDesktop\" to=\"{desktop}\"")),
+                "{chord} must go to desktop {desktop}: {b}"
+            );
+        }
+        for (chord, desktop) in [(OVER_APP_KEYBIND, "2"), (LEAVE_APP_KEYBIND, "1")] {
+            let b = block(chord);
+            assert!(b.contains("<query identifier=\"catostv-shell\" />"), "{b}");
+            assert!(
+                b.contains(&format!("SendToDesktop\" to=\"{desktop}\" follow=\"no\"")),
+                "{chord}: {b}"
+            );
+        }
+        // Every way to the CatosTV desktop takes the window back there
+        // first, in case it was over an app.
+        for (at, _) in rc.match_indices("<action name=\"GoToDesktop\" to=\"1\" />") {
+            let before = &rc[..at];
+            let kb = before.rfind("<keybind").unwrap();
+            assert!(
+                before[kb..].contains("<query identifier=\"catostv-shell\" />"),
+                "{}",
+                &rc[kb..at]
             );
         }
     }
