@@ -3362,7 +3362,7 @@ impl eframe::App for ShellApp {
             actions.clear();
             self.end_launch();
         }
-        if !actions.is_empty() {
+        if !actions.is_empty() || !self.pending_nav.is_empty() {
             self.keep_volume_panel();
         }
         let mut p = self.pointer.collect(&ctx);
