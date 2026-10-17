@@ -8,7 +8,8 @@
 //! volume-down, volume-up, gear, power, moon, search, home, grid, display,
 //! play, media, game, music, stream, browser, tv, cat, catfyn, lock, chevron, check,
 //! refresh, disk, globe, spark, store, android, cast, keyboard, palette,
-//! phone, remote, download, trash, usb, plus, close, back, headphones.
+//! phone, remote, download, trash, usb, plus, close, back, headphones,
+//! sun, cloud, rain, snow, storm, fog.
 //! Anything else is drawn as a monogram.
 
 use crate::canvas::Canvas;
@@ -127,6 +128,70 @@ pub fn draw<H: Copy>(c: &Canvas<H>, name: &str, cx: f32, cy: f32, size: f32, col
                 16,
             ));
             c.closed(&pts, w, color);
+        }
+        "sun" => {
+            c.ring(cx, cy, 0.38 * u, w, color);
+            for i in 0..8 {
+                let a = i as f32 * PI / 4.0;
+                c.segment(
+                    (cx + 0.6 * u * a.cos(), cy + 0.6 * u * a.sin()),
+                    (cx + 0.88 * u * a.cos(), cy + 0.88 * u * a.sin()),
+                    w,
+                    color,
+                );
+            }
+        }
+        "cloud" | "rain" | "snow" | "storm" | "fog" => {
+            // A cloud, raised a little when something falls from it.
+            let dy = if name == "cloud" { 0.0 } else { -0.3 };
+            let mut pts = arc(
+                cx - 0.35 * u,
+                cy + (0.1 + dy) * u,
+                0.38 * u,
+                PI * 0.5,
+                PI * 1.5,
+                10,
+            );
+            pts.extend(arc(
+                cx + 0.05 * u,
+                cy + (-0.1 + dy) * u,
+                0.45 * u,
+                PI * 1.1,
+                PI * 1.95,
+                10,
+            ));
+            pts.extend(arc(
+                cx + 0.5 * u,
+                cy + (0.15 + dy) * u,
+                0.33 * u,
+                PI * 1.5,
+                PI * 2.5,
+                10,
+            ));
+            c.closed(&pts, w, color);
+            let below = cy + (0.65 + dy) * u;
+            match name {
+                "rain" => {
+                    for x in [-0.4_f32, 0.0, 0.4] {
+                        c.segment(at(x + 0.08, 0.5), at(x - 0.08, 0.9), w, color);
+                    }
+                }
+                "snow" => {
+                    for x in [-0.4_f32, 0.0, 0.4] {
+                        c.circle(cx + x * u, below + 0.15 * u, w * 0.9, color);
+                    }
+                }
+                "storm" => c.polyline(
+                    &[at(0.1, 0.4), at(-0.15, 0.7), at(0.1, 0.7), at(-0.1, 1.0)],
+                    w,
+                    color,
+                ),
+                "fog" => {
+                    c.segment(at(-0.7, 0.55), at(0.7, 0.55), w, color);
+                    c.segment(at(-0.5, 0.85), at(0.5, 0.85), w, color);
+                }
+                _ => {}
+            }
         }
         "search" => {
             c.ring(cx - 0.15 * u, cy - 0.15 * u, 0.55 * u, w, color);

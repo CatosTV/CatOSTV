@@ -227,6 +227,9 @@ pub enum RowId {
     Accent,
     ClockFormat,
     Glow,
+    Screensaver,
+    SaverPictures,
+    SaverMinutes,
     IpAddress,
     App(usize),
     /// Settings → Apps: filter the list.
@@ -511,6 +514,27 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                 "Soft colour behind the interface",
                 on_off(Some(ctx.prefs.glow)),
                 RowKind::Toggle(Some(ctx.prefs.glow)),
+            ),
+            row(
+                RowId::Screensaver,
+                "Screensaver",
+                "Pictures, the time and the weather when the TV is idle",
+                on_off(Some(ctx.prefs.screensaver)),
+                RowKind::Toggle(Some(ctx.prefs.screensaver)),
+            ),
+            row(
+                RowId::SaverPictures,
+                "Pictures",
+                "",
+                crate::screensaver::Pictures::from_key(&ctx.prefs.saver_pictures).label(),
+                RowKind::Choice,
+            ),
+            row(
+                RowId::SaverMinutes,
+                "Start after",
+                "",
+                format!("{} min", ctx.prefs.saver_minutes),
+                RowKind::Choice,
             ),
         ],
         Category::Apps => {

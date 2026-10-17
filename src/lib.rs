@@ -12,6 +12,7 @@ pub mod images;
 pub mod jobs;
 pub mod keys;
 pub mod pointer;
+pub mod saver;
 pub mod theme;
 pub mod ui;
 pub mod widgets;

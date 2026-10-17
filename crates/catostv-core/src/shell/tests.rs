@@ -1398,3 +1398,32 @@ fn kde_connect_device_options() {
         vec![Effect::KdeUnpair("abc".into())]
     );
 }
+
+#[test]
+fn sleep_shows_the_screensaver_while_it_is_on() {
+    let mut f = Fixture::new();
+    let mut s = Shell::new();
+    s.handle_ipc(ShellCommand::Power);
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::Screensaver]);
+    f.prefs.screensaver = false;
+    s.handle_ipc(ShellCommand::Power);
+    assert_eq!(
+        press(&mut s, &f, &[Ok]),
+        vec![Effect::Power(PowerAction::Suspend)]
+    );
+}
+
+#[test]
+fn volume_panel_takes_the_keys() {
+    let f = Fixture::new();
+    let mut s = Shell::new();
+    s.volume = Some(crate::volume_panel::VolumePanel::default());
+    assert_eq!(press(&mut s, &f, &[Up]), vec![Effect::VolumeStep(5)]);
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::ToggleMute]);
+    assert!(press(&mut s, &f, &[Back]).is_empty());
+    assert!(s.volume.is_none());
+    // Home closes it and goes Home as usual.
+    s.volume = Some(crate::volume_panel::VolumePanel::default());
+    s.handle(Action::Home, &f.ctx());
+    assert!(s.volume.is_none());
+}

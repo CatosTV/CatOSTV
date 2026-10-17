@@ -4,4 +4,5 @@
 pub mod files;
 pub mod fin;
 pub mod installer;
+pub mod saver;
 pub mod shell;

@@ -873,6 +873,11 @@ pub enum Effect {
     /// Settings → Catfyn.
     SetFinAutoplay(bool),
     SetFinCountdown(u32),
+    SetScreensaver(bool),
+    SetSaverPictures(String),
+    SetSaverMinutes(u32),
+    /// Show the screensaver now (Sleep).
+    Screensaver,
     SetGlow(bool),
     /// Controllers navigate CatosTV (read by catostv-inputd).
     SetPadNav(bool),
@@ -1021,6 +1026,15 @@ impl Default for Shell {
 }
 
 /// Move `i` by `d` within `0..len` (clamped; `len == 0` → 0).
+/// Sleep: the screensaver while it is on, else real sleep.
+fn sleep_effect(ctx: &ShellContext) -> Effect {
+    if ctx.prefs.screensaver {
+        Effect::Screensaver
+    } else {
+        Effect::Power(PowerAction::Suspend)
+    }
+}
+
 fn step(i: usize, d: isize, len: usize) -> usize {
     if len == 0 {
         return 0;
@@ -2094,6 +2108,20 @@ impl Shell {
                 prefs::cycle_accent(&ctx.prefs.accent, delta).to_string(),
             )]),
             RowId::ClockFormat => Some(vec![Effect::SetClock24(!ctx.prefs.clock_24h)]),
+            RowId::SaverPictures => Some(vec![Effect::SetSaverPictures(
+                crate::screensaver::Pictures::from_key(&ctx.prefs.saver_pictures)
+                    .other()
+                    .key()
+                    .to_string(),
+            )]),
+            RowId::SaverMinutes => {
+                let m = crate::screensaver::cycle_minutes(ctx.prefs.saver_minutes, delta);
+                Some(if m == ctx.prefs.saver_minutes {
+                    vec![]
+                } else {
+                    vec![Effect::SetSaverMinutes(m)]
+                })
+            }
             RowId::AndroidVariant => Some(vec![Effect::SetAndroidVariant(
                 if ctx.prefs.android_variant == "vanilla" {
                     "gapps".into()
@@ -2243,6 +2271,7 @@ impl Shell {
             },
             RowId::Mute => vec![Effect::ToggleMute],
             RowId::Glow => vec![Effect::SetGlow(!ctx.prefs.glow)],
+            RowId::Screensaver => vec![Effect::SetScreensaver(!ctx.prefs.screensaver)],
             RowId::PadNav => vec![Effect::SetPadNav(!ctx.prefs.pad_nav)],
             RowId::Controller(i) => match ctx.sys.controllers.get(i) {
                 Some(name) => vec![Effect::SetPadLayout {
@@ -2473,7 +2502,7 @@ impl Shell {
                 let item = POWER_ITEMS[*index];
                 self.overlays.pop();
                 match item {
-                    PowerItem::Sleep => vec![Effect::Power(PowerAction::Suspend)],
+                    PowerItem::Sleep => vec![sleep_effect(ctx)],
                     PowerItem::Restart => vec![Effect::Power(PowerAction::Reboot)],
                     PowerItem::PowerOff => vec![Effect::Power(PowerAction::PowerOff)],
                     PowerItem::Cancel => vec![],
@@ -3110,7 +3139,7 @@ impl Shell {
                 self.open_page(Page::Settings);
                 vec![]
             }
-            QuickItem::Sleep => vec![Effect::Power(PowerAction::Suspend)],
+            QuickItem::Sleep => vec![sleep_effect(ctx)],
             QuickItem::Power => {
                 self.overlays.push(Overlay::Power { index: 0 });
                 vec![]
