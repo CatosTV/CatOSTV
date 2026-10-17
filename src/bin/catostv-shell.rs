@@ -573,6 +573,9 @@ struct ShellApp {
     /// whether Catfyn or Files was open when it came: when it closes on
     /// a different screen, CatosTV comes to the front instead of the app.
     over_app: Option<(Page, bool)>,
+    /// Since when it is over the app without the keys (they would reach
+    /// the app: OK paused Catfyn's player once).
+    over_app_unfocused: Option<Instant>,
     /// What closes it goes to CatosTV, not back to the app.
     leave_to_shell: bool,
     /// Leaving the app: back to it (true) or to CatosTV, after this many
@@ -875,6 +878,7 @@ impl ShellApp {
             first_snapshot: true,
             was_focused: true,
             over_app: None,
+            over_app_unfocused: None,
             leave_to_shell: false,
             leaving: None,
             volume_until: None,
@@ -2811,6 +2815,7 @@ impl ShellApp {
                 }
             }
             Msg::OverApp(cmd) => {
+                eprintln!("catostv: over the app: {}", cmd.as_str());
                 self.mapper.reset();
                 lock(&self.watch).blank = None;
                 self.leaving = None;
@@ -3296,6 +3301,23 @@ impl eframe::App for ShellApp {
         let focused = keys::window_focused(&ctx);
         if !focused && self.was_focused {
             self.mapper.reset();
+        }
+        // Over an app, the keys belong to CatosTV: if the app still has
+        // them a moment later, ask for them again.
+        if self.over_app.is_some() && self.leaving.is_none() && !focused {
+            let since = *self.over_app_unfocused.get_or_insert_with(Instant::now);
+            if since.elapsed() > Duration::from_millis(300) {
+                eprintln!("catostv: over the app without the keys; taking them back");
+                self.over_app_unfocused = Some(Instant::now());
+                let appliance = self.appliance;
+                self.jobs.spawn(move || {
+                    let _ = compositor::shell_over_app(&mut SystemRunner, appliance);
+                    Msg::Nothing
+                });
+            }
+            ctx.request_repaint();
+        } else {
+            self.over_app_unfocused = None;
         }
         // Back from an app (no frames while it was in front): the idle
         // time starts now.
