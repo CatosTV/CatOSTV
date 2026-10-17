@@ -946,6 +946,29 @@ fn recents_resume_close_and_close_all() {
     f.apps[3].running = false;
     s.top_focus = false;
     assert!(press(&mut s, &f, &[Ok]).is_empty());
+    // When nothing is running (e.g. after clearing apps from recents),
+    // ESC / Back takes us back to Home.
+    assert_eq!(s.page, Page::Recents);
+    press(&mut s, &f, &[Back]);
+    assert_eq!(s.page, Page::Home);
+    assert!(!s.top_focus);
+}
+
+#[test]
+fn recents_esc_after_clearing_apps_goes_home() {
+    let mut f = Fixture::new();
+    f.apps[1].running = true;
+    let mut s = Shell::new();
+    s.open_page(Page::Recents);
+    s.top_focus = false;
+    // Down to Close all, Ok to close.
+    let effects = press(&mut s, &f, &[Down, Ok]);
+    assert_eq!(effects, vec![Effect::Close(1)]);
+    f.apps[1].running = false;
+    // After clearing apps from recents, typing ESC (Back) takes us back to Home.
+    press(&mut s, &f, &[Back]);
+    assert_eq!(s.page, Page::Home);
+    assert!(!s.top_focus);
 }
 
 #[test]

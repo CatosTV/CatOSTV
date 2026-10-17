@@ -1489,7 +1489,7 @@ impl Shell {
         } else if !self.overlays.is_empty() {
             self.handle_overlay(action, ctx)
         } else if self.top_focus && self.page != Page::Settings {
-            self.handle_top(action)
+            self.handle_top(action, ctx)
         } else {
             match self.page {
                 Page::Home => self.handle_home(action, ctx),
@@ -1770,7 +1770,7 @@ impl Shell {
     /// The tab bar follows focus (like an Android TV): moving
     /// onto a tab shows its page at once; OK is only needed for the
     /// Control Center pill. Down leaves the bar into the page.
-    fn handle_top(&mut self, action: Action) -> Vec<Effect> {
+    fn handle_top(&mut self, action: Action, ctx: &ShellContext) -> Vec<Effect> {
         match action {
             Action::Left | Action::Right => {
                 let i = if action == Action::Left {
@@ -1784,7 +1784,14 @@ impl Shell {
                 }
                 self.top_index = i;
             }
-            Action::Down | Action::Back => self.top_focus = false,
+            Action::Down => self.top_focus = false,
+            Action::Back => {
+                if self.page == Page::Recents && ctx.running().is_empty() {
+                    self.go_home();
+                } else {
+                    self.top_focus = false;
+                }
+            }
             Action::Ok | Action::OkLong => match TOP_ITEMS[self.top_index].page() {
                 Some(_) => self.top_focus = false,
                 None => self.overlays.push(Overlay::Quick { index: 0 }),
