@@ -262,7 +262,7 @@ the app.
 ## Volume
 
 The volume keys bring up a slider on the right edge of the screen, over
-apps too. While it's there:
+apps too, with the sound output it plays on beside it. While it's there:
 
 - **Up/Down** or the volume keys change the volume. Turning it up also
   unmutes.

@@ -66,6 +66,28 @@ impl VolumePanel {
     }
 }
 
+/// A short name for output `i`: "TV (HDMI)" rather than "Built-in
+/// Audio Digital Stereo (HDMI)", unless two outputs would read the same.
+pub fn sink_label(sinks: &[Sink], i: usize) -> String {
+    let Some(s) = sinks.get(i) else {
+        return String::new();
+    };
+    let short = |s: &Sink| match s.kind {
+        SinkKind::Hdmi | SinkKind::Analog => s.kind.label().to_string(),
+        _ => s.name.clone(),
+    };
+    let label = short(s);
+    if sinks
+        .iter()
+        .enumerate()
+        .any(|(k, o)| k != i && short(o) == label)
+    {
+        s.name.clone()
+    } else {
+        label
+    }
+}
+
 /// Icon name for an output.
 pub fn sink_icon(kind: SinkKind) -> &'static str {
     match kind {
@@ -92,6 +114,17 @@ mod tests {
             s(40, "TV", SinkKind::Hdmi, false),
             s(52, "Buds", SinkKind::Bluetooth, true),
         ]
+    }
+
+    #[test]
+    fn short_output_names() {
+        let mut list = sinks();
+        assert_eq!(sink_label(&list, 0), "TV (HDMI)");
+        assert_eq!(sink_label(&list, 1), "Buds");
+        list[1].kind = SinkKind::Hdmi;
+        list[1].name = "Receiver".into();
+        assert_eq!(sink_label(&list, 0), "TV");
+        assert_eq!(sink_label(&list, 5), "");
     }
 
     #[test]
