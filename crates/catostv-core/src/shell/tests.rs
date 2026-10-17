@@ -281,9 +281,14 @@ fn wifi_join_flow() {
     let f = Fixture::new();
     let mut s = Shell::new();
     open_settings(&mut s, &f, Category::Network);
-    let eff = press(&mut s, &f, &[Down, Down, Ok]);
-    assert_eq!(eff, vec![Effect::ScanWifi]);
-    assert!(matches!(s.overlay(), Some(Overlay::WifiList { .. })));
+    // Wi-Fi on: the networks are rows of the page, after Connection.
+    s.wifi_scan = Scan::Busy;
+    let rows = s.settings_rows(&f.ctx());
+    let heading = rows.last().unwrap();
+    assert_eq!(
+        (heading.title.as_str(), heading.value.as_str()),
+        ("Wi-Fi networks", "Looking…")
+    );
     s.on_wifi_scan(Result::Ok(vec![
         WifiNetwork {
             ssid: "Home".into(),
@@ -298,8 +303,27 @@ fn wifi_join_flow() {
             in_use: false,
         },
     ]));
+    let rows = s.settings_rows(&f.ctx());
+    assert_eq!(rows[2].kind, crate::settings::RowKind::Heading);
+    assert_eq!(rows[2].value, "");
+    let home = &rows[3];
     assert_eq!(
-        press(&mut s, &f, &[Down, Ok]),
+        (
+            home.title.as_str(),
+            home.subtitle.as_str(),
+            home.value.as_str()
+        ),
+        ("Home", "Secured", "Strong")
+    );
+    assert_eq!(rows.len(), 5);
+    // Focus never rests on the heading.
+    s.settings_row = 2;
+    s.clamp(&f.ctx());
+    assert_eq!(s.settings_row, 3);
+    s.settings_row = 0;
+    // Focus steps over the heading: Wi-Fi, Connection, Home, Cafe.
+    assert_eq!(
+        press(&mut s, &f, &[Down, Down, Down, Ok]),
         vec![Effect::ConnectWifi {
             ssid: "Cafe".into(),
             password: None
@@ -445,7 +469,7 @@ fn home_key_and_ipc_always_recover() {
     let f = Fixture::new();
     let mut s = Shell::new();
     open_settings(&mut s, &f, Category::Network);
-    press(&mut s, &f, &[Down, Down, Ok]); // Wi-Fi list overlay
+    s.handle_ipc(ShellCommand::Quick);
     s.handle_ipc(ShellCommand::Power);
     assert_eq!(s.overlays.len(), 2);
     press(&mut s, &f, &[Home]);

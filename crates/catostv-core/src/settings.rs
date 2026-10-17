@@ -30,6 +30,7 @@ pub struct RemoteInfo {
 /// `None` / empty means "not known yet / could not be read".
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SystemSnapshot {
+    /// `None`: no Wi-Fi adapter (or it could not be read).
     pub wifi_on: Option<bool>,
     pub net: Option<NetStatus>,
     pub bluetooth: BluetoothStatus,
@@ -211,7 +212,10 @@ pub enum RowId {
     NetworkStatus,
     /// Ethernet details and IP settings.
     Ethernet,
-    JoinWifi,
+    /// The "Wi-Fi networks" heading above them.
+    WifiHeading,
+    /// A Wi-Fi network found nearby (index into the scan results).
+    WifiNet(usize),
     BtRadio,
     BtDevice(usize),
     BtPair,
@@ -292,6 +296,9 @@ pub enum RowKind {
     Info,
     /// Not implemented yet. Shows "Coming soon".
     Soon,
+    /// A heading between rows (title, and its status as the value); focus
+    /// skips it.
+    Heading,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,6 +358,48 @@ pub fn cycle_scale(current: f32, delta: i32) -> f32 {
 /// Apps lists longer than this get a search row.
 pub const APP_SEARCH_FROM: usize = 8;
 
+/// The Wi-Fi networks nearby, as Settings → Network rows under a
+/// "Wi-Fi networks" heading that says what the search is doing. The list
+/// refreshes by itself (the GUI searches again every 30 s).
+pub fn wifi_rows(
+    scan: &crate::installer::Scan<crate::net::WifiNetwork>,
+    connecting: Option<&str>,
+) -> Vec<Row> {
+    use crate::installer::Scan;
+    let nets = scan.items();
+    let status = match scan {
+        Scan::Busy if nets.is_empty() => "Looking…".to_string(),
+        Scan::Failed(e) => e.clone(),
+        Scan::Done(n) if n.is_empty() => "None found".to_string(),
+        _ => String::new(),
+    };
+    let mut v = vec![row(
+        RowId::WifiHeading,
+        "Wi-Fi networks",
+        "",
+        status,
+        RowKind::Heading,
+    )];
+    v.extend(nets.iter().enumerate().map(|(i, n)| {
+        let state = if n.in_use {
+            "Connected"
+        } else if connecting == Some(n.ssid.as_str()) {
+            "Connecting…"
+        } else if n.secure {
+            "Secured"
+        } else {
+            "Open"
+        };
+        let signal = match n.signal {
+            70.. => "Strong",
+            40.. => "Good",
+            _ => "Weak",
+        };
+        row(RowId::WifiNet(i), &n.ssid, state, signal, RowKind::Action)
+    }));
+    v
+}
+
 pub fn rows(cat: Category, ctx: &ShellContext) -> Vec<Row> {
     rows_for(cat, ctx, "")
 }
@@ -361,13 +410,22 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
     let sys = ctx.sys;
     match cat {
         Category::Network => vec![
-            row(
-                RowId::WifiRadio,
-                "Wi-Fi",
-                "",
-                on_off(sys.wifi_on),
-                RowKind::Toggle(sys.wifi_on),
-            ),
+            match sys.wifi_on {
+                Some(on) => row(
+                    RowId::WifiRadio,
+                    "Wi-Fi",
+                    "",
+                    on_off(Some(on)),
+                    RowKind::Toggle(Some(on)),
+                ),
+                None => row(
+                    RowId::WifiRadio,
+                    "Wi-Fi",
+                    "No Wi-Fi adapter",
+                    "Unavailable",
+                    RowKind::Info,
+                ),
+            },
             row(
                 RowId::NetworkStatus,
                 "Connection",
@@ -382,7 +440,6 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                     .unwrap_or_else(|| "-".into()),
                 RowKind::Info,
             ),
-            row(RowId::JoinWifi, "Choose a network", "", "", RowKind::Action),
         ]
         .into_iter()
         .chain(sys.ethernet.as_ref().map(|e| {

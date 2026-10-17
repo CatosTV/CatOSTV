@@ -291,7 +291,8 @@ the TV, so the slideshow still runs when the internet is down.
 
 ## Settings, page by page
 
-- **Network**: Wi-Fi on/off, the connection, *Choose a network*, and
+- **Network**: Wi-Fi on/off, the connection, the Wi-Fi networks nearby
+  (OK joins one, *Search again* at the end), and
   **Ethernet**: status, gateway, DNS, MAC, and IP settings, either
   *Automatic* or *Manual* (address like `192.168.1.50/24`, gateway, DNS
   servers), then *Save*. The TV reconnects with the new settings.

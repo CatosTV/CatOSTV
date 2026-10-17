@@ -604,10 +604,6 @@ pub enum Overlay {
     Power {
         index: usize,
     },
-    /// Index into the scan results; `results.len()` is "Scan again".
-    WifiList {
-        index: usize,
-    },
     WifiPassword {
         ssid: String,
         osk: Box<Osk>,
@@ -709,7 +705,6 @@ impl Overlay {
             Overlay::Quick { index }
             | Overlay::AppOptions { index, .. }
             | Overlay::Power { index }
-            | Overlay::WifiList { index }
             | Overlay::BtScan { index }
             | Overlay::BtDevice { index, .. }
             | Overlay::DisplayModes { index }
@@ -1111,7 +1106,15 @@ impl Shell {
 
     /// The rows of the current Settings category (Apps filtered).
     pub fn settings_rows(&self, ctx: &ShellContext) -> Vec<settings::Row> {
-        settings::rows_for(self.current_category(), ctx, &self.apps_filter)
+        let mut rows = settings::rows_for(self.current_category(), ctx, &self.apps_filter);
+        // Wi-Fi on: the networks nearby are right there to pick.
+        if self.current_category() == Category::Network && ctx.sys.wifi_on == Some(true) {
+            rows.extend(settings::wifi_rows(
+                &self.wifi_scan,
+                self.wifi_connecting.as_deref(),
+            ));
+        }
+        rows
     }
 
     pub fn overlay(&self) -> Option<&Overlay> {
@@ -1232,7 +1235,6 @@ impl Shell {
                 app_options(running, is_removable(ctx, *app)).len()
             }
             Overlay::Power { .. } => POWER_ITEMS.len(),
-            Overlay::WifiList { .. } => self.wifi_scan.items().len() + 1,
             Overlay::BtScan { .. } => self.bt_scan.items().len() + 1,
             Overlay::BtDevice { .. } => BT_OPTIONS.len(),
             Overlay::DisplayModes { .. } => self.menu_modes(ctx).len(),
@@ -1309,8 +1311,22 @@ impl Shell {
         let n_apps = ctx.apps.len();
         self.rail_index = self.rail_index.min(n_apps.saturating_sub(1));
         self.grid_index = self.grid_index.min(n_apps.saturating_sub(1));
-        let n_rows = self.settings_rows(ctx).len();
-        self.settings_row = self.settings_row.min(n_rows.saturating_sub(1));
+        let rows = self.settings_rows(ctx);
+        self.settings_row = self.settings_row.min(rows.len().saturating_sub(1));
+        // Never resting on a heading: the row after it, else before it.
+        if rows
+            .get(self.settings_row)
+            .is_some_and(|r| r.kind == RowKind::Heading)
+        {
+            let after = rows[self.settings_row..]
+                .iter()
+                .position(|r| r.kind != RowKind::Heading)
+                .map(|k| self.settings_row + k);
+            let before = rows[..self.settings_row]
+                .iter()
+                .rposition(|r| r.kind != RowKind::Heading);
+            self.settings_row = after.or(before).unwrap_or(0);
+        }
         let n_hits = self.search_results(ctx).len();
         if n_hits == 0 {
             self.search_focus = SearchFocus::Keyboard;
@@ -1736,7 +1752,11 @@ impl Shell {
                 true
             }
             Target::SettingsRow(i)
-                if self.page == Page::Settings && i < self.settings_rows(ctx).len() =>
+                if self.page == Page::Settings
+                    && self
+                        .settings_rows(ctx)
+                        .get(i)
+                        .is_some_and(|r| r.kind != RowKind::Heading) =>
             {
                 self.settings_rows_focus = true;
                 self.settings_row = i;
@@ -2203,12 +2223,21 @@ impl Shell {
                 self.settings_rows_focus = false;
                 vec![]
             }
-            Action::Up => {
-                self.settings_row = self.settings_row.saturating_sub(1);
-                vec![]
-            }
-            Action::Down => {
-                self.settings_row = step(self.settings_row, 1, rows.len());
+            // Headings are passed over.
+            Action::Up | Action::Down => {
+                let down = action == Action::Down;
+                let mut i = self.settings_row;
+                while let Some(next) = if down {
+                    (i + 1 < rows.len()).then_some(i + 1)
+                } else {
+                    i.checked_sub(1)
+                } {
+                    i = next;
+                    if rows[i].kind != RowKind::Heading {
+                        self.settings_row = i;
+                        break;
+                    }
+                }
                 vec![]
             }
             // The accent colour: Left/Right move a selection ring over the
@@ -2239,8 +2268,11 @@ impl Shell {
         }
         let sys = ctx.sys;
         match id {
-            RowId::WifiRadio => vec![Effect::SetWifi(!sys.wifi_on.unwrap_or(false))],
-            RowId::JoinWifi => self.open_wifi_list(),
+            RowId::WifiRadio => match sys.wifi_on {
+                Some(on) => vec![Effect::SetWifi(!on)],
+                None => vec![],
+            },
+            RowId::WifiNet(i) => self.choose_wifi(i),
             RowId::Ethernet => self.open_ethernet(ctx),
             RowId::UpdateCheck => vec![Effect::CheckUpdates],
             RowId::UpdateInstall => vec![Effect::InstallUpdate],
@@ -2370,12 +2402,6 @@ impl Shell {
             }
             _ => vec![],
         }
-    }
-
-    fn open_wifi_list(&mut self) -> Vec<Effect> {
-        self.overlays.push(Overlay::WifiList { index: 0 });
-        self.wifi_scan = Scan::Busy;
-        vec![Effect::ScanWifi]
     }
 
     fn handle_overlay(&mut self, action: Action, ctx: &ShellContext) -> Vec<Effect> {
@@ -2516,13 +2542,6 @@ impl Shell {
                     PowerItem::PowerOff => vec![Effect::Power(PowerAction::PowerOff)],
                     PowerItem::Cancel => vec![],
                 }
-            }
-            Overlay::WifiList { index } => {
-                if vertical(index) || !is_ok {
-                    return vec![];
-                }
-                let i = *index;
-                self.choose_wifi(i)
             }
             Overlay::KdeDevice { device, index } => {
                 if vertical(index) || !is_ok {
@@ -3066,7 +3085,13 @@ impl Shell {
 
     /// The rows of Quick settings → Network.
     pub fn quick_net_rows(&self, ctx: &ShellContext) -> Vec<NetRow> {
-        let mut v = vec![NetRow::WifiSwitch];
+        // No Wi-Fi adapter: no switch.
+        let mut v: Vec<NetRow> = ctx
+            .sys
+            .wifi_on
+            .map(|_| NetRow::WifiSwitch)
+            .into_iter()
+            .collect();
         if ctx.sys.ethernet.is_some() {
             v.push(NetRow::Ethernet);
         }
@@ -3171,9 +3196,8 @@ impl Shell {
         self.wifi_connecting = None;
         match result {
             Ok(()) => {
-                self.overlays.retain(|o| {
-                    !matches!(o, Overlay::WifiList { .. } | Overlay::WifiPassword { .. })
-                });
+                self.overlays
+                    .retain(|o| !matches!(o, Overlay::WifiPassword { .. }));
                 vec![Effect::Toast(format!("Connected to {ssid}"))]
             }
             Err(e) => vec![Effect::Toast(e)],
