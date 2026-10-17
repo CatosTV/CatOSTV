@@ -452,7 +452,7 @@ fn draw_volume_panel(c: &C, v: &ShellView) {
     let Some(index) = panel.outputs else {
         return;
     };
-    let lw = 300.0;
+    let lw = 380.0;
     let lh = 70.0 + sinks.len().max(1) as f32 * 56.0;
     let lx = x - 16.0 - lw;
     let ly = (y + h - lh).max(40.0);
