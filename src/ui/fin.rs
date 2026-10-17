@@ -146,7 +146,6 @@ fn backdrop(c: &C, pics: &FinPics, server: &str, it: Option<&Item>) {
 /// focus lifts it with a soft shadow and a sheen, unfocused it is
 /// flat.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn card(
     c: &C,
     pics: &FinPics,
