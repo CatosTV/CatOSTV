@@ -576,6 +576,8 @@ struct ShellApp {
     /// Since when it is over the app without the keys (they would reach
     /// the app: OK paused Catfyn's player once).
     over_app_unfocused: Option<Instant>,
+    /// Last Wi-Fi search for Settings → Network.
+    wifi_scanned: Option<Instant>,
     /// What closes it goes to CatosTV, not back to the app.
     leave_to_shell: bool,
     /// Leaving the app: back to it (true) or to CatosTV, after this many
@@ -651,7 +653,7 @@ fn snapshot(appliance: bool, home: &Path) -> (SystemSnapshot, Vec<AppEntry>) {
         })
         .collect();
     let sys = SystemSnapshot {
-        wifi_on: net::wifi_enabled(&mut r).ok(),
+        wifi_on: net::wifi_state(&mut r).ok().flatten(),
         net: net::status(&mut r).ok(),
         bluetooth: bt,
         bt_devices,
@@ -879,6 +881,7 @@ impl ShellApp {
             was_focused: true,
             over_app: None,
             over_app_unfocused: None,
+            wifi_scanned: None,
             leave_to_shell: false,
             leaving: None,
             volume_until: None,
@@ -3479,6 +3482,24 @@ impl eframe::App for ShellApp {
             ctx.request_repaint();
         }
 
+        // Settings → Network with Wi-Fi on: look for networks, and again
+        // every 30 s while it shows.
+        if self.shell.page == Page::Settings
+            && self.shell.current_category() == catostv_core::settings::Category::Network
+            && self.sys.wifi_on == Some(true)
+            && self.shell.overlay().is_none()
+            && self.shell.wifi_scan != catostv_core::installer::Scan::Busy
+            && self
+                .wifi_scanned
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(30))
+        {
+            self.wifi_scanned = Some(Instant::now());
+            // A refresh keeps the list it has until the new one comes.
+            if !matches!(self.shell.wifi_scan, catostv_core::installer::Scan::Done(_)) {
+                self.shell.wifi_scan = catostv_core::installer::Scan::Busy;
+            }
+            self.apply(&ctx, Effect::ScanWifi);
+        }
         // Settings → Updates opened: check once.
         if self.shell.page == Page::Settings
             && catostv_core::settings::Category::ALL.get(self.shell.settings_cat)

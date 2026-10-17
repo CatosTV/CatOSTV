@@ -146,6 +146,16 @@ pub fn wifi_enabled(r: &mut dyn Runner) -> Result<bool> {
     Ok(out.stdout.trim() == "enabled")
 }
 
+/// The Wi-Fi switch, or `None` when the TV has no Wi-Fi adapter
+/// (NetworkManager's switch still reads "enabled" then).
+pub fn wifi_state(r: &mut dyn Runner) -> Result<Option<bool>> {
+    let dev = r.run_ok(&Cmd::new("nmcli").args(["-t", "-f", "TYPE", "device"]))?;
+    if !dev.stdout.lines().any(|l| l.trim() == "wifi") {
+        return Ok(None);
+    }
+    wifi_enabled(r).map(Some)
+}
+
 pub fn set_wifi(r: &mut dyn Runner, on: bool) -> Result<()> {
     r.run_ok(&Cmd::new("nmcli").args(["radio", "wifi", if on { "on" } else { "off" }]))?;
     Ok(())
@@ -601,5 +611,17 @@ mod tests {
         assert!(wifi_enabled(&mut r).unwrap());
         r.push(Output::ok("disabled\n"));
         assert!(!wifi_enabled(&mut r).unwrap());
+    }
+
+    #[test]
+    fn no_wifi_adapter_means_no_switch() {
+        let mut r = FakeRunner::new();
+        r.push(Output::ok("ethernet\nbridge\nloopback\n"));
+        assert_eq!(wifi_state(&mut r).unwrap(), None);
+        assert_eq!(r.seen.len(), 1);
+        let mut r = FakeRunner::new();
+        r.push(Output::ok("ethernet\nwifi\n"));
+        r.push(Output::ok("enabled\n"));
+        assert_eq!(wifi_state(&mut r).unwrap(), Some(true));
     }
 }

@@ -611,6 +611,9 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
     if row.kind == Some(RowKind::Primary) {
         return primary_row(c, rect, row, t);
     }
+    if row.kind == Some(RowKind::Heading) {
+        return heading_row(c, rect, row);
+    }
     let radius = ROW_RADIUS;
     // Resting glass: a faint pane and hairline (no outer glow, no
     // lift; the focus stays inside the row and the panel).
@@ -743,6 +746,48 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
                 value_text(c, rx, theme::text2());
             }
         }
+    }
+    // Greyed out (it depends on another setting): a veil over all of it.
+    // Focus still shows on it, as an outline over the veil.
+    if row.disabled && row.kind != Some(RowKind::Soon) {
+        c.fill(rect, radius, theme::rgba(theme::BG_TOP, 150));
+        if t > 0.01 {
+            c.outline(
+                rect,
+                radius,
+                1.5,
+                theme::rgba(theme::WHITE, (130.0 * t) as u8),
+            );
+        }
+    }
+}
+
+/// A heading between rows, like the page title but smaller, with its
+/// status beside it. No pane: it is not something to pick.
+fn heading_row<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow) {
+    let (x, y) = c.to_design(rect.min);
+    let (_, h) = c.dsize(rect);
+    let base = y + h - 14.0;
+    c.text(
+        x + 6.0,
+        base,
+        Align2::LEFT_BOTTOM,
+        row.title,
+        21.0,
+        theme::text(),
+        Weight::Semibold,
+    );
+    if !row.value.is_empty() {
+        let tw = c.text_width(row.title, 21.0, Weight::Semibold);
+        c.text(
+            x + 6.0 + tw + 14.0,
+            base - 2.0,
+            Align2::LEFT_BOTTOM,
+            row.value,
+            15.0,
+            theme::text3(),
+            Weight::Medium,
+        );
     }
 }
 

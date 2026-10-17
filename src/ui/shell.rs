@@ -1329,7 +1329,8 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::WifiRadio => "wifi",
         R::NetworkStatus => "globe",
         R::Ethernet => "ethernet",
-        R::JoinWifi => "plus",
+        R::WifiHeading => "wifi",
+        R::WifiNet(_) => "wifi",
         R::BtRadio | R::BtDevice(_) => "bluetooth",
         R::BtPair => "plus",
         R::Controller(_) => "game",
@@ -1450,6 +1451,20 @@ fn draw_settings(c: &C, v: &ShellView) {
 
     let right = c.r(344.0, 32.0, 884.0, 656.0);
     c.glass(right, 32.0);
+    // Which side has the focus: that side gets a faint accent edge, the
+    // other one steps back (dimmed further down).
+    let rows_on = c.anim(
+        ("settings-rows-focus", s.current_category().title()),
+        if no_overlay && s.settings_rows_focus {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    let side = c.anim(
+        "settings-side",
+        if s.settings_rows_focus { 1.0 } else { 0.0 },
+    );
     let cat = s.current_category();
     widgets::title(c, 384.0, 60.0, cat.title(), 28.0);
     if let Some((label, dot)) = category_status(cat, v.ctx) {
@@ -1472,14 +1487,6 @@ fn draw_settings(c: &C, v: &ShellView) {
     let list = c.clipped(356.0, top - 8.0, 860.0, 682.0 - (top - 8.0));
     // One focus highlight that glides from row to row, drawn under
     // the rows' text; it fades when focus leaves the list.
-    let rows_on = c.anim(
-        ("settings-rows-focus", cat.title()),
-        if no_overlay && s.settings_rows_focus {
-            1.0
-        } else {
-            0.0
-        },
-    );
     if rows_on > 0.01 && !rows.is_empty() {
         let at = c.anim(
             ("settings-highlight", cat.title()),
@@ -1487,7 +1494,7 @@ fn draw_settings(c: &C, v: &ShellView) {
         );
         let primary = rows
             .get(s.settings_row)
-            .is_some_and(|r| r.kind == RowKind::Primary);
+            .is_some_and(|r| matches!(r.kind, RowKind::Primary | RowKind::Heading));
         if !primary {
             let hl = list.r(368.0, top + at - scroll, 836.0, row_h);
             widgets::focus_pill(&list, hl, widgets::ROW_RADIUS, rows_on);
@@ -1587,6 +1594,35 @@ fn draw_settings(c: &C, v: &ShellView) {
             }
         }
     }
+    // The side without the focus steps back.
+    let cats = c.r(
+        40.0,
+        88.0,
+        292.0,
+        Category::ALL.len() as f32 * CAT_STEP + 4.0,
+    );
+    if side > 0.01 {
+        c.fill(cats, 24.0, theme::rgba(theme::BG_TOP, (120.0 * side) as u8));
+    }
+    if side < 0.99 {
+        c.fill(
+            right,
+            32.0,
+            theme::rgba(theme::BG_TOP, (120.0 * (1.0 - side)) as u8),
+        );
+    }
+    let edge = |r: Rect, radius: f32, k: f32| {
+        if k > 0.01 {
+            c.outline(
+                r,
+                radius,
+                1.5,
+                theme::rgba(theme::accent_rgb(), (110.0 * k) as u8),
+            );
+        }
+    };
+    edge(right, 32.0, side);
+    edge(cats, 24.0, 1.0 - side);
 }
 
 /// The accent swatches: the current colour has a check; `pick` (Left/Right
@@ -2017,59 +2053,6 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                 })
                 .collect();
             button_column(c, "power", mx + 32.0, y, 336.0, &labels, *index);
-        }
-        Overlay::WifiList { index } => {
-            // Nothing found yet and still looking: a big radar in the body.
-            let radar = matches!(s.wifi_scan, Scan::Busy) && s.wifi_results().is_empty();
-            let extra = if radar { RADAR_H } else { 0.0 };
-            let m = widgets::modal(
-                c,
-                640.0,
-                list_modal_h(s.wifi_results().len() + 1, 7) + extra,
-            );
-            c.hit(m, Target::Item(usize::MAX));
-            let (mx, my) = c.to_design(m.min);
-            let y = modal_header(c, mx, my, Some("wifi"), "Wi-Fi", 640.0);
-            let status = match (&s.wifi_scan, &s.wifi_connecting) {
-                (_, Some(ssid)) => format!("Joining {ssid}…"),
-                (Scan::Busy, _) => "Searching…".to_string(),
-                (Scan::Failed(e), _) => e.clone(),
-                (Scan::Done(n), _) if n.is_empty() => "No networks found".to_string(),
-                _ => String::new(),
-            };
-            let busy = s.wifi_connecting.is_some() || matches!(s.wifi_scan, Scan::Busy);
-            widgets::busy_line(c, mx + 36.0, y - 18.0, &status, busy && !radar, v.now);
-            if radar {
-                widgets::radar(c, mx + 320.0, y + RADAR_H / 2.0 - 6.0, "wifi", v.now);
-            }
-            let y = y + extra;
-            let nets = s.wifi_results();
-            let subs: Vec<&str> = nets
-                .iter()
-                .map(|n| match (n.in_use, n.secure) {
-                    (true, _) => "Connected",
-                    (false, true) => "Secured",
-                    (false, false) => "Open",
-                })
-                .collect();
-            let mut rows: Vec<ListRow> = nets
-                .iter()
-                .zip(&subs)
-                .map(|(n, sub)| ListRow {
-                    title: &n.ssid,
-                    subtitle: sub,
-                    value: "",
-                    kind: None,
-                    icon: Some("wifi"),
-                    disabled: false,
-                })
-                .collect();
-            rows.push(ListRow {
-                icon: Some("refresh"),
-                kind: Some(RowKind::Action),
-                ..ListRow::simple("Search again")
-            });
-            modal_list(c, "wifi", mx + 32.0, y, 576.0, &rows, *index, 7);
         }
         Overlay::QuickNetwork { index } => {
             let y = qs_panel(c, "globe", "Network");
