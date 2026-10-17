@@ -81,8 +81,18 @@ pub fn bar_pill<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
 
 /// A focused tile's rect: scaled up 6 % and lifted.
 pub fn lifted<H: Copy>(c: &Canvas<H>, rect: Rect, t: f32) -> Rect {
-    rect.scale_from_center(1.0 + 0.06 * t)
-        .translate(eframe::egui::vec2(0.0, -c.len(6.0) * t))
+    lifted_by(c, rect, t, LIFT)
+}
+
+/// How much a focused tile grows: in lists, and on Home, where the
+/// focused tile is the one thing to look at.
+pub const LIFT: f32 = 0.06;
+pub const HOME_LIFT: f32 = 0.14;
+
+/// [`lifted`], growing by `grow` (×1.14 for 0.14) when focused.
+pub fn lifted_by<H: Copy>(c: &Canvas<H>, rect: Rect, t: f32, grow: f32) -> Rect {
+    rect.scale_from_center(1.0 + grow * t)
+        .translate(eframe::egui::vec2(0.0, -c.len(4.0 + 40.0 * grow) * t))
 }
 
 /// The soft shadow under a focused tile (draw before the tile).
@@ -296,7 +306,7 @@ pub fn running_dot<H: Copy>(c: &Canvas<H>, x: f32, y: f32) {
 
 /// App tile (16:9) with the name underneath. `rect` is the tile only.
 pub fn app_tile<H: Copy>(c: &Canvas<H>, images: &Images, rect: Rect, app: &AppView, t: f32) {
-    app_tile_lift(c, images, rect, app, t, 0.0);
+    app_tile_lift(c, images, rect, app, t, 0.0, LIFT);
 }
 
 /// Height of the macOS-style "launching" bounce `secs` after OK: three
@@ -321,10 +331,11 @@ pub fn app_tile_lift<H: Copy>(
     app: &AppView,
     t: f32,
     lift: f32,
+    grow: f32,
 ) {
-    // Focus: ×1.06 and lifted, a soft shadow under it, a sheen on
-    // it; unfocused tiles stay flat.
-    let rect = lifted(c, rect, t);
+    // Focus: grown by `grow` and lifted, a soft shadow under it, a sheen
+    // on it; unfocused tiles stay flat.
+    let rect = lifted_by(c, rect, t, grow);
     let (x, y) = c.to_design(rect.min);
     let (w, h) = c.dsize(rect);
     let radius = 22.0;

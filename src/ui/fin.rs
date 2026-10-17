@@ -146,8 +146,20 @@ fn backdrop(c: &C, pics: &FinPics, server: &str, it: Option<&Item>) {
 /// focus lifts it with a soft shadow and a sheen, unfocused it is
 /// flat.
 #[allow(clippy::too_many_arguments)]
-fn card(c: &C, pics: &FinPics, url: &str, x: f32, y: f32, w: f32, h: f32, t: f32, label: &str) {
-    let rect = widgets::lifted(c, c.r(x, y, w, h), t);
+#[allow(clippy::too_many_arguments)]
+fn card(
+    c: &C,
+    pics: &FinPics,
+    url: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    t: f32,
+    grow: f32,
+    label: &str,
+) {
+    let rect = widgets::lifted_by(c, c.r(x, y, w, h), t, grow);
     let radius = RADIUS.min(h / 4.0);
     widgets::focus_lift(c, rect, radius, t);
     c.fill(rect, radius, theme::rgba(theme::BG_TOP, 210));
@@ -560,7 +572,18 @@ fn draw_browse(c: &C, f: &Fin, accounts: &Accounts, pics: &FinPics, server: &str
             } else {
                 poster_url(server, it)
             };
-            card(&list, pics, &url, x, y + ROW_GAP, w, h, t, &it.name);
+            card(
+                &list,
+                pics,
+                &url,
+                x,
+                y + ROW_GAP,
+                w,
+                h,
+                t,
+                widgets::LIFT,
+                &it.name,
+            );
             if r.libraries {
                 list.text(
                     x + 16.0,
@@ -784,6 +807,7 @@ fn draw_library(
             w,
             h,
             t,
+            widgets::LIFT,
             &it.name,
         );
         list.text(
@@ -881,6 +905,7 @@ fn draw_series(
             182.0,
             102.0,
             0.0,
+            widgets::LIFT,
             &e.name,
         );
         // Watched state: how far, as a line over the still and
@@ -955,6 +980,7 @@ fn draw_details(c: &C, pics: &FinPics, server: &str, item: &Item, index: usize) 
             280.0,
             420.0,
             0.0,
+            widgets::LIFT,
             &item.name,
         );
     } else {
@@ -967,6 +993,7 @@ fn draw_details(c: &C, pics: &FinPics, server: &str, item: &Item, index: usize) 
             400.0,
             225.0,
             0.0,
+            widgets::LIFT,
             &item.name,
         );
     }
@@ -1168,9 +1195,9 @@ pub fn home_rows(
     let (frow, fcol) = focus.unwrap_or((0, 0));
     let row_h = |r: &fin::Row| {
         if r.title == "Continue watching" {
-            234.0
+            262.0
         } else {
-            310.0
+            344.0
         }
     };
     let mut offsets = Vec::with_capacity(rows.len());
@@ -1180,25 +1207,37 @@ pub fn home_rows(
         acc += row_h(r);
     }
     let scroll = c.anim("home-rows", offsets.get(frow).copied().unwrap_or(0.0));
-    let list = c.clipped(0.0, y - 40.0, 1280.0, 720.0 - y + 40.0);
+    // Clipped just above the focused row's title: the rows scrolled past
+    // (titles included) are gone, not peeking out under the hero.
+    let list = c.clipped(0.0, y - 14.0, 1280.0, 720.0 - y + 14.0);
     for (ri, r) in rows.iter().enumerate() {
         let ry = y + offsets[ri] - scroll;
-        if ry > 720.0 || ry + row_h(r) < y - 40.0 {
+        if ry > 720.0 || ry + row_h(r) < y - 14.0 {
             continue;
         }
         let wide = r.title == "Continue watching";
         widgets::section(&list, 64.0, ry, &r.title);
         let (w, h, gap) = if wide {
-            (240.0, 135.0, 22.0)
+            (240.0, 135.0, 26.0)
         } else {
-            (150.0, 225.0, 20.0)
+            (150.0, 225.0, 24.0)
         };
         let col = if ri == frow { fcol } else { 0 };
         let visible = ((1216.0 - 64.0) / (w + gap)) as usize;
         let first = col.saturating_sub(visible.saturating_sub(1));
         let sx = list.anim(("home-media-x", ri), first as f32 * (w + gap));
+        let row_focus = focus.filter(|(r, _)| *r == ri).map(|(_, i)| i);
         for (i, it) in r.items.iter().enumerate() {
-            let x = 64.0 + i as f32 * (w + gap) - sx;
+            // The focused card grows; its neighbours step aside for it.
+            let push = list.anim(
+                ("home-media-push", ri, i),
+                match row_focus {
+                    Some(f) if i < f => -w * 0.08,
+                    Some(f) if i > f => w * 0.08,
+                    _ => 0.0,
+                },
+            );
+            let x = 64.0 + i as f32 * (w + gap) - sx + push;
             if x > 1280.0 || x + w < 0.0 {
                 continue;
             }
@@ -1208,23 +1247,39 @@ pub fn home_rows(
             } else {
                 poster_url(server, it)
             };
-            card(&list, pics, &url, x, ry + ROW_GAP, w, h, t, it.title());
-            card_state(&list, it, x, ry + ROW_GAP, w, h);
-            list.text(
-                x + w / 2.0,
-                ry + ROW_GAP + h + 12.0 + 4.0 * t,
-                Align2::CENTER_TOP,
-                &list.fit(it.title(), w + 10.0, 15.0, Weight::Medium),
-                15.0,
-                if t > 0.5 {
-                    theme::text()
-                } else {
-                    theme::text2()
-                },
-                Weight::Medium,
+            let top = ry + ROW_GAP;
+            card(
+                &list,
+                pics,
+                &url,
+                x,
+                top,
+                w,
+                h,
+                t,
+                widgets::HOME_LIFT,
+                it.title(),
             );
-            if ry + ROW_GAP > y - 40.0 && ry + ROW_GAP + h < 720.0 {
-                c.hit(c.r(x, ry + ROW_GAP, w, h), Target::HomeMedia(ri, i));
+            let grown = widgets::lifted_by(&list, list.r(x, top, w, h), t, widgets::HOME_LIFT);
+            let (gx, gy) = list.to_design(grown.min);
+            let (gw, gh) = list.dsize(grown);
+            card_state(&list, it, gx, gy, gw, gh);
+            // Posters carry their own title: theirs shows only under the
+            // focused one. Episode stills need theirs, dimmer unless focused.
+            let alpha = if wide { 150.0 + 105.0 * t } else { 255.0 * t };
+            if alpha > 2.0 {
+                list.text(
+                    x + w / 2.0,
+                    gy + gh + 12.0,
+                    Align2::CENTER_TOP,
+                    &list.fit(it.title(), w + 40.0 * t + 10.0, 15.5, Weight::Semibold),
+                    15.5,
+                    theme::rgba(theme::INK, alpha as u8),
+                    Weight::Semibold,
+                );
+            }
+            if top > y - 14.0 && top + h < 720.0 {
+                c.hit(c.r(x, top, w, h), Target::HomeMedia(ri, i));
             }
         }
     }
