@@ -99,10 +99,10 @@ pub fn draw(c: &C, v: &ShellView) {
             c.hit(c.screen, Target::Outside);
             draw_overlay(c, v, o);
         }
-        draw_volume_panel(c, v);
         if let Some((text, alpha)) = v.toast {
             widgets::toast(c, text, alpha);
         }
+        draw_volume_panel(c, v);
         return;
     }
     if let Some(sv) = &v.saver {
@@ -159,7 +159,6 @@ pub fn draw(c: &C, v: &ShellView) {
         c.hit(c.screen, Target::Outside);
         draw_overlay(c, v, o);
     }
-    draw_volume_panel(c, v);
     if let Some((id, secs, k)) = v.launch_splash {
         draw_launch_splash(c, v, id, secs, k);
     }
@@ -169,6 +168,8 @@ pub fn draw(c: &C, v: &ShellView) {
     if v.since_start < INTRO_SECS {
         draw_intro(c, v.since_start);
     }
+    // Last: nothing covers the volume panel.
+    draw_volume_panel(c, v);
 }
 
 /// How long the start-up animation lasts (seconds).
@@ -367,22 +368,36 @@ fn draw_top_bar(c: &C, v: &ShellView) {
 /// From OK until the app is on screen: the app's icon on its frosted card,
 /// its name, and after a moment a spinner. A line says what is going on
 /// when it takes a while.
-/// The volume panel on the right edge: mute button, level, output button,
-/// and the outputs list beside it when open.
+/// The volume panel on the right edge: mute, the level and the number,
+/// with the output it plays on beside it ("‹" = Left changes it). Left
+/// opens the outputs list in that place. A ring shows which part has
+/// the focus.
 fn draw_volume_panel(c: &C, v: &ShellView) {
+    use catostv_core::volume_panel::{sink_icon, sink_label};
     let Some(panel) = &v.shell.volume else {
         return;
     };
     let vol = v.ctx.sys.volume.unwrap_or_default();
     let sinks = &v.ctx.sys.sinks;
     let ease = 1.0 - (1.0 - v.volume_t.clamp(0.0, 1.0)).powi(3);
-    let (w, h) = (64.0, 320.0);
-    let x = 1280.0 - 28.0 - w + (1.0 - ease) * (w + 40.0);
-    let y = 200.0;
+    let (w, h) = (64.0, 280.0);
+    let x = 1280.0 - 28.0 - w + (1.0 - ease) * (w + 440.0);
+    let y = 220.0;
     let cx = x + w / 2.0;
-    c.sheet(c.r(x, y, w, h), w / 2.0);
+    let pill = c.r(x, y, w, h);
+    c.sheet(pill, w / 2.0);
+    let list_open = panel.outputs.is_some();
+    let ring = c.anim("volume-ring", if list_open { 0.0 } else { 1.0 });
+    if ring > 0.01 {
+        c.outline(
+            widgets::grow(pill, 0.0),
+            w / 2.0,
+            2.0,
+            theme::rgba(theme::WHITE, (150.0 * ring) as u8),
+        );
+    }
 
-    // Mute: lit while muted.
+    // Mute: lit while muted (OK toggles it).
     let my = y + 36.0;
     if vol.muted {
         c.circle(cx, my, 22.0, theme::accent());
@@ -404,8 +419,11 @@ fn draw_volume_panel(c: &C, v: &ShellView) {
 
     // The level, filled from the bottom.
     let (tw, ty, th) = (28.0, y + 70.0, 160.0);
-    let track = c.r(cx - tw / 2.0, ty, tw, th);
-    c.fill(track, tw / 2.0, theme::rgba(theme::WHITE, 22));
+    c.fill(
+        c.r(cx - tw / 2.0, ty, tw, th),
+        tw / 2.0,
+        theme::rgba(theme::WHITE, 22),
+    );
     let k = c.anim("volume-level", vol.percent as f32 / 100.0);
     if k > 0.005 {
         let fh = (th * k).max(tw);
@@ -421,48 +439,63 @@ fn draw_volume_panel(c: &C, v: &ShellView) {
     }
     c.text(
         cx,
-        ty + th + 20.0,
+        y + h - 26.0,
         Align2::CENTER_CENTER,
         &vol.percent.to_string(),
-        15.0,
+        16.0,
         if vol.muted {
             theme::text3()
         } else {
-            theme::text2()
+            theme::text()
         },
         Weight::Semibold,
     );
 
-    // Output: the current one's icon; Left opens the list.
-    let oy = y + h - 32.0;
-    let current = sinks.iter().find(|s| s.is_default);
-    let open = panel.outputs.is_some();
-    if open {
-        c.circle(cx, oy, 20.0, theme::rgba(theme::WHITE, 40));
-    }
-    icons::draw(
-        c,
-        current.map_or("speaker", |s| catostv_core::volume_panel::sink_icon(s.kind)),
-        cx,
-        oy,
-        17.0,
-        if open { theme::text() } else { theme::text2() },
-    );
-
+    let current = sinks.iter().position(|s| s.is_default);
     let Some(index) = panel.outputs else {
+        // The output it plays on, with a hint that Left changes it.
+        let Some(i) = current else {
+            return;
+        };
+        let name = c.fit(&sink_label(sinks, i), 230.0, 15.0, Weight::Medium);
+        let cw = 92.0 + c.text_width(&name, 15.0, Weight::Medium);
+        let left = x - 12.0 - cw;
+        let ly = y + h - 25.0;
+        c.sheet(c.r(left, y + h - 50.0, cw, 50.0), 25.0);
+        icons::draw(c, "back", left + 22.0, ly, 12.0, theme::text3());
+        icons::draw(
+            c,
+            sink_icon(sinks[i].kind),
+            left + 50.0,
+            ly,
+            16.0,
+            theme::text2(),
+        );
+        c.text(
+            left + 70.0,
+            ly,
+            Align2::LEFT_CENTER,
+            &name,
+            15.0,
+            theme::text2(),
+            Weight::Medium,
+        );
         return;
     };
+
+    // The outputs list, in focus; its bottom lines up with the panel.
     let lw = 380.0;
     let lh = 70.0 + sinks.len().max(1) as f32 * 56.0;
-    let lx = x - 16.0 - lw;
+    let lx = x - 12.0 - lw;
     let ly = (y + h - lh).max(40.0);
     let list = c.r(lx, ly, lw, lh);
     c.sheet(list, 28.0);
+    c.outline(list, 28.0, 2.0, theme::rgba(theme::WHITE, 150));
     c.text(
         lx + 24.0,
         ly + 34.0,
         Align2::LEFT_CENTER,
-        "Output",
+        "Sound output",
         17.0,
         theme::text(),
         Weight::Semibold,
@@ -477,29 +510,19 @@ fn draw_volume_panel(c: &C, v: &ShellView) {
     for (i, sink) in sinks.iter().enumerate() {
         let ry = ly + 58.0 + i as f32 * 56.0 + 25.0;
         let focused = i == index;
-        icons::draw(
-            c,
-            catostv_core::volume_panel::sink_icon(sink.kind),
-            lx + 40.0,
-            ry,
-            16.0,
-            if focused {
-                theme::text()
-            } else {
-                theme::text2()
-            },
-        );
+        let ink = if focused {
+            theme::text()
+        } else {
+            theme::text2()
+        };
+        icons::draw(c, sink_icon(sink.kind), lx + 40.0, ry, 16.0, ink);
         c.text(
             lx + 66.0,
             ry,
             Align2::LEFT_CENTER,
-            &c.fit(&sink.name, lw - 120.0, 15.0, Weight::Medium),
+            &c.fit(&sink_label(sinks, i), lw - 120.0, 15.0, Weight::Medium),
             15.0,
-            if focused {
-                theme::text()
-            } else {
-                theme::text2()
-            },
+            ink,
             Weight::Medium,
         );
         if sink.is_default {
