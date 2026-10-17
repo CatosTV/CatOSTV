@@ -683,7 +683,16 @@ fn draw_home(c: &C, v: &ShellView) {
     let scroll = c.anim("rail-scroll", first * step);
     let rail_focus = s.overlay().is_none() && !s.top_focus && !in_media;
     for (i, app) in apps.iter().enumerate() {
-        let x = 64.0 + i as f32 * step - scroll;
+        // The focused tile grows; its neighbours step aside for it.
+        let push = c.anim(
+            ("rail-push", i),
+            match rail_focus.then_some(s.rail_index) {
+                Some(f) if i < f => -tw * 0.08,
+                Some(f) if i > f => tw * 0.08,
+                _ => 0.0,
+            },
+        );
+        let x = 64.0 + i as f32 * step - scroll + push;
         if x < -tw || x > 1280.0 {
             continue;
         }
@@ -694,12 +703,20 @@ fn draw_home(c: &C, v: &ShellView) {
         let t = focus_t(c, ("rail", i), rail_focus && s.rail_index == i);
         widgets::home_glow(
             &rail,
-            widgets::lifted(&rail, rect, t),
+            widgets::lifted_by(&rail, rect, t, widgets::HOME_LIFT),
             22.0,
             t,
             theme::app_rgb(&app.entry.accent),
         );
-        widgets::app_tile_lift(&rail, v.images, rect, app, t, bounce_of(app));
+        widgets::app_tile_lift(
+            &rail,
+            v.images,
+            rect,
+            app,
+            t,
+            bounce_of(app),
+            widgets::HOME_LIFT,
+        );
         if !in_media {
             c.hit(c.r(x, 428.0, tw, th + 36.0), Target::Rail(i));
         }
