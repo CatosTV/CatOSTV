@@ -241,7 +241,9 @@ fn pump(from: &UnixStream, to: &UnixStream, filter: &Mutex<Filter>, dir: Dir) ->
             return Ok(());
         }
         let out = {
-            let mut f = filter.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut f = filter
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             match dir {
                 Dir::ToServer => {
                     f.from_client(&buf[..n]);
