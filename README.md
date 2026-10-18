@@ -9,7 +9,9 @@ letting me watch what I wanted. I wanted my TV back.
 
 CatosTV turns an ordinary PC (a mini PC, an old desktop) into a calm, fast
 TV box. You turn it on, you see your apps, you pick one, you watch. No ads,
-no account, no tracking, nothing you didn't install yourself.
+no account, no tracking, nothing you didn't install yourself. (The screensaver
+fetches pictures and local weather from public services; you can turn it off in
+Settings.)
 
 It's based on Arch Linux and it's a rolling release. You install it once,
 and from then on new versions come as updates, together with the Arch
@@ -27,8 +29,8 @@ Rust.
   screen takes you home. See [ANDROID.md](ANDROID.md).
 - Catfyn, a built-in player for your own [Jellyfin](https://jellyfin.org)
   server: continue watching, next episode with a countdown, subtitles.
-- Linux apps as well. Moonlight game streaming, Spotify and a simple file
-  browser are there from the start, and Steam (Big Picture), Kodi and lots
+- Linux apps as well. Moonlight game streaming and a simple file browser are
+  there from the start, and Steam (Big Picture), Spotify, Kodi and lots
   more install from the built-in Store (Flathub).
 - Recents, to jump back to an app or close it, with a picture of what each
   one was showing.
