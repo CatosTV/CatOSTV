@@ -50,7 +50,6 @@ readonly WAYDROID_DIR=/var/lib/waydroid
 readonly WAYDROID_CFG=$WAYDROID_DIR/waydroid.cfg
 readonly WAYDROID_DATA=/home/catostv/.local/share/waydroid
 readonly SOFTWARE_RENDERING_FLAG=/etc/catostv/android-software-rendering
-readonly NO_ZERO_COPY_FLAG=/etc/catostv/android-no-zero-copy
 readonly UI_CONF=/home/catostv/.config/catostv/ui.conf
 # WayDroid-ATV's Android TV 16 channel (LineageOS 23.0;): the
 # newest TV image, with zero-copy video decoding on by default, Catapult
