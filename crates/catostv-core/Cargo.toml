@@ -2,7 +2,7 @@
 name = "catostv-core"
 version = "1.0.3"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "CatosTV core logic: remote navigation, installer flow and safety, system tool adapters, IPC and app lifecycle. Standard library only."
 license = "MIT"
 publish = false
