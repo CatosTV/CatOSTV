@@ -148,7 +148,7 @@ fn recv_with_fds(fd: RawFd, buf: &mut [u8]) -> io::Result<(usize, Vec<RawFd>)> {
 /// attaches them there, which is where libwayland expects them). `data`
 /// must not be empty when `fds` is not.
 fn send_all(fd: RawFd, data: &[u8], fds: &[RawFd]) -> io::Result<()> {
-    debug_assert!(!(data.is_empty() && !fds.is_empty()));
+    debug_assert!(!data.is_empty() || fds.is_empty());
     if fds.len() > MAX_FDS {
         return Err(io::Error::other("too many file descriptors in one message"));
     }
@@ -241,7 +241,7 @@ fn pump(from: &UnixStream, to: &UnixStream, filter: &Mutex<Filter>, dir: Dir) ->
             return Ok(());
         }
         let out = {
-            let mut f = filter.lock().unwrap_or_else(|p| p.into_inner());
+            let mut f = filter.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match dir {
                 Dir::ToServer => {
                     f.from_client(&buf[..n]);
@@ -294,7 +294,7 @@ fn serve(client: UnixStream, upstream: &Path, id: u64) {
             .unwrap_or_else(|_| Err(io::Error::other("relay thread panicked"))),
         Err(e) => Err(e),
     };
-    let dropped = filter.lock().map(|f| f.dropped).unwrap_or(0);
+    let dropped = filter.lock().map_or(0, |f| f.dropped);
     match (down, up) {
         (Ok(()), Ok(())) => log(&format!("#{id}: closed ({dropped} announcements hidden)")),
         (Err(e), _) | (_, Err(e)) => log(&format!(
@@ -304,9 +304,7 @@ fn serve(client: UnixStream, upstream: &Path, id: u64) {
 }
 
 fn runtime_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
 }
 
 /// Listen on `socket`, relaying every client to `upstream`. Only returns on
