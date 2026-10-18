@@ -244,7 +244,7 @@ hung_count=0
 close_hung() {
   local pkg=$1
   case "$pkg" in
-    ""|android|system|com.android.*|com.google.android.gms*|com.google.android.gsf*|*launcher*|*leanback*|*catapult*|com.google.android.tvlauncher*) return 0 ;;
+    ""|android|system|com.android.*|com.google.android.gms*|com.google.android.gsf*|*launcher*|*leanback*|*catapult*) return 0 ;;
   esac
   echo "$pkg is not responding: closing it" >&2
   in_android "am force-stop $pkg" >/dev/null || true
