@@ -676,7 +676,7 @@ fn snapshot(appliance: bool, home: &Path) -> (SystemSnapshot, Vec<AppEntry>) {
         pin,
     });
     let bt_devices = if bt.available {
-        bluetooth::paired_devices(&mut r)
+        bluetooth::known_devices(&mut r)
     } else {
         Vec::new()
     };

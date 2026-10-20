@@ -77,6 +77,25 @@ pub fn paired_devices(r: &mut dyn Runner) -> Vec<Device> {
     Vec::new()
 }
 
+/// Paired devices, then the trusted ones that are no longer paired. BlueZ
+/// drops a pairing it can't use any more (the device forgot the TV, say
+/// after pairing with a phone) but keeps the device and its trust, so it
+/// would vanish from the lists although the user added it. Those come last
+/// and show as "Pair again" (`DeviceInfo::paired` is false).
+pub fn known_devices(r: &mut dyn Runner) -> Vec<Device> {
+    let mut v = paired_devices(r);
+    if let Ok(out) = r.run(&Cmd::new("bluetoothctl").args(["devices", "Trusted"]))
+        && out.success()
+    {
+        for d in parse_devices(&out.stdout) {
+            if !v.iter().any(|p| p.address.eq_ignore_ascii_case(&d.address)) {
+                v.push(d);
+            }
+        }
+    }
+    v
+}
+
 // ---------------------------------------------------------------------------
 // Discovery and pairing
 // ---------------------------------------------------------------------------
@@ -422,6 +441,22 @@ pub struct DeviceInfo {
     /// Battery level in percent, when the device reports it
     /// ("Battery Percentage: 0x64 (100)").
     pub battery: Option<u8>,
+    /// Offers the HID service (LE 0x1812, classic 0x1124). Many TV remotes
+    /// have no input icon (BlueZ has none for "remote control"), so this
+    /// is what tells them apart from headphones.
+    pub hid: bool,
+}
+
+impl DeviceInfo {
+    /// A remote, keyboard, mouse or controller: these belong under
+    /// Navigation & controllers, not with headphones and speakers.
+    pub fn is_input(&self) -> bool {
+        self.hid
+            || self
+                .icon
+                .as_deref()
+                .is_some_and(|i| i.starts_with("input-"))
+    }
 }
 
 /// "Battery Percentage: 0x64 (100)" -> 100.
@@ -476,6 +511,7 @@ pub fn parse_info(text: &str) -> Option<DeviceInfo> {
             "Trusted" => i.trusted = v == "yes",
             "Connected" => i.connected = v == "yes",
             "Battery Percentage" => i.battery = parse_battery(v),
+            "UUID" if v.contains("(00001812-") || v.contains("(00001124-") => i.hid = true,
             _ => {}
         }
     }
@@ -511,6 +547,18 @@ mod tests {
         let none =
             super::parse_info("Device 2C:BE:EE:3A:D7:46 (public)\n\tConnected: yes\n").unwrap();
         assert_eq!(none.battery, None);
+        // Earbuds are not an input device.
+        assert!(!i.is_input());
+    }
+
+    #[test]
+    fn a_remote_without_an_input_icon_is_input() {
+        // An LE TV remote: no icon (BlueZ has none for "remote control"),
+        // but it offers HID over GATT.
+        let text = "Device F4:22:7A:00:11:22 (public)\n\tName: RemoteG20\n\tPaired: yes\n\tUUID: Human Interface Device (00001812-0000-1000-8000-00805f9b34fb)\n";
+        let i = super::parse_info(text).unwrap();
+        assert_eq!(i.icon, None);
+        assert!(i.hid && i.is_input());
     }
 
     use super::*;
@@ -561,6 +609,19 @@ mod tests {
         assert_eq!(d[0].name, "CatosTV Remote");
         assert_eq!(d[1].name, "11:22:33:44:55:66");
         assert_eq!(r.seen[1].args, vec!["paired-devices"]);
+    }
+
+    #[test]
+    fn known_devices_adds_trusted_ones_after_the_paired() {
+        let mut r = FakeRunner::new();
+        r.push(Output::ok("Device AA:BB:CC:DD:EE:FF Pad\n"));
+        r.push(Output::ok(
+            "Device AA:BB:CC:DD:EE:FF Pad\nDevice 2C:BE:EE:3A:D7:46 Buds\n",
+        ));
+        let d = known_devices(&mut r);
+        let names: Vec<&str> = d.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["Pad", "Buds"]);
+        assert_eq!(r.seen[1].args, vec!["devices", "Trusted"]);
     }
 
     const NEW: &str = "[\u{1b}[0;92mNEW\u{1b}[0m]";
@@ -829,6 +890,7 @@ mod tests {
                 connected: true,
                 icon: Some("input-gaming".into()),
                 battery: None,
+                hid: true,
             }
         );
         let no_alias = parse_info("Device 11:22:33:44:55:66\n\tPaired: no\n").unwrap();

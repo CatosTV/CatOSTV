@@ -1719,7 +1719,12 @@ fn quick_tile(item: QuickItem, ctx: &ShellContext) -> (&'static str, &'static st
             )
         }
         QuickItem::Bluetooth => {
-            let connected: Vec<_> = sys.bt_details.iter().filter(|d| d.connected).collect();
+            // Remotes and controllers stay out of it, like the panel.
+            let connected: Vec<_> = sys
+                .bt_details
+                .iter()
+                .filter(|d| d.connected && !d.is_input())
+                .collect();
             (
                 "bluetooth",
                 "Bluetooth",
@@ -2148,6 +2153,8 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                         "…".into()
                     } else if shell::bt_connected(sys, &d.address) {
                         shell::bt_connected_label(sys, &d.address)
+                    } else if shell::bt_unpaired(sys, &d.address) {
+                        "Pair again".into()
                     } else {
                         "Not connected".into()
                     }

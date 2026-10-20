@@ -1337,6 +1337,31 @@ fn quick_settings_network_ethernet_and_bluetooth() {
 }
 
 #[test]
+fn a_device_that_lost_its_pairing_is_paired_again() {
+    // BlueZ dropped the pad's pairing but kept it: OK pairs it again
+    // instead of a connect that can only fail.
+    let mut f = Fixture::new();
+    f.sys.bluetooth.available = true;
+    f.sys.bluetooth.powered = true;
+    f.sys.bt_devices = vec![crate::bluetooth::Device {
+        address: "AA:BB:CC:DD:EE:01".into(),
+        name: "Pad".into(),
+    }];
+    f.sys.bt_details.push(crate::bluetooth::DeviceInfo {
+        address: "AA:BB:CC:DD:EE:01".into(),
+        paired: false,
+        ..Default::default()
+    });
+    let mut s = Shell::new();
+    s.overlays.push(Overlay::QuickBluetooth { index: 1 });
+    assert_eq!(
+        press(&mut s, &f, &[Ok]),
+        vec![Effect::BtPair("AA:BB:CC:DD:EE:01".into())]
+    );
+    assert_eq!(s.bt_busy.as_deref(), Some("AA:BB:CC:DD:EE:01"));
+}
+
+#[test]
 fn accent_colour_slides_then_ok_picks() {
     // On the accent row Left/Right move a ring over the swatches without
     // changing anything; OK picks; moving off the row forgets the ring.

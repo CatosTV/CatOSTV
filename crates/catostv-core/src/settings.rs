@@ -485,12 +485,18 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                 RowKind::Primary,
             ));
             for (i, d) in sys.bt_devices.iter().enumerate() {
+                // Remotes and controllers are under Navigation & controllers.
+                if crate::shell::bt_is_input(sys, &d.address) {
+                    continue;
+                }
                 let connected = sys
                     .bt_details
                     .iter()
                     .any(|x| x.address == d.address && x.connected);
                 let state = if connected {
                     crate::shell::bt_connected_label(sys, &d.address)
+                } else if crate::shell::bt_unpaired(sys, &d.address) {
+                    "Pair again".into()
                 } else {
                     "Paired".into()
                 };
@@ -741,9 +747,7 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
             }
             for (i, d) in sys.bt_devices.iter().enumerate() {
                 let info = sys.bt_details.iter().find(|x| x.address == d.address);
-                let input = info
-                    .and_then(|x| x.icon.as_deref())
-                    .is_some_and(|ic| ic.starts_with("input-"));
+                let input = info.is_some_and(|x| x.is_input());
                 if !input || sys.controllers.iter().any(|c| same(c, &d.name)) {
                     continue;
                 }
@@ -754,6 +758,8 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                     "",
                     if connected {
                         "Connected"
+                    } else if info.is_some_and(|x| !x.paired) {
+                        "Pair again"
                     } else {
                         "Not connected"
                     },

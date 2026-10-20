@@ -196,6 +196,30 @@ pub fn bt_connected(sys: &crate::settings::SystemSnapshot, mac: &str) -> bool {
         .any(|d| d.address == mac && d.connected)
 }
 
+/// A remote, keyboard or controller: listed under Navigation & controllers
+/// only, not with the other Bluetooth devices.
+pub fn bt_is_input(sys: &crate::settings::SystemSnapshot, mac: &str) -> bool {
+    sys.bt_details
+        .iter()
+        .any(|d| d.address == mac && d.is_input())
+}
+
+/// A device the user added that BlueZ no longer has as paired (see
+/// `bluetooth::known_devices`): it has to be paired again.
+pub fn bt_unpaired(sys: &crate::settings::SystemSnapshot, mac: &str) -> bool {
+    sys.bt_details.iter().any(|d| d.address == mac && !d.paired)
+}
+
+/// Connect a known device, or pair it again first when it lost its pairing
+/// (the device has to be in pairing mode for that).
+fn bt_connect_effect(sys: &crate::settings::SystemSnapshot, mac: String) -> Effect {
+    if bt_unpaired(sys, &mac) {
+        Effect::BtPair(mac)
+    } else {
+        Effect::BtConnect(mac)
+    }
+}
+
 /// "Connected", with the battery level when the device reports one.
 pub fn bt_connected_label(sys: &crate::settings::SystemSnapshot, mac: &str) -> String {
     match sys
@@ -214,7 +238,11 @@ pub fn bt_connected_label(sys: &crate::settings::SystemSnapshot, mac: &str) -> S
 pub fn quick_bt_rows(ctx: &ShellContext) -> Vec<BtRow> {
     let mut v = vec![BtRow::Switch];
     if ctx.sys.bluetooth.powered {
-        v.extend((0..ctx.sys.bt_devices.len()).map(BtRow::Device));
+        v.extend(
+            (0..ctx.sys.bt_devices.len())
+                .filter(|&i| !bt_is_input(ctx.sys, &ctx.sys.bt_devices[i].address))
+                .map(BtRow::Device),
+        );
         v.push(BtRow::Pair);
     }
     v
@@ -2650,7 +2678,7 @@ impl Shell {
                         if bt_connected(sys, &mac) {
                             vec![Effect::BtDisconnect(mac)]
                         } else {
-                            vec![Effect::BtConnect(mac)]
+                            vec![bt_connect_effect(sys, mac)]
                         }
                     }
                     BtRow::Pair => {
@@ -2811,7 +2839,7 @@ impl Shell {
                     return vec![];
                 };
                 match choice {
-                    BtOption::Connect => vec![Effect::BtConnect(mac)],
+                    BtOption::Connect => vec![bt_connect_effect(ctx.sys, mac)],
                     BtOption::Disconnect => vec![Effect::BtDisconnect(mac)],
                     BtOption::Forget => vec![Effect::BtForget(mac)],
                     BtOption::Cancel => vec![],
