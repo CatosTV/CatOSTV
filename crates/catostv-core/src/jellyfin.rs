@@ -95,7 +95,42 @@ pub fn discover(wait: Duration) -> Vec<Server> {
             Err(_) => break,
         }
     }
+    if out.is_empty() {
+        out = scan(Duration::from_millis(300));
+    }
     out
+}
+
+/// Servers that did not answer discovery (often one in a container without
+/// its discovery port): hosts of this network with Jellyfin's port open
+/// that say who they are at `/System/Info/Public`.
+fn scan(timeout: Duration) -> Vec<Server> {
+    crate::http::scan_lan(8096, timeout)
+        .into_iter()
+        .filter_map(|ip| {
+            let addr = std::net::SocketAddrV4::new(ip, 8096);
+            let body = crate::http::get_small(
+                addr,
+                "/System/Info/Public",
+                &[],
+                Duration::from_secs(2),
+                16 * 1024,
+            )
+            .ok()?;
+            parse_public_info(&body, &format!("http://{ip}:8096"))
+        })
+        .collect()
+}
+
+/// `/System/Info/Public` → the server (name and id), at `address`.
+pub fn parse_public_info(text: &str, address: &str) -> Option<Server> {
+    let v = parse_json(text.trim())?;
+    let name = v.get("ServerName")?.as_str()?.to_string();
+    Some(Server {
+        id: v.get("Id").and_then(Json::as_str).unwrap_or("").to_string(),
+        name,
+        address: address.to_string(),
+    })
 }
 
 /// `192.168.1.5`, `jelly.lan:8096/`, `https://x` → a base URL, or `None`
@@ -1203,6 +1238,21 @@ mod tests {
             token: "tok123".into(),
             incognito: false,
         }
+    }
+
+    #[test]
+    fn public_info_names_a_server_found_by_scanning() {
+        let s = parse_public_info(
+            r#"{"LocalAddress":"http://172.17.0.2:8096","ServerName":"Den","Version":"10.10.7","Id":"abc"}"#,
+            "http://10.0.0.5:8096",
+        )
+        .unwrap();
+        // The address it was reached at, not the container's own.
+        assert_eq!(
+            (s.name.as_str(), s.id.as_str(), s.address.as_str()),
+            ("Den", "abc", "http://10.0.0.5:8096")
+        );
+        assert_eq!(parse_public_info("{}", "http://x"), None);
     }
 
     #[test]
