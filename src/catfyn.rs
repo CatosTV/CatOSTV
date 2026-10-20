@@ -1,12 +1,14 @@
 //! Catfyn's network and playback jobs (run on background threads by
-//! `catostv-shell`). The API and the screens are in `catostv_core::jellyfin`
-//! and `catostv_core::fin`; this file only runs `curl` / `mpv` and turns the
-//! answers into data.
+//! `catostv-shell`). The APIs and the screens are in `catostv_core::jellyfin`,
+//! `catostv_core::plex` and `catostv_core::fin`; this file only runs `curl` /
+//! `mpv` and turns the answers into data, for Jellyfin and Plex alike (each
+//! account says which it is).
 
 use catostv_core::apps::{AppEntry, AppSource};
 use catostv_core::fin::HomeData;
-use catostv_core::jellyfin::{self as jf, Account, Item, Report, Server};
+use catostv_core::jellyfin::{self as jf, Account, Backend, Item, Report, Server};
 use catostv_core::mpv::{self, Arg};
+use catostv_core::plex;
 use catostv_core::process::{Runner, SystemRunner};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -22,15 +24,42 @@ fn run(cmd: &catostv_core::process::Cmd) -> Result<String, String> {
     }
 }
 
-/// GET (or POST `body`) with the account's token.
-pub fn call(device: &str, a: &Account, url: &str, body: Option<&str>) -> Result<String, String> {
-    let headers = jf::header_file(device, Some(&a.token))
-        .map_err(|e| format!("Catfyn could not prepare the request ({e})"))?;
-    run(&jf::request_cmd(url, &headers, body))
+fn headers(device: &str, a: &Account) -> Result<std::path::PathBuf, String> {
+    match a.backend {
+        Backend::Jellyfin => jf::header_file(device, Some(&a.token)),
+        Backend::Plex => plex::header_file(device, Some(&a.token)),
+    }
+    .map_err(|e| format!("Catfyn could not prepare the request ({e})"))
 }
 
+/// GET (or POST `body`) with the account's token.
+pub fn call(device: &str, a: &Account, url: &str, body: Option<&str>) -> Result<String, String> {
+    run(&jf::request_cmd(url, &headers(device, a)?, body))
+}
+
+/// Items of a list request, marked with the server they came from.
 pub fn items(device: &str, a: &Account, url: &str) -> Result<Vec<Item>, String> {
-    jf::parse_items(&call(device, a, url, None)?).map_err(|e| e.to_string())
+    let body = call(device, a, url, None)?;
+    let mut v = match a.backend {
+        Backend::Jellyfin => jf::parse_items(&body),
+        Backend::Plex => plex::parse_items(&body, &a.server),
+    }
+    .map_err(|e| e.to_string())?;
+    for it in &mut v {
+        it.server = a.server.clone();
+        it.backend = a.backend;
+    }
+    Ok(v)
+}
+
+/// One item with the user's own data (position, watched), when the server
+/// answers.
+fn fresh(device: &str, a: &Account, item: &Item) -> Option<Item> {
+    let url = match a.backend {
+        Backend::Jellyfin => jf::item_url(a, &item.id),
+        Backend::Plex => plex::item_url(a, &item.id),
+    };
+    items(device, a, &url).ok()?.into_iter().next()
 }
 
 pub fn login(device: &str, server: &Server, user: &str, password: &str) -> Result<Account, String> {
@@ -49,36 +78,224 @@ pub fn login(device: &str, server: &Server, user: &str, password: &str) -> Resul
         user_name,
         token,
         incognito: false,
+        ..Account::default()
     })
 }
+
+// ------------------------------------------------------------- Plex sign-in
+
+/// A new code to enter at plex.tv/link: (pin id, code).
+pub fn plex_pin(device: &str) -> Result<(u64, String), String> {
+    let h = plex::header_file(device, None).map_err(|e| e.to_string())?;
+    let body = run(&jf::request_cmd(&plex::pin_url(), &h, Some("strong=false")))?;
+    plex::parse_pin(&body).ok_or_else(|| "Plex did not give a code".into())
+}
+
+/// The plex.tv token once the code was entered (`None`: not yet).
+pub fn plex_check(device: &str, pin: u64) -> Result<Option<String>, String> {
+    let h = plex::header_file(device, None).map_err(|e| e.to_string())?;
+    let body = run(&jf::request_cmd(&plex::pin_check_url(pin), &h, None))?;
+    Ok(plex::parse_pin_token(&body))
+}
+
+/// Who signed in and the servers they can use.
+pub fn plex_servers(
+    device: &str,
+    cloud_token: &str,
+) -> Result<(String, String, Vec<plex::PlexServer>), String> {
+    let h = plex::header_file(device, Some(cloud_token)).map_err(|e| e.to_string())?;
+    let user = run(&jf::request_cmd(&plex::user_url(), &h, None))?;
+    let (id, name) =
+        plex::parse_user(&user).ok_or_else(|| "Plex did not say who you are".to_string())?;
+    let list = run(&jf::request_cmd(&plex::resources_url(), &h, None))?;
+    Ok((id, name, plex::parse_resources(&list)))
+}
+
+/// A quick request (a few seconds): is a server reachable this way?
+fn probe(url: &str, headers: &Path) -> Result<String, String> {
+    let mut cmd = jf::request_cmd(url, headers, None);
+    if let Some(i) = cmd.args.iter().position(|a| a == "-m") {
+        cmd.args[i + 1] = "4".into();
+    }
+    cmd = cmd.timeout(Duration::from_secs(6));
+    run(&cmd)
+}
+
+/// Use a plex.tv server: the first of its addresses that answers.
+pub fn plex_connect(
+    device: &str,
+    server: &plex::PlexServer,
+    user_id: &str,
+    user_name: &str,
+    cloud_token: &str,
+) -> Result<Account, String> {
+    let h = plex::header_file(device, Some(&server.token)).map_err(|e| e.to_string())?;
+    for address in &server.addresses {
+        if probe(&plex::identity_url(address), &h).is_ok() {
+            return Ok(plex::account(
+                server,
+                address,
+                user_id,
+                user_name,
+                cloud_token,
+            ));
+        }
+    }
+    Err(format!("Can't reach {}", server.name))
+}
+
+/// A Plex server typed in by address, used without a sign-in (it must let
+/// the home network in: Plex → Settings → Network → "List of IP addresses
+/// and networks that are allowed without auth").
+pub fn plex_local(device: &str, address: &str) -> Result<Account, String> {
+    let h = plex::header_file(device, None).map_err(|e| e.to_string())?;
+    let id = probe(&plex::identity_url(address), &h)
+        .ok()
+        .and_then(|b| plex::parse_identity(&b))
+        .ok_or_else(|| "Can't reach a Plex server there".to_string())?;
+    let root = probe(&format!("{address}/"), &h)
+        .map_err(|_| "This server needs you to sign in with Plex".to_string())?;
+    let name = catostv_core::mpv::parse_json(root.trim())
+        .and_then(|v| {
+            v.get("MediaContainer")?
+                .get("friendlyName")?
+                .as_str()
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "Plex".into());
+    Ok(plex::local_account(&Server {
+        id,
+        name,
+        address: address.to_string(),
+    }))
+}
+
+// ------------------------------------------------------------------ browse
 
 /// Everything the Browse screen shows. A failing optional row is left
 /// empty; only an unreachable server is an error.
 pub fn home(device: &str, a: &Account) -> Result<HomeData, String> {
-    let libraries = jf::video_libraries(items(device, a, &jf::views_url(a))?);
-    let resume = items(device, a, &jf::resume_url(a, 16)).unwrap_or_default();
-    let next_up = items(device, a, &jf::next_up_url(a, 16)).unwrap_or_default();
-    let latest = libraries
+    match a.backend {
+        Backend::Jellyfin => {
+            let libraries = jf::video_libraries(items(device, a, &jf::views_url(a))?);
+            let resume = items(device, a, &jf::resume_url(a, 16)).unwrap_or_default();
+            let next_up = items(device, a, &jf::next_up_url(a, 16)).unwrap_or_default();
+            let latest = libraries
+                .iter()
+                .take(5)
+                .map(|l| {
+                    (
+                        l.name.clone(),
+                        items(device, a, &jf::latest_url(a, &l.id, 16)).unwrap_or_default(),
+                    )
+                })
+                .collect();
+            Ok(HomeData {
+                resume,
+                next_up,
+                libraries,
+                latest,
+            })
+        }
+        Backend::Plex => {
+            let libraries = plex::video_libraries(items(device, a, &plex::sections_url(a))?);
+            let deck = items(device, a, &plex::on_deck_url(a, 24)).unwrap_or_default();
+            let (resume, next_up) = plex::split_on_deck(deck);
+            let latest = libraries
+                .iter()
+                .take(5)
+                .map(|l| {
+                    (
+                        l.name.clone(),
+                        items(device, a, &plex::recent_url(a, &l.id, 16)).unwrap_or_default(),
+                    )
+                })
+                .collect();
+            Ok(HomeData {
+                resume,
+                next_up,
+                libraries,
+                latest,
+            })
+        }
+    }
+}
+
+pub fn library(device: &str, a: &Account, lib: &str) -> Result<Vec<Item>, String> {
+    match a.backend {
+        Backend::Jellyfin => items(device, a, &jf::library_url(a, lib)),
+        Backend::Plex => items(device, a, &plex::library_url(a, lib)),
+    }
+}
+
+pub fn seasons(device: &str, a: &Account, series: &str) -> Result<Vec<Item>, String> {
+    match a.backend {
+        Backend::Jellyfin => items(device, a, &jf::seasons_url(a, series)),
+        Backend::Plex => items(device, a, &plex::children_url(a, series)),
+    }
+}
+
+pub fn episodes(
+    device: &str,
+    a: &Account,
+    series: &str,
+    season: &str,
+) -> Result<Vec<Item>, String> {
+    match a.backend {
+        Backend::Jellyfin => items(device, a, &jf::episodes_url(a, series, season)),
+        Backend::Plex => items(device, a, &plex::children_url(a, season)),
+    }
+}
+
+/// Films and shows whose name matches (CatosTV Search).
+pub fn search(device: &str, a: &Account, term: &str, limit: u32) -> Result<Vec<Item>, String> {
+    match a.backend {
+        Backend::Jellyfin => items(device, a, &jf::search_url(a, term, limit)),
+        Backend::Plex => items(device, a, &plex::search_url(a, term, limit)),
+    }
+}
+
+/// CatosTV Home's rows (Continue watching, Movies, TV shows) from every
+/// home account, Jellyfin and Plex side by side: each row takes its items
+/// in turn from each server.
+pub fn home_rows(device: &str, accounts: &[Account]) -> Vec<catostv_core::fin::Row> {
+    let per: Vec<Vec<catostv_core::fin::Row>> = accounts
         .iter()
-        .take(5)
-        .map(|l| {
+        .map(|a| home(device, a).map(|d| d.home_rows()).unwrap_or_default())
+        .collect();
+    catostv_core::fin::merge_rows(per)
+}
+
+// ------------------------------------------------------------------ pictures
+
+/// Plex servers need the token for pictures too; the shell keeps this list
+/// up to date (`remember_accounts`) so a picture's address alone is enough.
+static PLEX_SIGN_INS: std::sync::Mutex<Vec<(String, String, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// The Plex servers' addresses and tokens, for [`fetch_image`].
+pub fn remember_accounts(accounts: &jf::Accounts) {
+    let list = accounts
+        .list
+        .iter()
+        .filter(|a| a.backend == Backend::Plex)
+        .map(|a| {
             (
-                l.name.clone(),
-                items(device, a, &jf::latest_url(a, &l.id, 16)).unwrap_or_default(),
+                a.server.clone(),
+                accounts.device_id.clone(),
+                a.token.clone(),
             )
         })
         .collect();
-    Ok(HomeData {
-        resume,
-        next_up,
-        libraries,
-        latest,
-    })
+    *PLEX_SIGN_INS.lock().unwrap_or_else(|e| e.into_inner()) = list;
 }
 
-/// CatosTV Home's rows (Continue watching, Movies, TV shows).
-pub fn home_rows(device: &str, a: &Account) -> Vec<catostv_core::fin::Row> {
-    home(device, a).map(|d| d.home_rows()).unwrap_or_default()
+fn plex_headers_for(url: &str) -> Option<std::path::PathBuf> {
+    let list = PLEX_SIGN_INS.lock().unwrap_or_else(|e| e.into_inner());
+    let (_, device, token) = list
+        .iter()
+        .find(|(server, _, _)| url.starts_with(&format!("{server}/")))?;
+    plex::header_file(device, Some(token)).ok()
 }
 
 /// Download an image into the cache; returns the PNG path.
@@ -91,15 +308,55 @@ pub fn fetch_image(home: &Path, url: &str) -> Option<String> {
         let _ = std::fs::create_dir_all(d);
     }
     let tmp = path.with_extension("part");
-    let ok = jf::image_cmd(url, &tmp)
-        .ok()
-        .is_some_and(|c| SystemRunner.run(&c).is_ok_and(|o| o.success()))
+    let cmd = jf::image_cmd(url, &tmp).ok().map(|mut c| {
+        if let Some(h) = plex_headers_for(url) {
+            c.args.insert(0, format!("@{}", h.display()));
+            c.args.insert(0, "-H".into());
+        }
+        c
+    });
+    let ok = cmd.is_some_and(|c| SystemRunner.run(&c).is_ok_and(|o| o.success()))
         && std::fs::rename(&tmp, &path).is_ok();
     if ok {
         Some(path.to_string_lossy().into_owned())
     } else {
         let _ = std::fs::remove_file(&tmp);
         None
+    }
+}
+
+// ------------------------------------------------------------------ playback
+
+/// The address of the file to play, and the server's subtitle files.
+fn stream_and_subs(
+    device: &str,
+    a: &Account,
+    item: &Item,
+) -> Result<(String, Vec<jf::ExternalSub>), String> {
+    match a.backend {
+        Backend::Jellyfin => {
+            // Subtitle files the server keeps next to the video: one
+            // quick request; without an answer the embedded tracks still work.
+            let subs = call(
+                device,
+                a,
+                &jf::playback_info_url(a, &item.id),
+                Some(&jf::playback_info_body(a)),
+            )
+            .map(|body| jf::parse_external_subs(a, &body))
+            .unwrap_or_default();
+            Ok((jf::stream_url(a, &item.id), subs))
+        }
+        Backend::Plex => {
+            // The item itself: its file and subtitle streams.
+            let body = call(device, a, &plex::item_url(a, &item.id), None)?;
+            let part = plex::parse_part(&body)
+                .or_else(|| Some(item.part.clone()).filter(|p| !p.is_empty()))
+                .ok_or_else(|| "Plex has no file for this".to_string())?;
+            let url = plex::stream_url(a, &part)
+                .ok_or_else(|| "Plex has no file for this".to_string())?;
+            Ok((url, plex::parse_external_subs(a, &body)))
+        }
     }
 }
 
@@ -128,25 +385,24 @@ pub fn player_entry_with(
     from_start: bool,
     accent: &str,
 ) -> Result<AppEntry, String> {
-    let config = jf::player_config(device, &a.token).map_err(|e| e.to_string())?;
+    let config = match a.backend {
+        Backend::Jellyfin => jf::player_config(device, &a.token),
+        Backend::Plex => jf::player_config_with(plex::player_header(&a.token).as_deref()),
+    }
+    .map_err(|e| e.to_string())?;
     let start = if from_start { 0.0 } else { item.position };
     let title = play_title(item);
-    // Subtitle files the server keeps next to the video: one
-    // quick request; without an answer the embedded tracks still work.
-    let subs = call(
-        device,
-        a,
-        &jf::playback_info_url(a, &item.id),
-        Some(&jf::playback_info_body(a)),
-    )
-    .map(|body| jf::parse_external_subs(a, &body))
-    .unwrap_or_default();
-    // The user's subtitle mode and languages.
-    let prefs = call(device, a, &jf::user_url(a), None)
-        .map(|body| jf::parse_play_prefs(&body))
-        .unwrap_or_default();
+    let (url, subs) = stream_and_subs(device, a, item)?;
+    // The user's subtitle mode and languages (Jellyfin keeps them per user;
+    // Plex players choose their own, so mpv's defaults apply).
+    let prefs = match a.backend {
+        Backend::Jellyfin => call(device, a, &jf::user_url(a), None)
+            .map(|body| jf::parse_play_prefs(&body))
+            .unwrap_or_default(),
+        Backend::Plex => jf::PlayPrefs::default(),
+    };
     let argv = jf::player_argv_full(
-        &jf::stream_url(a, &item.id),
+        &url,
         &title,
         start,
         &config,
@@ -166,6 +422,51 @@ pub fn player_entry_with(
         icon_path: None,
         source: AppSource::Configured,
     })
+}
+
+/// Tell the server where playback is (Jellyfin's session reports, Plex's
+/// timeline).
+fn report(device: &str, a: &Account, item: &Item, kind: Report, pos: f64, paused: bool) {
+    match a.backend {
+        Backend::Jellyfin => {
+            let (url, body) = jf::report(a, kind, &item.id, pos, paused);
+            let _ = call(device, a, &url, Some(&body));
+        }
+        Backend::Plex => {
+            let state = match (kind, paused) {
+                (Report::Stopped, _) => "stopped",
+                (_, true) => "paused",
+                _ => "playing",
+            };
+            let _ = call(device, a, &plex::timeline_url(a, item, state, pos), None);
+        }
+    }
+}
+
+/// Mark an item watched.
+fn mark_watched(device: &str, a: &Account, item: &Item) {
+    let _ = match a.backend {
+        Backend::Jellyfin => call(device, a, &jf::played_url(a, &item.id), Some("{}")),
+        Backend::Plex => call(device, a, &plex::scrobble_url(a, &item.id), None),
+    };
+}
+
+/// Every episode of the item's show in order (for Previous / Next).
+fn series_episodes(device: &str, a: &Account, series: &str) -> Result<Vec<Item>, String> {
+    match a.backend {
+        Backend::Jellyfin => items(device, a, &jf::series_episodes_url(a, series)),
+        Backend::Plex => items(device, a, &plex::all_episodes_url(a, series)),
+    }
+}
+
+/// Where the end credits start, as segments for `upnext::credits_start`.
+fn segments(device: &str, a: &Account, item: &Item) -> Option<String> {
+    match a.backend {
+        Backend::Jellyfin => call(device, a, &jf::segments_url(a, &item.id), None).ok(),
+        Backend::Plex => call(device, a, &plex::item_url(a, &item.id), None)
+            .ok()
+            .and_then(|b| plex::segments_json(&b)),
+    }
 }
 
 /// A volume key while a film plays: change the volume and have the
@@ -238,15 +539,10 @@ pub struct Autoplay {
 /// The next episode's thumbnail as raw BGRA for mpv's `overlay-add`, sized
 /// for the card at the player's real resolution (the card is laid out on a
 /// 1920×1080 canvas). `(path, width, height)`.
-fn card_thumbnail(
-    home: &Path,
-    a: &Account,
-    next: &Item,
-    osd_width: f64,
-) -> Option<(String, u32, u32)> {
+fn card_thumbnail(home: &Path, next: &Item, osd_width: f64) -> Option<(String, u32, u32)> {
     let scale = (osd_width / 1920.0).clamp(0.5, 4.0);
     let (w, h) = ((256.0 * scale) as u32, (144.0 * scale) as u32);
-    let png = fetch_image(home, &jf::image_url(&a.server, &next.id, "Primary", 640))?;
+    let png = fetch_image(home, &jf::still_url(next))?;
     let img = image::load_from_memory(&std::fs::read(png).ok()?).ok()?;
     let mut px = img
         .resize_to_fill(w, h, image::imageops::FilterType::Triangle)
@@ -267,7 +563,7 @@ fn neighbours(device: &str, a: &Account, item: &Item) -> (Option<Item>, Option<I
     if item.kind() != jf::Kind::Episode || item.series_id.is_empty() {
         return (None, None);
     }
-    let Ok(list) = items(device, a, &jf::series_episodes_url(a, &item.series_id)) else {
+    let Ok(list) = series_episodes(device, a, &item.series_id) else {
         return (None, None);
     };
     (
@@ -301,6 +597,7 @@ fn load_in_player(
         next.position.max(0.0),
         mpv::option_value(&play_title(next))
     );
+    let (url, subs) = stream_and_subs(device, a, next)?;
     let _ = conn.command(&[
         Arg::Str("set_property"),
         Arg::Str("keep-open"),
@@ -308,20 +605,13 @@ fn load_in_player(
     ]);
     conn.command(&[
         Arg::Str("loadfile"),
-        Arg::Str(&jf::stream_url(a, &next.id)),
+        Arg::Str(&url),
         Arg::Str("replace"),
         Arg::Num(-1.0),
         Arg::Str(&opts),
     ])
     .map_err(|e| e.to_string())?;
-    Ok(call(
-        device,
-        a,
-        &jf::playback_info_url(a, &next.id),
-        Some(&jf::playback_info_body(a)),
-    )
-    .map(|body| jf::parse_external_subs(a, &body))
-    .unwrap_or_default())
+    Ok(subs)
 }
 
 /// Report playback to the server every 10 s and run the "Next episode"
@@ -345,8 +635,7 @@ pub fn spawn_reporter(
         .spawn(move || {
             let socket = jf::player_socket();
             let send = |item: &Item, kind: Report, pos: f64, paused: bool| {
-                let (url, body) = jf::report(&a, kind, &item.id, pos, paused);
-                let _ = call(&device, &a, &url, Some(&body));
+                report(&device, &a, item, kind, pos, paused);
             };
             // Wait for mpv to answer (up to 30 s).
             let started = Instant::now();
@@ -413,9 +702,7 @@ pub fn spawn_reporter(
                     Arg::Str(yes_no(&prev)),
                     Arg::Str(yes_no(&following)),
                 ]);
-                let segments = next
-                    .as_ref()
-                    .and_then(|_| call(&device, &a, &jf::segments_url(&a, &item.id), None).ok());
+                let segments = next.as_ref().and_then(|_| segments(&device, &a, &item));
                 if next.is_some() {
                     // Stay on the last frame at the end: the card decides.
                     let _ = conn.command(&[
@@ -457,10 +744,7 @@ pub fn spawn_reporter(
                     if let Some((p, from_start)) = jump {
                         send(&item, Report::Stopped, last.0, false);
                         card(&mut conn, &["hide"]);
-                        let mut p = call(&device, &a, &jf::item_url(&a, &p.id), None)
-                            .ok()
-                            .and_then(|b| jf::parse_single_item(&b))
-                            .unwrap_or(p);
+                        let mut p = fresh(&device, &a, &p).unwrap_or(p);
                         if from_start {
                             p.position = 0.0;
                         }
@@ -530,7 +814,7 @@ pub fn spawn_reporter(
                                     && let Some(n) = &next
                                 {
                                     let w = conn.get_f64("osd-width").unwrap_or(1920.0);
-                                    thumb = card_thumbnail(&home, &a, n, w);
+                                    thumb = card_thumbnail(&home, n, w);
                                 }
                                 let mut args: Vec<String> = match act {
                                     Action::ShowCard { left } => {
@@ -557,14 +841,10 @@ pub fn spawn_reporter(
                                 streak = up.as_ref().map_or(0, |u| u.streak);
                                 // The finished one is watched (as at any end),
                                 // then the next one starts here.
-                                let _ =
-                                    call(&device, &a, &jf::played_url(&a, &item.id), Some("{}"));
+                                mark_watched(&device, &a, &item);
                                 send(&item, Report::Stopped, last.0, false);
                                 card(&mut conn, &["hide"]);
-                                let n = call(&device, &a, &jf::item_url(&a, &n.id), None)
-                                    .ok()
-                                    .and_then(|b| jf::parse_single_item(&b))
-                                    .unwrap_or(n);
+                                let n = fresh(&device, &a, &n).unwrap_or(n);
                                 match load_in_player(&mut conn, &device, &a, &n) {
                                     Ok(subs) => {
                                         subs_to_add = subs;

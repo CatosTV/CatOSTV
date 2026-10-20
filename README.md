@@ -28,7 +28,8 @@ Rust.
   the remote and controllers work in them, and Back on an app's first
   screen takes you home. See [ANDROID.md](ANDROID.md).
 - Catfyn, a built-in player for your own [Jellyfin](https://jellyfin.org)
-  server: continue watching, next episode with a countdown, subtitles.
+  or [Plex](https://www.plex.tv) server (or both): continue watching, next
+  episode with a countdown, subtitles.
 - Linux apps as well. Moonlight game streaming and a simple file browser are
   there from the start, and Steam (Big Picture), Spotify, Kodi and lots
   more install from the built-in Store (Flathub).

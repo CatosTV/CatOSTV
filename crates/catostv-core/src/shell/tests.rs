@@ -474,6 +474,7 @@ fn search_asks_catfyn_and_lists_its_results() {
         user_name: "Ok".into(),
         token: "t".into(),
         incognito: false,
+        ..Default::default()
     });
     let mut s = Shell::new();
     s.handle_ipc(ShellCommand::Search);

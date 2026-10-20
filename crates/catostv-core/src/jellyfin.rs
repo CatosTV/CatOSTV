@@ -164,16 +164,57 @@ pub fn normalize_address(input: &str) -> Option<String> {
 
 // ----------------------------------------------------------------- accounts
 
+/// The kind of media server an account (and an item) belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub enum Backend {
+    #[default]
+    Jellyfin,
+    Plex,
+}
+
+impl Backend {
+    pub const ALL: [Backend; 2] = [Backend::Jellyfin, Backend::Plex];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Jellyfin => "jellyfin",
+            Self::Plex => "plex",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Jellyfin => "Jellyfin",
+            Self::Plex => "Plex",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Self {
+        if s == "plex" {
+            Self::Plex
+        } else {
+            Self::Jellyfin
+        }
+    }
+}
+
 /// A signed-in user on a server.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Account {
+    pub backend: Backend,
     pub server: String,
     pub server_name: String,
     pub user_id: String,
     pub user_name: String,
+    /// Jellyfin: the access token. Plex: the server's own token (empty for
+    /// a server on the home network that lets everyone in).
     pub token: String,
     /// Kept off CatosTV Home (no Continue watching / Next up rows there).
     pub incognito: bool,
+    /// Plex: the plex.tv sign-in, to find the server again when its
+    /// address changes, and the server's id.
+    pub cloud_token: String,
+    pub server_id: String,
 }
 
 /// All Catfyn accounts on this TV (`~/.config/catostv/catfyn.conf`, 0600).
@@ -198,12 +239,44 @@ impl Accounts {
             .or_else(|| self.list.iter().find(|a| !a.incognito))
     }
 
+    /// The accounts whose shows appear on CatosTV Home: one per kind of
+    /// server (Jellyfin and Plex side by side), the active one when it is of
+    /// that kind, else the first; never an incognito one.
+    pub fn home_accounts(&self) -> Vec<&Account> {
+        Backend::ALL
+            .iter()
+            .filter_map(|&b| {
+                self.active()
+                    .filter(|a| a.backend == b && !a.incognito)
+                    .or_else(|| self.list.iter().find(|a| a.backend == b && !a.incognito))
+            })
+            .collect()
+    }
+
+    /// The account an item was loaded from (its server and kind).
+    pub fn for_item(&self, item: &Item) -> Option<&Account> {
+        let mine = |a: &&Account| a.server == item.server && a.backend == item.backend;
+        self.home_accounts()
+            .into_iter()
+            .find(mine)
+            .or_else(|| self.list.iter().find(mine))
+    }
+
+    /// Kinds of server that have an account (for the Jellyfin | Plex
+    /// switch).
+    pub fn backends(&self) -> Vec<Backend> {
+        Backend::ALL
+            .into_iter()
+            .filter(|&b| self.list.iter().any(|a| a.backend == b))
+            .collect()
+    }
+
     /// Add (or replace the same user on the same server) and make it active.
     pub fn add(&mut self, a: Account) {
         if let Some(i) = self
             .list
             .iter()
-            .position(|x| x.server == a.server && x.user_id == a.user_id)
+            .position(|x| x.backend == a.backend && x.server == a.server && x.user_id == a.user_id)
         {
             let incognito = self.list[i].incognito;
             self.list[i] = Account { incognito, ..a };
@@ -230,7 +303,7 @@ impl Accounts {
                 continue;
             }
             if line == "[account]" {
-                if let Some(a) = cur.take().filter(|a| !a.token.is_empty()) {
+                if let Some(a) = cur.take().filter(has_sign_in) {
                     acc.list.push(a);
                 }
                 cur = Some(Account::default());
@@ -249,10 +322,13 @@ impl Accounts {
                 (Some(a), "user_name") => a.user_name = v,
                 (Some(a), "token") if is_token_like(&v) => a.token = v,
                 (Some(a), "incognito") => a.incognito = v == "true",
+                (Some(a), "backend") => a.backend = Backend::from_key(&v),
+                (Some(a), "cloud_token") if is_token_like(&v) => a.cloud_token = v,
+                (Some(a), "server_id") if is_token_like(&v) => a.server_id = v,
                 _ => {}
             }
         }
-        if let Some(a) = cur.filter(|a| !a.token.is_empty()) {
+        if let Some(a) = cur.filter(has_sign_in) {
             acc.list.push(a);
         }
         acc.list
@@ -269,7 +345,8 @@ impl Accounts {
         );
         for a in &self.list {
             s.push_str(&format!(
-                "\n[account]\nserver = {}\nserver_name = {}\nuser_id = {}\nuser_name = {}\ntoken = {}\nincognito = {}\n",
+                "\n[account]\nbackend = {}\nserver = {}\nserver_name = {}\nuser_id = {}\nuser_name = {}\ntoken = {}\nincognito = {}\n",
+                a.backend.key(),
                 clean(&a.server),
                 clean(&a.server_name),
                 clean(&a.user_id),
@@ -277,14 +354,29 @@ impl Accounts {
                 clean(&a.token),
                 a.incognito
             ));
+            if !a.cloud_token.is_empty() {
+                s.push_str(&format!("cloud_token = {}\n", clean(&a.cloud_token)));
+            }
+            if !a.server_id.is_empty() {
+                s.push_str(&format!("server_id = {}\n", clean(&a.server_id)));
+            }
         }
         s
     }
 }
 
-/// Ids and tokens are hex / GUID-like.
+/// A Jellyfin account needs its token; a Plex one may have none (a
+/// server on the home network that lets everyone in).
+fn has_sign_in(a: &Account) -> bool {
+    !a.token.is_empty() || a.backend == Backend::Plex
+}
+
+/// Ids and tokens are hex / GUID-like (Plex tokens also use `_`).
 pub fn is_token_like(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 pub fn accounts_path(home: &Path) -> PathBuf {
@@ -339,13 +431,21 @@ pub fn auth_value(device_id: &str, token: Option<&str>) -> String {
 /// Write the request headers to a private file (0600) that `curl -H @file`
 /// reads, so the token is never on a command line. Returns its path.
 pub fn header_file(device_id: &str, token: Option<&str>) -> Result<PathBuf> {
+    write_headers(
+        if token.is_some() { "auth" } else { "anon" },
+        &format!(
+            "Authorization: {}\nAccept: application/json\nContent-Type: application/json\n",
+            auth_value(device_id, token)
+        ),
+    )
+}
+
+/// Header lines in `$XDG_RUNTIME_DIR/catfyn-headers-{tag}` (0600).
+pub fn write_headers(tag: &str, text: &str) -> Result<PathBuf> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let dir = crate::env::runtime_dir();
-    let path = dir.join(format!(
-        "catfyn-headers-{}",
-        if token.is_some() { "auth" } else { "anon" }
-    ));
+    let path = dir.join(format!("catfyn-headers-{tag}"));
     // A temporary name of its own per call: requests run in parallel
     // (Browse rows, CatosTV Home's rows, the player), and a shared one let
     // one call delete another's half-written file, "No such file or
@@ -359,13 +459,7 @@ pub fn header_file(device_id: &str, token: Option<&str>) -> Result<PathBuf> {
         .create_new(true)
         .mode(0o600)
         .open(&tmp)?;
-    f.write_all(
-        format!(
-            "Authorization: {}\nAccept: application/json\nContent-Type: application/json\n",
-            auth_value(device_id, token)
-        )
-        .as_bytes(),
-    )?;
+    f.write_all(text.as_bytes())?;
     drop(f);
     std::fs::rename(&tmp, &path)?;
     Ok(path)
@@ -520,6 +614,71 @@ pub fn image_url(server: &str, item_id: &str, kind: &str, max_width: u32) -> Str
         "{server}/Items/{}/Images/{kind}?maxWidth={max_width}&quality=85&format=Png",
         q(item_id)
     )
+}
+
+/// An item's poster (an episode's series poster on Plex), from whichever
+/// server it came from.
+pub fn poster_url(it: &Item) -> String {
+    match it.backend {
+        Backend::Plex => {
+            let path = if it.kind() == Kind::Episode && !it.series_thumb.is_empty() {
+                &it.series_thumb
+            } else {
+                &it.thumb
+            };
+            crate::plex::image_url(&it.server, path, 300, 450, 0)
+        }
+        Backend::Jellyfin => image_url(&it.server, &it.id, "Primary", 300),
+    }
+}
+
+/// A landscape picture: the episode still, else the backdrop.
+pub fn wide_url(it: &Item) -> String {
+    match it.backend {
+        Backend::Plex => {
+            let path = if it.kind() == Kind::Episode || it.art.is_empty() {
+                &it.thumb
+            } else {
+                &it.art
+            };
+            crate::plex::image_url(&it.server, path, 480, 270, 0)
+        }
+        Backend::Jellyfin => match (it.kind(), &it.backdrop_item) {
+            (Kind::Episode, _) if it.has_primary => image_url(&it.server, &it.id, "Primary", 480),
+            (_, Some(b)) => image_url(&it.server, b, "Backdrop", 480),
+            _ => image_url(&it.server, &it.id, "Primary", 480),
+        },
+    }
+}
+
+/// The softened backdrop behind a page, when the item has one.
+pub fn backdrop_url(it: &Item, blur: u32) -> Option<String> {
+    match it.backend {
+        // No backdrop art: the item's own picture, softened a little more.
+        Backend::Plex => match (it.art.is_empty(), it.thumb.is_empty()) {
+            (false, _) => Some(crate::plex::image_url(&it.server, &it.art, 1280, 720, blur)),
+            (true, false) => Some(crate::plex::image_url(
+                &it.server,
+                &it.thumb,
+                640,
+                360,
+                blur * 2,
+            )),
+            _ => None,
+        },
+        Backend::Jellyfin => it
+            .backdrop_item
+            .as_ref()
+            .map(|b| image_url_blurred(&it.server, b, "Backdrop", 1280, blur)),
+    }
+}
+
+/// The still or poster for the "Next episode" card.
+pub fn still_url(it: &Item) -> String {
+    match it.backend {
+        Backend::Plex => crate::plex::image_url(&it.server, &it.thumb, 640, 360, 0),
+        Backend::Jellyfin => image_url(&it.server, &it.id, "Primary", 640),
+    }
 }
 
 /// [`image_url`] with the server's own Gaussian blur (`blur` = sigma in
@@ -758,6 +917,10 @@ pub enum Kind {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Item {
+    /// Where it came from: the server's address and kind (Home mixes
+    /// items from several servers).
+    pub server: String,
+    pub backend: Backend,
     pub id: String,
     pub name: String,
     pub kind_raw: String,
@@ -782,6 +945,13 @@ pub struct Item {
     /// Community rating (0–10) and age rating ("PG-13"), for the pills.
     pub rating: Option<f32>,
     pub age_rating: String,
+    /// Plex picture paths (`/library/metadata/1/thumb/…`): the poster or
+    /// episode still, the backdrop, and an episode's series poster.
+    pub thumb: String,
+    pub art: String,
+    pub series_thumb: String,
+    /// Plex: the file to play (`/library/parts/…`), when the listing had it.
+    pub part: String,
 }
 
 impl Item {
@@ -938,6 +1108,7 @@ pub fn parse_item(v: &Json) -> Option<Item> {
         rating: num(v, "CommunityRating").map(|n| n as f32),
         age_rating: text(v, "OfficialRating"),
         id,
+        ..Item::default()
     })
 }
 
@@ -1011,6 +1182,15 @@ pub fn player_socket() -> PathBuf {
 /// mpv config file carrying the auth header (0600), so the token is not on
 /// mpv's command line.
 pub fn player_config(device_id: &str, token: &str) -> Result<PathBuf> {
+    player_config_with(Some(&format!(
+        "Authorization: {}",
+        auth_value(device_id, Some(token))
+    )))
+}
+
+/// The player's config file with one HTTP header for the stream and
+/// subtitle files (`None`: no header, a server that needs no sign-in).
+pub fn player_config_with(header: Option<&str>) -> Result<PathBuf> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let path = crate::env::runtime_dir().join("catfyn-mpv.conf");
@@ -1025,14 +1205,15 @@ pub fn player_config(device_id: &str, token: &str) -> Result<PathBuf> {
     // separators) and `%N%` quotes the value by its byte length, which
     // every mpv version reads the same way; backslash-escaped quotes do
     // not parse on mpv 0.40.
-    let header = format!("Authorization: {}", auth_value(device_id, Some(token)));
-    f.write_all(
-        format!(
-            "http-header-fields-append={}\n",
-            crate::mpv::option_value(&header)
-        )
-        .as_bytes(),
-    )?;
+    if let Some(h) = header {
+        f.write_all(
+            format!(
+                "http-header-fields-append={}\n",
+                crate::mpv::option_value(h)
+            )
+            .as_bytes(),
+        )?;
+    }
     drop(f);
     std::fs::rename(&tmp, &path)?;
     Ok(path)
@@ -1237,6 +1418,7 @@ mod tests {
             user_name: "ok".into(),
             token: "tok123".into(),
             incognito: false,
+            ..Account::default()
         }
     }
 
@@ -1470,6 +1652,7 @@ mod tests {
             user_name: "me".into(),
             token: "tok123".into(),
             incognito: false,
+            ..Account::default()
         };
         assert_eq!(user_url(&a), "http://10.0.0.5:8096/Users/u1");
         let p = parse_play_prefs(
@@ -1532,6 +1715,7 @@ mod tests {
             user_name: "me".into(),
             token: "tok123".into(),
             incognito: false,
+            ..Account::default()
         };
         // the whole series in order, its credits segments, watched.
         assert_eq!(

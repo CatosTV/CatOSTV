@@ -24,8 +24,9 @@ use crate::input::Action;
 use crate::installer::Scan;
 #[cfg(test)]
 use crate::jellyfin::Account;
-use crate::jellyfin::{Accounts, Item, Kind, Server};
+use crate::jellyfin::{Accounts, Backend, Item, Kind, Server};
 use crate::osk::{Osk, OskEvent};
+use crate::plex::PlexServer;
 
 /// What the shell knows about Catfyn outside Catfyn itself: the accounts
 /// and, for CatosTV Home, what the home account can continue watching.
@@ -44,6 +45,44 @@ impl Media {
     }
 }
 
+/// CatosTV Home's rows from several servers in one: rows with the same
+/// title become one, taking an item from each server in turn (so neither
+/// server's newest drown the other's), in the first server's row order.
+pub fn merge_rows(per_server: Vec<Vec<Row>>) -> Vec<Row> {
+    let mut titles: Vec<String> = Vec::new();
+    for rows in &per_server {
+        for r in rows {
+            if !titles.contains(&r.title) {
+                titles.push(r.title.clone());
+            }
+        }
+    }
+    titles
+        .into_iter()
+        .filter_map(|title| {
+            let lists: Vec<&Vec<Item>> = per_server
+                .iter()
+                .filter_map(|rows| rows.iter().find(|r| r.title == title).map(|r| &r.items))
+                .collect();
+            let longest = lists.iter().map(|l| l.len()).max().unwrap_or(0);
+            let mut items = Vec::new();
+            for i in 0..longest {
+                for l in &lists {
+                    if let Some(it) = l.get(i) {
+                        items.push(it.clone());
+                    }
+                }
+            }
+            items.truncate(24);
+            (!items.is_empty()).then_some(Row {
+                title,
+                items,
+                libraries: false,
+            })
+        })
+        .collect()
+}
+
 /// No accounts, nothing to continue (tests, previews).
 pub static NO_MEDIA: Media = Media {
     accounts: Accounts {
@@ -60,6 +99,8 @@ pub const GRID_COLS: usize = 6;
 #[derive(Debug, Clone, PartialEq)]
 pub enum FinEffect {
     Discover,
+    /// Look for Plex servers on this network.
+    DiscoverPlex,
     Login {
         server: Server,
         user: String,
@@ -74,9 +115,23 @@ pub enum FinEffect {
         season: String,
     },
     Play {
-        item: Item,
+        item: Box<Item>,
         from_start: bool,
     },
+    /// Plex: get a code for plex.tv/link (the shell then waits for it to be
+    /// entered and answers with [`Fin::on_plex_linked`]).
+    PlexPin,
+    /// Stop waiting for the code (left the screen).
+    PlexStop,
+    /// Plex: use this server of the linked plex.tv account.
+    PlexUse {
+        server: PlexServer,
+        user_id: String,
+        user_name: String,
+        cloud_token: String,
+    },
+    /// Plex: a server typed in by address, used without a sign-in.
+    PlexAddress(String),
     SwitchAccount(usize),
     SetIncognito(usize, bool),
     SignOut(usize),
@@ -214,12 +269,30 @@ pub enum SignInStep {
 
 #[derive(Debug, Clone)]
 pub enum Screen {
+    /// Add a server: the Jellyfin | Plex switch (index 0), then Jellyfin's
+    /// servers found on the network and "Enter address", or Plex's "Sign in
+    /// with Plex" and "Enter address".
     Connect {
+        backend: Backend,
         servers: Scan<Server>,
         index: usize,
     },
     Address {
+        backend: Backend,
         osk: Box<Osk>,
+    },
+    /// The code to enter at plex.tv/link (`Busy` while Plex makes one).
+    PlexLink {
+        code: Scan<String>,
+    },
+    /// The linked plex.tv account's servers, to pick one.
+    PlexServers {
+        list: Vec<PlexServer>,
+        user_id: String,
+        user_name: String,
+        cloud_token: String,
+        index: usize,
+        busy: bool,
     },
     SignIn {
         server: Server,
@@ -320,10 +393,7 @@ impl Fin {
             f.home = Scan::Busy;
             vec![FinEffect::LoadHome]
         } else {
-            f.stack.push(Screen::Connect {
-                servers: Scan::Busy,
-                index: 0,
-            });
+            f.stack.push(connect_screen());
             vec![FinEffect::Discover]
         };
         (f, eff)
@@ -427,32 +497,81 @@ impl Fin {
             return vec![FinEffect::Close];
         };
         match screen {
-            Screen::Connect { servers, index } => {
-                let n = servers.items().len() + 1; // + "Enter address"
+            Screen::Connect {
+                backend,
+                servers,
+                index,
+            } => {
+                let n = 1 + connect_rows(*backend, servers);
+                // Each side looks for its own servers when it is chosen.
+                let toggle = |backend: &mut Backend| {
+                    *backend = match backend {
+                        Backend::Jellyfin => Backend::Plex,
+                        Backend::Plex => Backend::Jellyfin,
+                    };
+                    vec![match backend {
+                        Backend::Jellyfin => FinEffect::Discover,
+                        Backend::Plex => FinEffect::DiscoverPlex,
+                    }]
+                };
                 match action {
                     Action::Up => *index = index.saturating_sub(1),
                     Action::Down => *index = (*index + 1).min(n - 1),
+                    Action::Left | Action::Right | Action::Ok | Action::OkLong if *index == 0 => {
+                        *servers = Scan::Busy;
+                        return toggle(backend);
+                    }
                     Action::Ok | Action::OkLong => {
-                        if let Some(s) = servers.items().get(*index).cloned() {
-                            self.stack.push(sign_in(s));
-                        } else {
-                            self.stack.push(Screen::Address {
-                                osk: Box::new(Osk::new(false, "Next")),
-                            });
+                        let i = *index - 1;
+                        match backend {
+                            Backend::Jellyfin => {
+                                if let Some(s) = servers.items().get(i).cloned() {
+                                    self.stack.push(sign_in(s));
+                                } else {
+                                    self.stack.push(address_screen(Backend::Jellyfin));
+                                }
+                            }
+                            Backend::Plex if i == 0 => {
+                                self.error = None;
+                                self.stack.push(Screen::PlexLink { code: Scan::Busy });
+                                return vec![FinEffect::PlexPin];
+                            }
+                            // A server found on this network.
+                            Backend::Plex if i <= servers.items().len() => {
+                                self.error = None;
+                                let s = &servers.items()[i - 1];
+                                return vec![FinEffect::PlexAddress(s.address.clone())];
+                            }
+                            Backend::Plex => self.stack.push(address_screen(Backend::Plex)),
                         }
                     }
                     Action::Options => {
                         *servers = Scan::Busy;
-                        return vec![FinEffect::Discover];
+                        return vec![match backend {
+                            Backend::Jellyfin => FinEffect::Discover,
+                            Backend::Plex => FinEffect::DiscoverPlex,
+                        }];
                     }
                     Action::Back => return self.back(),
                     _ => {}
                 }
                 vec![]
             }
-            Screen::Address { osk } => match osk.handle(action) {
+            Screen::Address { backend, osk } => match osk.handle(action) {
                 OskEvent::Submitted => {
                     let text = osk.text().to_string();
+                    if *backend == Backend::Plex {
+                        return match crate::plex::normalize_address(&text) {
+                            Some(address) => {
+                                self.error = None;
+                                vec![FinEffect::PlexAddress(address)]
+                            }
+                            None => {
+                                self.error = Some("That doesn't look like a server address".into());
+                                vec![]
+                            }
+                        };
+                    }
                     match crate::jellyfin::normalize_address(&text) {
                         Some(address) => {
                             self.error = None;
@@ -473,6 +592,53 @@ impl Fin {
                 OskEvent::Unhandled if action == Action::Back => self.back(),
                 _ => vec![],
             },
+            Screen::PlexLink { code } => match action {
+                Action::Back => {
+                    let mut v = vec![FinEffect::PlexStop];
+                    v.extend(self.back());
+                    v
+                }
+                // Expired or failed: OK asks for a new code.
+                Action::Ok | Action::OkLong if matches!(code, Scan::Failed(_)) => {
+                    *code = Scan::Busy;
+                    self.error = None;
+                    vec![FinEffect::PlexStop, FinEffect::PlexPin]
+                }
+                _ => vec![],
+            },
+            Screen::PlexServers {
+                list,
+                user_id,
+                user_name,
+                cloud_token,
+                index,
+                busy,
+            } => {
+                if *busy {
+                    return if action == Action::Back {
+                        self.back()
+                    } else {
+                        vec![]
+                    };
+                }
+                match action {
+                    Action::Back => return self.back(),
+                    Action::Up => *index = index.saturating_sub(1),
+                    Action::Down => *index = (*index + 1).min(list.len().saturating_sub(1)),
+                    Action::Ok | Action::OkLong if *index < list.len() => {
+                        *busy = true;
+                        self.error = None;
+                        return vec![FinEffect::PlexUse {
+                            server: list[*index].clone(),
+                            user_id: user_id.clone(),
+                            user_name: user_name.clone(),
+                            cloud_token: cloud_token.clone(),
+                        }];
+                    }
+                    _ => {}
+                }
+                vec![]
+            }
             Screen::SignIn {
                 server,
                 step,
@@ -571,7 +737,7 @@ impl Fin {
                     Action::Ok if *in_episodes && *index < ne => {
                         let it = episodes.items()[*index].clone();
                         return vec![FinEffect::Play {
-                            item: it,
+                            item: Box::new(it),
                             from_start: false,
                         }];
                     }
@@ -595,18 +761,22 @@ impl Fin {
                         let item = item.clone();
                         return match acts.get(*index).copied() {
                             Some("Resume") | Some("Play") => vec![FinEffect::Play {
-                                item,
+                                item: Box::new(item),
                                 from_start: false,
                             }],
                             Some("Play from start") => vec![FinEffect::Play {
-                                item,
+                                item: Box::new(item),
                                 from_start: true,
                             }],
                             Some("Go to series") => {
                                 let series = Item {
+                                    server: item.server.clone(),
+                                    backend: item.backend,
                                     id: item.series_id.clone(),
                                     name: item.series_name.clone(),
                                     kind_raw: "Series".into(),
+                                    thumb: item.series_thumb.clone(),
+                                    art: item.art.clone(),
                                     ..Item::default()
                                 };
                                 self.open_series(series)
@@ -648,10 +818,7 @@ impl Fin {
                                     if last {
                                         // No account left: start over.
                                         self.stack.clear();
-                                        self.stack.push(Screen::Connect {
-                                            servers: Scan::Busy,
-                                            index: 0,
-                                        });
+                                        self.stack.push(connect_screen());
                                         self.home = Scan::Idle;
                                         v.push(FinEffect::Discover);
                                     } else if i == accounts.active {
@@ -671,10 +838,7 @@ impl Fin {
                     Action::Up => *index = index.saturating_sub(1),
                     Action::Down => *index = (*index + 1).min(n - 1),
                     Action::Ok if *index == accs + SETTINGS_ADD => {
-                        self.stack.push(Screen::Connect {
-                            servers: Scan::Busy,
-                            index: 0,
-                        });
+                        self.stack.push(connect_screen());
                         return vec![FinEffect::Discover];
                     }
                     Action::Ok if *index == accs + SETTINGS_AUTOPLAY => {
@@ -709,14 +873,21 @@ impl Fin {
         if self.header {
             let libs = self.header_libraries();
             let n = libs.len();
-            self.header_index = self.header_index.min(n);
+            // The Jellyfin | Plex switch, when both have an account, sits
+            // between the library tabs and the account button.
+            let switch = header_switch(accounts);
+            let last = n + usize::from(switch);
+            self.header_index = self.header_index.min(last);
             match action {
                 Action::Down if !rows.is_empty() => self.header = false,
                 Action::Left => self.header_index = self.header_index.saturating_sub(1),
-                Action::Right => self.header_index = (self.header_index + 1).min(n),
+                Action::Right => self.header_index = (self.header_index + 1).min(last),
                 Action::Ok | Action::OkLong => {
                     if self.header_index < n {
                         return self.open_item(libs[self.header_index].clone());
+                    }
+                    if switch && self.header_index == n {
+                        return self.switch_backend(accounts);
                     }
                     self.stack.push(Screen::Settings {
                         index: accounts.active,
@@ -756,7 +927,7 @@ impl Fin {
                     // Continue watching / Next up: play right away.
                     if it.playable() && self.row < 2 && !rows[self.row].libraries {
                         return vec![FinEffect::Play {
-                            item: it,
+                            item: Box::new(it),
                             from_start: false,
                         }];
                     }
@@ -782,7 +953,8 @@ impl Fin {
             Some(Screen::Browse) => {
                 if row == usize::MAX {
                     self.header = true;
-                    self.header_index = col.min(self.header_libraries().len());
+                    self.header_index = col
+                        .min(self.header_libraries().len() + usize::from(header_switch(accounts)));
                     return true;
                 }
                 if rows.get(row).is_some_and(|r| col < r.items.len()) {
@@ -823,7 +995,15 @@ impl Fin {
                     false
                 }
             }
-            Some(Screen::Connect { servers, index }) if col <= servers.items().len() => {
+            Some(Screen::Connect {
+                backend,
+                servers,
+                index,
+            }) if col <= connect_rows(*backend, servers) => {
+                *index = col;
+                true
+            }
+            Some(Screen::PlexServers { list, index, .. }) if col < list.len() => {
                 *index = col;
                 true
             }
@@ -844,10 +1024,22 @@ impl Fin {
     // ---------------------------------------------------------- results
 
     pub fn on_discovered(&mut self, servers: Vec<Server>) {
+        self.on_discovered_for(Backend::Jellyfin, servers);
+    }
+
+    /// Servers found for `kind` (ignored when the switch moved on).
+    pub fn on_discovered_for(&mut self, kind: Backend, servers: Vec<Server>) {
         for s in &mut self.stack {
-            if let Screen::Connect { servers: sc, index } = s {
+            if let Screen::Connect {
+                backend,
+                servers: sc,
+                index,
+            } = s
+                && *backend == kind
+            {
                 *sc = Scan::Done(servers.clone());
-                *index = 0;
+                // Focus stays where it is (on the switch too), within the list.
+                *index = (*index).min(connect_rows(kind, sc));
             }
         }
     }
@@ -867,14 +1059,93 @@ impl Fin {
                 vec![FinEffect::LoadHome]
             }
             Err(e) => {
-                if let Some(Screen::SignIn { busy, osk, .. }) = self.stack.last_mut() {
-                    *busy = false;
-                    osk.clear();
+                match self.stack.last_mut() {
+                    Some(Screen::SignIn { busy, osk, .. }) => {
+                        *busy = false;
+                        osk.clear();
+                    }
+                    Some(Screen::PlexServers { busy, .. }) => *busy = false,
+                    _ => {}
                 }
                 self.error = Some(e);
                 vec![]
             }
         }
+    }
+
+    /// The code for plex.tv/link (or why there is none).
+    pub fn on_plex_pin(&mut self, result: Result<String, String>) {
+        if let Some(Screen::PlexLink { code }) = self.stack.last_mut() {
+            *code = match result {
+                Ok(c) => Scan::Done(vec![c]),
+                Err(e) => Scan::Failed(e),
+            };
+        }
+    }
+
+    /// The code was entered (or it expired / failed): the account's
+    /// servers. One server is used straight away; several are listed.
+    pub fn on_plex_linked(
+        &mut self,
+        result: Result<(String, String, String, Vec<PlexServer>), String>,
+    ) -> Vec<FinEffect> {
+        if !matches!(self.stack.last(), Some(Screen::PlexLink { .. })) {
+            return vec![];
+        }
+        let (user_id, user_name, cloud_token, list) = match result {
+            Ok(r) if r.3.is_empty() => {
+                self.on_plex_pin(Err("This Plex account has no servers".into()));
+                return vec![];
+            }
+            Ok(r) => r,
+            Err(e) => {
+                self.on_plex_pin(Err(e));
+                return vec![];
+            }
+        };
+        let one = list.len() == 1;
+        self.stack.pop();
+        self.stack.push(Screen::PlexServers {
+            list: list.clone(),
+            user_id: user_id.clone(),
+            user_name: user_name.clone(),
+            cloud_token: cloud_token.clone(),
+            index: 0,
+            busy: one,
+        });
+        if one {
+            vec![FinEffect::PlexUse {
+                server: list[0].clone(),
+                user_id,
+                user_name,
+                cloud_token,
+            }]
+        } else {
+            vec![]
+        }
+    }
+
+    /// Browse's Jellyfin | Plex switch: the other kind's account (the first
+    /// one shown on Home, else the first).
+    fn switch_backend(&mut self, accounts: &Accounts) -> Vec<FinEffect> {
+        let now = accounts.active().map_or(Backend::Jellyfin, |a| a.backend);
+        let want = if now == Backend::Plex {
+            Backend::Jellyfin
+        } else {
+            Backend::Plex
+        };
+        let pick = accounts
+            .list
+            .iter()
+            .position(|a| a.backend == want && !a.incognito)
+            .or_else(|| accounts.list.iter().position(|a| a.backend == want));
+        let Some(i) = pick else {
+            return vec![];
+        };
+        self.home = Scan::Busy;
+        self.row = 0;
+        self.cols.clear();
+        vec![FinEffect::SwitchAccount(i), FinEffect::LoadHome]
     }
 
     pub fn on_home(&mut self, result: Result<HomeData, String>) {
@@ -963,6 +1234,36 @@ impl Fin {
     }
 }
 
+/// "Add a server", on Jellyfin (looking for servers), the first entry
+/// focused.
+fn connect_screen() -> Screen {
+    Screen::Connect {
+        backend: Backend::Jellyfin,
+        servers: Scan::Busy,
+        index: 1,
+    }
+}
+
+/// Entries under the Jellyfin | Plex switch.
+fn connect_rows(backend: Backend, servers: &Scan<Server>) -> usize {
+    match backend {
+        Backend::Jellyfin => servers.items().len() + 1,
+        Backend::Plex => servers.items().len() + 2,
+    }
+}
+
+fn address_screen(backend: Backend) -> Screen {
+    Screen::Address {
+        backend,
+        osk: Box::new(Osk::new(false, "Next")),
+    }
+}
+
+/// Browse shows a Jellyfin | Plex switch when both have an account.
+pub fn header_switch(accounts: &Accounts) -> bool {
+    accounts.backends().len() > 1
+}
+
 fn sign_in(server: Server) -> Screen {
     Screen::SignIn {
         server,
@@ -1033,7 +1334,7 @@ mod tests {
     fn submit(f: &mut Fin, a: &Accounts) -> Vec<FinEffect> {
         // Move focus to the Done key by typing then pressing OK on it:
         // the OSK treats Char('\n') as nothing, so use its API directly.
-        if let Some(Screen::Address { osk } | Screen::SignIn { osk, .. }) = f.stack.last_mut() {
+        if let Some(Screen::Address { osk, .. } | Screen::SignIn { osk, .. }) = f.stack.last_mut() {
             let rows = osk.rows();
             let r = rows.len() - 1;
             let c = rows[r]
@@ -1088,6 +1389,150 @@ mod tests {
     }
 
     #[test]
+    fn plex_sign_in_with_a_code() {
+        let none = Accounts::default();
+        let (mut f, _) = Fin::open(&none);
+        f.on_discovered(vec![]);
+        // Up to the switch, over to Plex, down to "Sign in with Plex".
+        f.handle(Up, &none);
+        assert_eq!(f.handle(Right, &none), vec![FinEffect::DiscoverPlex]);
+        assert!(matches!(
+            f.screen(),
+            Some(Screen::Connect {
+                backend: Backend::Plex,
+                ..
+            })
+        ));
+        // A server found on the network is offered under "Sign in".
+        f.on_discovered_for(
+            Backend::Plex,
+            vec![Server {
+                id: "m1".into(),
+                name: "Den".into(),
+                address: "http://10.0.0.9:32400".into(),
+            }],
+        );
+        // Jellyfin's late answer does not land on the Plex side.
+        f.on_discovered(vec![]);
+        f.handle(Down, &none);
+        f.handle(Down, &none);
+        assert_eq!(
+            f.handle(Ok, &none),
+            vec![FinEffect::PlexAddress("http://10.0.0.9:32400".into())]
+        );
+        f.handle(Up, &none);
+        assert_eq!(f.handle(Ok, &none), vec![FinEffect::PlexPin]);
+        f.on_plex_pin(Result::Ok("A1B2".into()));
+        assert!(
+            matches!(f.screen(), Some(Screen::PlexLink { code: Scan::Done(c) }) if c[0] == "A1B2")
+        );
+        let server = |name: &str| PlexServer {
+            name: name.into(),
+            id: "s1".into(),
+            token: "t".into(),
+            addresses: vec!["http://10.0.0.9:32400".into()],
+            owned: true,
+        };
+        // Two servers: pick one.
+        let eff = f.on_plex_linked(Result::Ok((
+            "u".into(),
+            "kat".into(),
+            "cloud".into(),
+            vec![server("Den"), server("Office")],
+        )));
+        assert!(eff.is_empty());
+        f.handle(Down, &none);
+        assert!(matches!(
+            &f.handle(Ok, &none)[0],
+            FinEffect::PlexUse { server, user_name, .. } if server.name == "Office" && user_name == "kat"
+        ));
+        // Can't reach it: the list again, with the error.
+        f.on_login(Err("Can't reach Office".into()));
+        assert!(matches!(
+            f.screen(),
+            Some(Screen::PlexServers { busy: false, .. })
+        ));
+        assert_eq!(f.on_login(Result::Ok(())), vec![FinEffect::LoadHome]);
+    }
+
+    #[test]
+    fn plex_code_backs_out_and_retries() {
+        let none = Accounts::default();
+        let (mut f, _) = Fin::open(&none);
+        f.handle(Up, &none);
+        f.handle(Ok, &none); // the switch: Plex
+        f.handle(Down, &none);
+        f.handle(Ok, &none);
+        // One server is used straight away.
+        f.on_plex_pin(Result::Ok("ZZZZ".into()));
+        f.on_plex_pin(Err("The code expired".into()));
+        assert_eq!(
+            f.handle(Ok, &none),
+            vec![FinEffect::PlexStop, FinEffect::PlexPin]
+        );
+        let back = f.handle(Back, &none);
+        assert_eq!(back[0], FinEffect::PlexStop);
+        assert!(matches!(f.screen(), Some(Screen::Connect { .. })));
+        // A Plex address goes straight to the server (no user name).
+        f.handle(Down, &none);
+        f.handle(Ok, &none);
+        type_text(&mut f, &none, "10.0.0.9");
+        assert_eq!(
+            submit(&mut f, &none),
+            vec![FinEffect::PlexAddress("http://10.0.0.9:32400".into())]
+        );
+    }
+
+    #[test]
+    fn switch_between_jellyfin_and_plex() {
+        let mut a = signed_in();
+        a.add(crate::jellyfin::Account {
+            backend: Backend::Plex,
+            server: "http://10.0.0.9:32400".into(),
+            user_id: "p1".into(),
+            ..Default::default()
+        });
+        a.active = 0;
+        assert!(header_switch(&a));
+        let (mut f, _) = Fin::open(&a);
+        f.on_home(Result::Ok(HomeData::default()));
+        // No rows: the header has focus; past the (no) library tabs is
+        // the switch, then the account button.
+        assert!(f.header);
+        assert_eq!(f.header_index, 0);
+        assert_eq!(
+            f.handle(Ok, &a),
+            vec![FinEffect::SwitchAccount(1), FinEffect::LoadHome]
+        );
+        f.handle(Right, &a);
+        f.handle(Ok, &a);
+        assert!(matches!(f.screen(), Some(Screen::Settings { .. })));
+    }
+
+    #[test]
+    fn home_rows_from_two_servers_take_turns() {
+        let row = |title: &str, ids: &[&str]| Row {
+            title: title.into(),
+            items: ids.iter().map(|i| item(i, "Movie")).collect(),
+            libraries: false,
+        };
+        let merged = merge_rows(vec![
+            vec![
+                row("Continue watching", &["j1", "j2", "j3"]),
+                row("Movies", &["jm"]),
+            ],
+            vec![row("Movies", &["pm1", "pm2"]), row("TV shows", &["ps"])],
+        ]);
+        let ids = |r: &Row| r.items.iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+        assert_eq!(
+            merged.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(),
+            ["Continue watching", "Movies", "TV shows"]
+        );
+        assert_eq!(ids(&merged[0]), ["j1", "j2", "j3"]);
+        assert_eq!(ids(&merged[1]), ["jm", "pm1", "pm2"]);
+    }
+
+    #[test]
     fn browse_rows_play_and_open() {
         let a = signed_in();
         let (mut f, eff) = Fin::open(&a);
@@ -1104,7 +1549,7 @@ mod tests {
         assert_eq!(
             f.handle(Ok, &a),
             vec![FinEffect::Play {
-                item: ep,
+                item: Box::new(ep),
                 from_start: false
             }]
         );

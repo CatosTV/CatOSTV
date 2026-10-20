@@ -7,7 +7,7 @@ issue.
 - [Installing](#installing)
 - [Getting around](#getting-around)
 - [Apps and the Store](#apps-and-the-store)
-- [Catfyn (Jellyfin)](#catfyn-jellyfin)
+- [Catfyn (Jellyfin and Plex)](#catfyn-jellyfin-and-plex)
 - [Android apps](#android-apps)
 - [Your phone: remote, casting, KDE Connect](#your-phone-remote-casting-kde-connect)
 - [Controllers and remotes](#controllers-and-remotes)
@@ -93,7 +93,7 @@ from the page to reach it; the tab you're on lights up.
   open it says *No background apps*.
 - **Apps**: every app, in a grid.
 - **Store**: apps to install (see below).
-- **Search**: apps, settings and your Jellyfin library.
+- **Search**: apps, settings and your Jellyfin and Plex libraries.
 
 ### App options
 
@@ -131,15 +131,22 @@ it from the Store first, then it opens in its TV mode (Big Picture).
 
 ---
 
-## Catfyn (Jellyfin)
+## Catfyn (Jellyfin and Plex)
 
 Catfyn plays films and series from your own
-[Jellyfin](https://jellyfin.org) server.
+[Jellyfin](https://jellyfin.org) or [Plex](https://www.plex.tv) server.
+You can add both.
 
-1. Open **Catfyn** from Home. It looks for Jellyfin servers on your
-   network; pick yours, or choose to enter the address
-   (e.g. `192.168.1.20:8096`).
-2. Sign in with your Jellyfin user name and password.
+1. Open **Catfyn** from Home. *Add a server* has a **Jellyfin | Plex**
+   switch at the top.
+2. **Jellyfin**: Catfyn looks for Jellyfin servers on your network; pick
+   yours, or enter the address (e.g. `192.168.1.20:8096`). Then sign in
+   with your Jellyfin user name and password.
+3. **Plex**: choose *Sign in with Plex*. Catfyn shows a code; on your
+   phone or computer go to **plex.tv/link** and enter it. If your account
+   has more than one server, pick one. A Plex server on your network that
+   lets you in without signing in is listed too, or enter its address
+   (e.g. `192.168.1.20`).
 
 Then:
 
@@ -147,14 +154,18 @@ Then:
   items in each library; the tabs at the top open your libraries.
 - OK on a film or episode plays it (or resumes it); hold OK for its
   details: *Resume*, *Play from start*, *Go to series*, *Episodes*.
-- Your *Continue watching* also appears on CatosTV's own Home.
+- *Continue watching*, *Movies* and *TV shows* also appear on CatosTV's
+  own Home. With both a Jellyfin and a Plex server they are shown
+  together.
+- With both, the **Jellyfin | Plex** switch next to the account button
+  moves Catfyn between them.
 - When an episode's end credits start, a card offers the **next episode**
   with a countdown. *Play now*, or *Cancel* to stay. After three episodes
   in a row it asks whether you're still watching.
 
 **Catfyn's settings** are behind the account button at the top right (the
 one with your name and a gear): your accounts (switch, add, sign out, or
-*Incognito*: nothing you watch is marked as watched), whether the next
+*Incognito*: kept off CatosTV's Home), whether the next
 episode plays automatically, and how long the countdown is.
 
 If loading fails (server off, network down), Catfyn says so. Press OK to

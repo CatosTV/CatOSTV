@@ -49,6 +49,9 @@ const TOAST_SECS: f64 = 2.6;
 const HDR_CONFIRM: Duration = Duration::from_secs(20);
 /// Interface size is applied this long after the last change.
 const SCALE_SETTLE: Duration = Duration::from_millis(700);
+/// A linked plex.tv account: user id, name, its token and its servers.
+type PlexLinked = (String, String, String, Vec<catostv_core::plex::PlexServer>);
+
 enum Msg {
     /// KDE Connect took the name "CatosTV" (or not yet: daemon not up).
     KdeNamed(bool),
@@ -104,7 +107,13 @@ enum Msg {
     Weather(Option<catostv_core::screensaver::Weather>),
     /// Catfyn results.
     FinServers(Vec<jf::Server>),
+    /// Plex servers found on this network.
+    FinPlexServers(Vec<jf::Server>),
     FinLogin(Result<jf::Account, String>),
+    /// Plex: a code for plex.tv/link.
+    FinPlexPin(Result<String, String>),
+    /// Plex: the code was entered (user id, name, plex.tv token, servers).
+    FinPlexLinked(Result<PlexLinked, String>),
     FinHome(String, Result<fin::HomeData, String>),
     FinLibrary(String, Result<Vec<Item>, String>),
     FinSeasons(String, Result<Vec<Item>, String>),
@@ -620,6 +629,8 @@ struct ShellApp {
     media: fin::Media,
     /// Catfyn pictures: URL → cached PNG (None = failed, do not retry).
     fin_images: HashMap<String, Option<String>>,
+    /// Bumped to stop waiting for a plex.tv/link code.
+    plex_wait: Arc<std::sync::atomic::AtomicU64>,
     /// Pictures the last frame wanted but did not have.
     fin_wanted: RefCell<Vec<String>>,
     fin_fetching: HashSet<String>,
@@ -937,10 +948,15 @@ impl ShellApp {
             started: Instant::now(),
             wake: power::WakeGuard::default(),
             media: fin::Media {
-                accounts: jf::load_accounts(&home_dir()),
+                accounts: {
+                    let a = jf::load_accounts(&home_dir());
+                    catfyn::remember_accounts(&a);
+                    a
+                },
                 home: Vec::new(),
             },
             fin_images: HashMap::new(),
+            plex_wait: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             fin_wanted: RefCell::new(Vec::new()),
             fin_fetching: HashSet::new(),
             last_media_refresh: None,
@@ -2070,13 +2086,23 @@ impl ShellApp {
                 self.save_prefs(ctx);
             }
             Effect::SearchMedia(q) => {
-                if let Some(a) = self.media.accounts.home().cloned() {
+                let accounts: Vec<jf::Account> = self
+                    .media
+                    .accounts
+                    .home_accounts()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                if !accounts.is_empty() {
                     let device = self.media.accounts.device_id.clone();
                     self.jobs.spawn(move || {
                         // A short pause: the next letter usually follows.
                         std::thread::sleep(Duration::from_millis(250));
-                        let items = catfyn::items(&device, &a, &jf::search_url(&a, &q, 8))
-                            .unwrap_or_default();
+                        // Jellyfin's and Plex's hits together.
+                        let items = accounts
+                            .iter()
+                            .flat_map(|a| catfyn::search(&device, a, &q, 8).unwrap_or_default())
+                            .collect();
                         Msg::SearchMedia(q, items)
                     });
                 }
@@ -2303,13 +2329,12 @@ impl ShellApp {
             Effect::Files(e) => self.files_effect(ctx, e),
             Effect::OpenFin => self.open_fin(ctx, None),
             Effect::FinDetails(item) => {
-                // Home's rows belong to the home account: open Catfyn on it.
-                if let Some(i) = self.media.accounts.home().and_then(|h| {
-                    self.media
-                        .accounts
-                        .list
-                        .iter()
-                        .position(|a| a.user_id == h.user_id && a.server == h.server)
+                // An item on Home belongs to one of the home accounts: open
+                // Catfyn on that one.
+                if let Some(i) = self.media.accounts.for_item(&item).and_then(|h| {
+                    self.media.accounts.list.iter().position(|a| {
+                        a.user_id == h.user_id && a.server == h.server && a.backend == h.backend
+                    })
                 }) && i != self.media.accounts.active
                 {
                     self.media.accounts.active = i;
@@ -2317,7 +2342,7 @@ impl ShellApp {
                 }
                 self.open_fin(ctx, Some(item))
             }
-            Effect::FinPlayHome(item) => match self.media.accounts.home().cloned() {
+            Effect::FinPlayHome(item) => match self.media.accounts.for_item(&item).cloned() {
                 Some(a) => self.fin_play(ctx, a, item, false),
                 None => self.open_fin(ctx, None),
             },
@@ -2539,6 +2564,7 @@ impl ShellApp {
     }
 
     fn save_accounts(&mut self, ctx: &egui::Context) {
+        catfyn::remember_accounts(&self.media.accounts);
         if let Err(e) = jf::save_accounts(&self.home, &self.media.accounts) {
             self.show_toast(ctx, &format!("Could not save the account: {e}"));
         }
@@ -2558,6 +2584,68 @@ impl ShellApp {
             } => self
                 .jobs
                 .spawn(move || Msg::FinLogin(catfyn::login(&device, &server, &user, &password))),
+            FinEffect::DiscoverPlex => self.jobs.spawn(|| {
+                Msg::FinPlexServers(catostv_core::plex::discover_local(Duration::from_millis(
+                    300,
+                )))
+            }),
+            FinEffect::PlexPin => {
+                use std::sync::atomic::Ordering;
+                let generation = self.plex_wait.fetch_add(1, Ordering::SeqCst) + 1;
+                let wait = self.plex_wait.clone();
+                let (tx, rctx) = self.jobs.sender();
+                std::thread::spawn(move || {
+                    let send = |m: Msg| {
+                        let _ = tx.send(m);
+                        rctx.request_repaint();
+                    };
+                    let (pin, code) = match catfyn::plex_pin(&device) {
+                        Ok(p) => p,
+                        Err(e) => return send(Msg::FinPlexPin(Err(e))),
+                    };
+                    send(Msg::FinPlexPin(Ok(code)));
+                    // Wait for the code to be entered (Plex keeps it for
+                    // 15 minutes); leaving the screen stops this.
+                    let started = Instant::now();
+                    while wait.load(Ordering::SeqCst) == generation {
+                        std::thread::sleep(Duration::from_secs(2));
+                        if started.elapsed() > Duration::from_secs(14 * 60) {
+                            return send(Msg::FinPlexPin(Err(
+                                "The code expired. Press OK for a new one".into(),
+                            )));
+                        }
+                        if wait.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
+                        if let Ok(Some(token)) = catfyn::plex_check(&device, pin) {
+                            let r = catfyn::plex_servers(&device, &token)
+                                .map(|(id, name, servers)| (id, name, token, servers));
+                            return send(Msg::FinPlexLinked(r));
+                        }
+                    }
+                });
+            }
+            FinEffect::PlexStop => {
+                self.plex_wait
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            FinEffect::PlexUse {
+                server,
+                user_id,
+                user_name,
+                cloud_token,
+            } => self.jobs.spawn(move || {
+                Msg::FinLogin(catfyn::plex_connect(
+                    &device,
+                    &server,
+                    &user_id,
+                    &user_name,
+                    &cloud_token,
+                ))
+            }),
+            FinEffect::PlexAddress(address) => self
+                .jobs
+                .spawn(move || Msg::FinLogin(catfyn::plex_local(&device, &address))),
             FinEffect::LoadHome => {
                 if let Some(a) = active {
                     let id = a.user_id.clone();
@@ -2568,7 +2656,7 @@ impl ShellApp {
             FinEffect::LoadLibrary(lib) => {
                 if let Some(a) = active {
                     self.jobs.spawn(move || {
-                        let r = catfyn::items(&device, &a, &jf::library_url(&a, &lib));
+                        let r = catfyn::library(&device, &a, &lib);
                         Msg::FinLibrary(lib, r)
                     });
                 }
@@ -2576,7 +2664,7 @@ impl ShellApp {
             FinEffect::LoadSeasons(series) => {
                 if let Some(a) = active {
                     self.jobs.spawn(move || {
-                        let r = catfyn::items(&device, &a, &jf::seasons_url(&a, &series));
+                        let r = catfyn::seasons(&device, &a, &series);
                         Msg::FinSeasons(series, r)
                     });
                 }
@@ -2584,14 +2672,14 @@ impl ShellApp {
             FinEffect::LoadEpisodes { series, season } => {
                 if let Some(a) = active {
                     self.jobs.spawn(move || {
-                        let r = catfyn::items(&device, &a, &jf::episodes_url(&a, &series, &season));
+                        let r = catfyn::episodes(&device, &a, &series, &season);
                         Msg::FinEpisodes(season, r)
                     });
                 }
             }
             FinEffect::Play { item, from_start } => {
                 if let Some(a) = active {
-                    self.fin_play(ctx, a, item, from_start);
+                    self.fin_play(ctx, a, *item, from_start);
                 }
             }
             FinEffect::SwitchAccount(i) => {
@@ -2686,11 +2774,18 @@ impl ShellApp {
         }
         self.last_media_refresh = Some(Instant::now());
         let device = self.media.accounts.device_id.clone();
-        match self.media.accounts.home().cloned() {
-            Some(a) => self
-                .jobs
-                .spawn(move || Msg::FinHomeMedia(catfyn::home_rows(&device, &a))),
-            None => self.media.home.clear(),
+        let accounts: Vec<jf::Account> = self
+            .media
+            .accounts
+            .home_accounts()
+            .into_iter()
+            .cloned()
+            .collect();
+        if accounts.is_empty() {
+            self.media.home.clear();
+        } else {
+            self.jobs
+                .spawn(move || Msg::FinHomeMedia(catfyn::home_rows(&device, &accounts)));
         }
     }
 
@@ -2899,6 +2994,27 @@ impl ShellApp {
             Msg::FinServers(v) => {
                 if let Some(f) = self.shell.fin.as_mut() {
                     f.on_discovered(v);
+                }
+            }
+            Msg::FinPlexServers(v) => {
+                if let Some(f) = self.shell.fin.as_mut() {
+                    f.on_discovered_for(jf::Backend::Plex, v);
+                }
+            }
+            Msg::FinPlexPin(r) => {
+                if let Some(f) = self.shell.fin.as_mut() {
+                    f.on_plex_pin(r);
+                }
+            }
+            Msg::FinPlexLinked(r) => {
+                let eff = self
+                    .shell
+                    .fin
+                    .as_mut()
+                    .map(|f| f.on_plex_linked(r))
+                    .unwrap_or_default();
+                for e in eff {
+                    self.fin_effect(ctx, e);
                 }
             }
             Msg::FinLogin(r) => {
@@ -3883,6 +3999,8 @@ impl eframe::App for ShellApp {
                             servers: catostv_core::installer::Scan::Busy,
                             ..
                         } | fin::Screen::SignIn { busy: true, .. }
+                            | fin::Screen::PlexLink { .. }
+                            | fin::Screen::PlexServers { busy: true, .. }
                             | fin::Screen::Library {
                                 items: catostv_core::installer::Scan::Busy,
                                 ..

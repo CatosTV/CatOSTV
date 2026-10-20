@@ -15,11 +15,11 @@ use crate::theme::{self, Weight};
 use crate::widgets::{self, ButtonStyle, ListRow};
 use catostv_core::fin::{self, Fin, Screen, SignInStep};
 use catostv_core::installer::Scan;
-use catostv_core::jellyfin::{self as jf, Accounts, Item, Kind};
+use catostv_core::jellyfin::{self as jf, Accounts, Backend, Item, Kind};
 use catostv_core::prefs::UiPrefs;
 use catostv_core::settings::RowKind;
 use catostv_core::shell::Target;
-use eframe::egui::{Align2, Color32, TextureId};
+use eframe::egui::{Align2, Color32, Rect, TextureId};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -49,23 +49,31 @@ impl FinPics<'_> {
     }
 }
 
-/// Landscape picture of an item (episode still, else backdrop).
-fn wide_url(server: &str, it: &Item) -> String {
-    match (it.kind(), &it.backdrop_item) {
-        (Kind::Episode, _) if it.has_primary => jf::image_url(server, &it.id, "Primary", 480),
-        (_, Some(b)) => jf::image_url(server, b, "Backdrop", 480),
-        _ => jf::image_url(server, &it.id, "Primary", 480),
+/// The item as loaded, or with `server` filled in when it was made by
+/// hand (Jellyfin items always carry their server once loaded; Plex ones
+/// too, with their picture paths).
+fn sourced<'a>(server: &str, it: &'a Item) -> std::borrow::Cow<'a, Item> {
+    if it.server.is_empty() {
+        std::borrow::Cow::Owned(Item {
+            server: server.to_string(),
+            ..it.clone()
+        })
+    } else {
+        std::borrow::Cow::Borrowed(it)
     }
 }
 
+/// Landscape picture of an item (episode still, else backdrop).
+fn wide_url(server: &str, it: &Item) -> String {
+    jf::wide_url(&sourced(server, it))
+}
+
 fn poster_url(server: &str, it: &Item) -> String {
-    jf::image_url(server, &it.id, "Primary", 300)
+    jf::poster_url(&sourced(server, it))
 }
 
 fn backdrop_url(server: &str, it: &Item) -> Option<String> {
-    it.backdrop_item
-        .as_ref()
-        .map(|b| jf::image_url_blurred(server, b, "Backdrop", 1280, BACKDROP_BLUR))
+    jf::backdrop_url(&sourced(server, it), BACKDROP_BLUR)
 }
 
 /// Soft blur of the backdrop art (server-side): enough that the
@@ -97,6 +105,9 @@ fn backdrop(c: &C, pics: &FinPics, server: &str, it: Option<&Item>) {
         let (cur, prev, since) = old.unwrap_or((None, None, now));
         match (&url, tex) {
             (Some(u), Some(_)) if cur.as_deref() != Some(u.as_str()) => (Some(u.clone()), cur, now),
+            // Nothing to show for this one (no art): fade the last one out
+            // rather than keep another film's picture behind it.
+            (None, _) if cur.is_some() => (None, cur, now),
             _ => (cur, prev, since),
         }
     });
@@ -251,8 +262,11 @@ fn header(
     for (i, rect) in rects.iter().enumerate().skip(1) {
         c.hit(*rect, Target::Fin(usize::MAX, i - 1));
     }
-    // Account button, top right.
+    // Account button, top right, and the Jellyfin | Plex switch left of it
+    // when both have an account.
     let Some(a) = accounts.active() else { return };
+    let switch = catostv_core::fin::header_switch(accounts);
+    let acct_index = libs.len() + usize::from(switch);
     let name = if a.user_name.is_empty() {
         "Account"
     } else {
@@ -261,7 +275,24 @@ fn header(
     // The button opens Catfyn's settings: a gear says so.
     let w = c.text_width(name, 16.0, Weight::Semibold) + if a.incognito { 118.0 } else { 96.0 };
     let rect = c.r(1216.0 - w, y + 2.0, w, 48.0);
-    let t = focus_t(c, "fin-acct", focus == Some(libs.len()));
+    if switch {
+        let sw = 196.0;
+        let st = focus_t(c, "fin-hdr-switch", focus == Some(libs.len()));
+        let halves = backend_switch(
+            c,
+            "fin-hdr",
+            1216.0 - w - 12.0 - sw,
+            y + 2.0,
+            sw,
+            48.0,
+            a.backend,
+            st,
+        );
+        for h in halves {
+            c.hit(h, Target::Fin(usize::MAX, libs.len()));
+        }
+    }
+    let t = focus_t(c, "fin-acct", focus == Some(acct_index));
     c.glass(rect, 24.0);
     widgets::focus_pill(c, rect, 24.0, t);
     let x = 1216.0 - w;
@@ -289,7 +320,7 @@ fn header(
         icons::draw(c, "lock", x + w - 52.0, cy, 15.0, theme::text2());
     }
     icons::draw(c, "gear", x + w - 26.0, cy, 16.0, theme::text2());
-    c.hit(rect, Target::Fin(usize::MAX, libs.len()));
+    c.hit(rect, Target::Fin(usize::MAX, acct_index));
 }
 
 /// Spotlight text: title, fact pills, overview, progress and the action
@@ -402,16 +433,39 @@ pub fn draw(c: &C, f: &Fin, accounts: &Accounts, prefs: &UiPrefs, pics: &FinPics
     let server = accounts.active().map(|a| a.server.as_str()).unwrap_or("");
     match f.screen() {
         Some(Screen::Browse) | None => draw_browse(c, f, accounts, pics, server, now),
-        Some(Screen::Connect { servers, index }) => draw_connect(c, f, servers, *index, now),
-        Some(Screen::Address { osk }) => draw_entry(
-            c,
-            f,
-            "Server address",
-            "e.g. 192.168.1.20 or jellyfin.lan:8096",
-            osk,
-            false,
-            now,
-        ),
+        Some(Screen::Connect {
+            backend,
+            servers,
+            index,
+        }) => draw_connect(c, f, *backend, servers, *index, now),
+        Some(Screen::Address { backend, osk }) => match backend {
+            Backend::Jellyfin => draw_entry(
+                c,
+                f,
+                "Server address",
+                "e.g. 192.168.1.20 or jellyfin.lan:8096",
+                osk,
+                false,
+                now,
+            ),
+            Backend::Plex => draw_entry(
+                c,
+                f,
+                "Plex server address",
+                "e.g. 192.168.1.20 (port 32400 if left out)",
+                osk,
+                false,
+                now,
+            ),
+        },
+        Some(Screen::PlexLink { code }) => draw_plex_link(c, f, code, now),
+        Some(Screen::PlexServers {
+            list,
+            user_name,
+            index,
+            busy,
+            ..
+        }) => draw_plex_servers(c, f, list, user_name, *index, *busy, now),
         Some(Screen::SignIn {
             server: s,
             step,
@@ -608,55 +662,319 @@ fn is_wide(r: &fin::Row) -> bool {
     r.title == "Continue watching" || r.title == "Next up"
 }
 
-fn draw_connect(c: &C, f: &Fin, servers: &Scan<jf::Server>, index: usize, now: f64) {
-    let panel = c.r(300.0, 110.0, 680.0, 500.0);
+/// The Jellyfin | Plex switch: a glass pill whose accent half slides to
+/// the chosen one. Returns the two halves' rects.
+fn backend_switch(
+    c: &C,
+    id: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    on: Backend,
+    t: f32,
+) -> [Rect; 2] {
+    let outer = c.r(x, y, w, h);
+    c.glass(outer, h / 2.0);
+    if t > 0.01 {
+        c.outline(outer, h / 2.0, 1.5, theme::accent_a((170.0 * t) as u8));
+    }
+    let pad = 5.0;
+    let half = (w - 2.0 * pad) / 2.0;
+    let target = if on == Backend::Plex { 1.0 } else { 0.0 };
+    let (k, _) = c.spring((id, "switch"), target, 0.34, 0.72);
+    let pill = c.r(x + pad + half * k, y + pad, half, h - 2.0 * pad);
+    let r = (h - 2.0 * pad) / 2.0;
+    c.fill(pill, r, theme::accent());
+    c.top_highlight(pill, r, theme::rgba(theme::WHITE, (90.0 + 80.0 * t) as u8));
+    let mut rects = [pill; 2];
+    for (i, b) in Backend::ALL.iter().enumerate() {
+        let cx = x + pad + half * (i as f32 + 0.5);
+        let chosen = *b == on;
+        c.text(
+            cx,
+            y + h / 2.0,
+            Align2::CENTER_CENTER,
+            b.label(),
+            16.0,
+            if chosen {
+                theme::on_accent()
+            } else {
+                theme::text2()
+            },
+            if chosen {
+                Weight::Semibold
+            } else {
+                Weight::Medium
+            },
+        );
+        rects[i] = c.r(x + pad + half * i as f32, y + pad, half, h - 2.0 * pad);
+    }
+    rects
+}
+
+fn draw_connect(
+    c: &C,
+    f: &Fin,
+    backend: Backend,
+    servers: &Scan<jf::Server>,
+    index: usize,
+    now: f64,
+) {
+    let panel = c.r(300.0, 90.0, 680.0, 540.0);
     c.glass(panel, 32.0);
-    icons::draw(c, "catfyn", 640.0, 170.0, 46.0, theme::accent());
+    icons::draw(c, "catfyn", 640.0, 146.0, 46.0, theme::accent());
     c.text(
         640.0,
-        214.0,
+        192.0,
         Align2::CENTER_CENTER,
-        "Connect to Jellyfin",
+        "Add a server",
         26.0,
         theme::text(),
         Weight::Semibold,
     );
-    let mut rows: Vec<(String, String)> = servers
-        .items()
-        .iter()
-        .map(|s| (s.name.clone(), s.address.clone()))
-        .collect();
-    rows.push(("Enter address".into(), String::new()));
-    let busy = matches!(servers, Scan::Busy);
-    let mut y = 256.0;
-    if busy {
-        widgets::busy_line(c, 340.0, y + 6.0, "Looking for servers…", true, now);
+    let t = focus_t(c, "fin-switch", index == 0);
+    let halves = backend_switch(c, "fin-connect", 490.0, 222.0, 300.0, 50.0, backend, t);
+    for h in halves {
+        c.hit(h, Target::Fin(0, 0));
+    }
+    let rows: Vec<(String, String, &str)> = match backend {
+        Backend::Jellyfin => {
+            let mut v: Vec<(String, String, &str)> = servers
+                .items()
+                .iter()
+                .map(|s| (s.name.clone(), s.address.clone(), "tv"))
+                .collect();
+            v.push(("Enter address".into(), String::new(), "plus"));
+            v
+        }
+        Backend::Plex => {
+            let mut v = vec![(
+                "Sign in with Plex".into(),
+                format!("With a code at {}", catostv_core::plex::LINK_PAGE),
+                "lock",
+            )];
+            v.extend(
+                servers
+                    .items()
+                    .iter()
+                    .map(|s| (s.name.clone(), s.address.clone(), "tv")),
+            );
+            v.push((
+                "Enter address".into(),
+                "A Plex server you can use without signing in".into(),
+                "plus",
+            ));
+            v
+        }
+    };
+    let mut y = 298.0;
+    if matches!(servers, Scan::Busy) {
+        let msg = match backend {
+            Backend::Jellyfin => "Looking for servers…",
+            Backend::Plex => "Looking for Plex servers on this network…",
+        };
+        widgets::busy_line(c, 340.0, y + 6.0, msg, true, now);
         y += 44.0;
     }
-    for (k, (name, addr)) in rows.iter().enumerate().take(5) {
-        let t = focus_t(c, ("fin-srv", k), index == k);
+    for (k, (name, sub, icon)) in rows.iter().enumerate().take(4) {
+        let t = focus_t(c, ("fin-srv", backend.key(), k), index == k + 1);
         let rect = c.r(340.0, y, 600.0, 62.0);
         widgets::list_row(
             c,
             rect,
             &ListRow {
                 title: name,
-                subtitle: addr,
+                subtitle: sub,
                 value: "",
-                kind: Some(if addr.is_empty() {
-                    RowKind::Primary
-                } else {
+                kind: Some(if *icon == "tv" {
                     RowKind::Action
+                } else {
+                    RowKind::Primary
                 }),
-                icon: Some(if addr.is_empty() { "plus" } else { "tv" }),
+                icon: Some(icon),
                 disabled: false,
+            },
+            t,
+        );
+        c.hit(rect, Target::Fin(0, k + 1));
+        y += 72.0;
+    }
+    error_line(c, f, 600.0);
+}
+
+/// Plex sign-in: the code to enter at plex.tv/link, big, one letter per
+/// glass key, while CatosTV waits for it.
+fn draw_plex_link(c: &C, f: &Fin, code: &Scan<String>, now: f64) {
+    let panel = c.r(270.0, 90.0, 740.0, 540.0);
+    c.glass(panel, 32.0);
+    let k = 1.0 - (1.0 - c.appear("fin-plex-link", 0.4)).powi(3);
+    c.text(
+        640.0,
+        150.0,
+        Align2::CENTER_CENTER,
+        "Sign in with Plex",
+        28.0,
+        theme::text(),
+        Weight::Semibold,
+    );
+    c.text(
+        640.0,
+        200.0,
+        Align2::CENTER_CENTER,
+        "On your phone or computer, go to",
+        18.0,
+        theme::text2(),
+        Weight::Regular,
+    );
+    c.text(
+        640.0,
+        236.0,
+        Align2::CENTER_CENTER,
+        catostv_core::plex::LINK_PAGE,
+        30.0,
+        theme::accent(),
+        Weight::Semibold,
+    );
+    c.text(
+        640.0,
+        276.0,
+        Align2::CENTER_CENTER,
+        "and enter this code",
+        18.0,
+        theme::text2(),
+        Weight::Regular,
+    );
+    match code {
+        Scan::Done(v) if !v.is_empty() => {
+            let chars: Vec<char> = v[0].chars().collect();
+            let (bw, gap) = (86.0, 18.0);
+            let total = chars.len() as f32 * bw + (chars.len() as f32 - 1.0) * gap;
+            for (i, ch) in chars.iter().enumerate() {
+                // The keys drop in one after another.
+                let ki = (k * 1.6 - i as f32 * 0.12).clamp(0.0, 1.0);
+                let x = 640.0 - total / 2.0 + i as f32 * (bw + gap);
+                let r = c.r(x, 318.0 - 14.0 * (1.0 - ki), bw, 104.0);
+                c.fill(r, 22.0, theme::rgba(theme::WHITE, (18.0 * ki) as u8));
+                c.rounded_gradient(r, 22.0, theme::WHITE, (26.0 * ki) as u8, 0);
+                c.top_highlight(r, 22.0, theme::rgba(theme::WHITE, (150.0 * ki) as u8));
+                c.outline(r, 22.0, 1.0, theme::rgba(theme::WHITE, (40.0 * ki) as u8));
+                let (cx, cy) = c.to_design(r.center());
+                c.text(
+                    cx,
+                    cy,
+                    Align2::CENTER_CENTER,
+                    &ch.to_string(),
+                    54.0,
+                    theme::rgba(theme::INK, (255.0 * ki) as u8),
+                    Weight::Semibold,
+                );
+            }
+            let msg = "Waiting for you to enter it…";
+            let w = c.text_width(msg, 16.0, Weight::Medium) + 30.0;
+            widgets::busy_line(c, 640.0 - w / 2.0, 468.0, msg, true, now);
+        }
+        Scan::Failed(e) => {
+            icons::draw(c, "refresh", 640.0, 380.0, 30.0, theme::text3());
+            c.text(
+                640.0,
+                430.0,
+                Align2::CENTER_CENTER,
+                e,
+                19.0,
+                theme::text2(),
+                Weight::Medium,
+            );
+            c.text(
+                640.0,
+                462.0,
+                Align2::CENTER_CENTER,
+                "Press OK for a new code",
+                16.0,
+                theme::text3(),
+                Weight::Regular,
+            );
+        }
+        _ => widgets::busy_line(c, 540.0, 370.0, "Getting a code…", true, now),
+    }
+    c.text(
+        640.0,
+        560.0,
+        Align2::CENTER_CENTER,
+        "Back to cancel",
+        15.0,
+        theme::text3(),
+        Weight::Regular,
+    );
+    error_line(c, f, 598.0);
+}
+
+/// The linked Plex account's servers.
+fn draw_plex_servers(
+    c: &C,
+    f: &Fin,
+    list: &[catostv_core::plex::PlexServer],
+    user: &str,
+    index: usize,
+    busy: bool,
+    now: f64,
+) {
+    let panel = c.r(300.0, 90.0, 680.0, 540.0);
+    c.glass(panel, 32.0);
+    c.text(
+        640.0,
+        150.0,
+        Align2::CENTER_CENTER,
+        "Choose a server",
+        26.0,
+        theme::text(),
+        Weight::Semibold,
+    );
+    c.text(
+        640.0,
+        186.0,
+        Align2::CENTER_CENTER,
+        &format!("Signed in to Plex as {user}"),
+        16.0,
+        theme::text2(),
+        Weight::Regular,
+    );
+    let mut y = 226.0;
+    for (k, s) in list.iter().enumerate().take(5) {
+        let t = focus_t(c, ("fin-plex-srv", k), index == k);
+        let rect = c.r(340.0, y, 600.0, 62.0);
+        widgets::list_row(
+            c,
+            rect,
+            &ListRow {
+                title: &s.name,
+                subtitle: if s.owned {
+                    "Your server"
+                } else {
+                    "Shared with you"
+                },
+                value: "",
+                kind: Some(RowKind::Action),
+                icon: Some("tv"),
+                disabled: busy,
             },
             t,
         );
         c.hit(rect, Target::Fin(0, k));
         y += 72.0;
     }
-    error_line(c, f, 580.0);
+    if busy {
+        let name = list.get(index).map_or("the server", |s| s.name.as_str());
+        widgets::busy_line(
+            c,
+            340.0,
+            576.0,
+            &format!("Connecting to {name}…"),
+            true,
+            now,
+        );
+    }
+    error_line(c, f, 600.0);
 }
 
 fn error_line(c: &C, f: &Fin, y: f32) {
