@@ -55,6 +55,23 @@ pub fn native_options(
     }
 }
 
+/// Log wgpu errors instead of panicking (wgpu's default). When the TV went
+/// away the window was once resized to 3× the screen (11520×6480, over the
+/// GPU's 8192 limit) and configuring the surface took the whole interface
+/// down; the next resize sets it up again. The first few are logged.
+fn log_gpu_errors(app_id: &str, cc: &eframe::CreationContext<'_>) {
+    let Some(rs) = &cc.wgpu_render_state else {
+        return;
+    };
+    let app_id = app_id.to_string();
+    let logged = std::sync::atomic::AtomicU32::new(0);
+    rs.device.on_uncaptured_error(std::sync::Arc::new(move |e| {
+        if logged.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 20 {
+            eprintln!("{app_id}: GPU error (carrying on): {e}");
+        }
+    }));
+}
+
 /// Run a CatosTV app. If the default wgpu renderer fails to start (VMs
 /// without Vulkan, very old GPUs), the process re-executes itself with
 /// `CATOSTV_RENDERER=glow`. Re-exec is used because winit cannot create a
@@ -68,7 +85,10 @@ pub fn run_app<A: eframe::App + 'static>(
     let result = eframe::run_native(
         title,
         native_options(app_id, title, renderer),
-        Box::new(move |cc| Ok(Box::new(make(cc)))),
+        Box::new(move |cc| {
+            log_gpu_errors(app_id, cc);
+            Ok(Box::new(make(cc)))
+        }),
     );
     if let Err(e) = &result
         && !explicit
