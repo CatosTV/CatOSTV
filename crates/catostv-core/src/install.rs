@@ -118,6 +118,8 @@ pub const BASE_PACKAGES: &[&str] = &[
     "adwaita-cursors",
     // HDMI-CEC remote (cec-client)
     "libcec",
+    // cec-ctl: TV volume over CEC once CatosTV's own is full
+    "v4l-utils",
     // App store, Android apps, phone integration
     "flatpak",
     "waydroid",

@@ -283,6 +283,28 @@ pub fn wtype_cmd(keysym: &str) -> Cmd {
     Cmd::new("wtype").args(["-k", keysym])
 }
 
+/// The first kernel CEC device (`/dev/cec0` on Intel DisplayPort), if any.
+pub fn kernel_device() -> Option<String> {
+    (0..4)
+        .map(|n| format!("/dev/cec{n}"))
+        .find(|p| std::path::Path::new(p).exists())
+}
+
+/// One Volume Up/Down press and release sent to the TV with `cec-ctl`
+/// (v4l-utils). The kernel lets it share the adapter with cec-client.
+pub fn tv_volume_cmd(device: &str, up: bool) -> Cmd {
+    let key = if up { "volume-up" } else { "volume-down" };
+    Cmd::new("cec-ctl").args([
+        "-d",
+        device,
+        "--to",
+        "0",
+        "--user-control-pressed",
+        &format!("ui-cmd={key}"),
+        "--user-control-released",
+    ])
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Held {
     code: u8,
@@ -594,6 +616,24 @@ type:                unknown
             "NOTICE:  [  12]\tCEC client registered"
         ));
         assert!(!is_notable_log_line("TRAFFIC: [  12]\t>> 01:44:00"));
+    }
+
+    #[test]
+    fn tv_volume_command() {
+        let c = tv_volume_cmd("/dev/cec0", true);
+        assert_eq!(c.program, "cec-ctl");
+        assert_eq!(
+            c.args,
+            [
+                "-d",
+                "/dev/cec0",
+                "--to",
+                "0",
+                "--user-control-pressed",
+                "ui-cmd=volume-up",
+                "--user-control-released"
+            ]
+        );
     }
 
     #[test]

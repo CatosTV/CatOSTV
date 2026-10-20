@@ -30,7 +30,7 @@ use catostv_core::prefs::{self, UiPrefs};
 use catostv_core::process::{Cmd, Runner, SystemRunner, find_executable};
 use catostv_core::settings::{AppView, RemoteInfo, ShellContext, SystemSnapshot};
 use catostv_core::shell::{Effect, Page, Shell, StoreItem, StoreJob, Target};
-use catostv_core::{android, compositor, desktop, env, kdeconnect, power, remote, uinput};
+use catostv_core::{android, cec, compositor, desktop, env, kdeconnect, power, remote, uinput};
 use eframe::egui::{self, Rect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -1334,6 +1334,14 @@ impl ShellApp {
         });
     }
 
+    /// The sound goes to the TV over HDMI (not headphones or a speaker).
+    fn sound_on_tv(&self) -> bool {
+        self.sys
+            .sinks
+            .iter()
+            .any(|s| s.is_default && s.kind == audio::SinkKind::Hdmi)
+    }
+
     /// Which compositor window belongs to app `id`: Android apps share
     /// Waydroid's window; a Flatpak's window carries its app id; others are
     /// learned when they first open a window (`Msg::WindowSeen`).
@@ -1740,6 +1748,16 @@ impl ShellApp {
             // (parallel relative steps finished in any order), and only
             // the newest one is applied.
             Effect::VolumeStep(delta) => match self.sys.volume {
+                // Already full on the TV's speakers: turn the TV itself up.
+                Some(v) if delta > 0 && v.percent >= 100 && !v.muted && self.sound_on_tv() => {
+                    if let Some(dev) = cec::kernel_device() {
+                        self.jobs.spawn(move || {
+                            let _guard = lock(&VOLUME_LOCK);
+                            let _ = SystemRunner.run_ok(&cec::tv_volume_cmd(&dev, true));
+                            Msg::Nothing
+                        });
+                    }
+                }
                 Some(v) => {
                     let percent = (i16::from(v.percent) + i16::from(delta)).clamp(0, 100) as u8;
                     let unmute = delta > 0;
