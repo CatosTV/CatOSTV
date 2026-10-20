@@ -249,10 +249,32 @@ fn header(
     let labels: Vec<&str> = std::iter::once("Home")
         .chain(libs.iter().map(|l| l.name.as_str()))
         .collect();
+    // The right side first (account button, and the Jellyfin | Plex
+    // switch left of it), so the tabs can keep clear of it: they sit in the
+    // middle of the screen when there is room, else move left.
+    let acct = accounts.active();
+    let name = acct.map_or("Account", |a| {
+        if a.user_name.is_empty() {
+            "Account"
+        } else {
+            a.user_name.as_str()
+        }
+    });
+    let incognito = acct.is_some_and(|a| a.incognito);
+    let switch = catostv_core::fin::header_switch(accounts);
+    let acct_w = c.text_width(name, 16.0, Weight::Semibold) + if incognito { 118.0 } else { 96.0 };
+    let switch_w = 196.0;
+    let right_edge = 1216.0 - acct_w - if switch { 12.0 + switch_w } else { 0.0 };
+    let tabs_w: f32 = labels.iter().map(|l| widgets::tab_width(c, l)).sum::<f32>()
+        + 6.0 * (labels.len() as f32 + 1.0);
+    // Clear of the "Catfyn" mark on the left and of the right side.
+    let cx = 640.0_f32
+        .min(right_edge - 20.0 - tabs_w / 2.0)
+        .max(200.0 + tabs_w / 2.0);
     let rects = widgets::tab_bar(
         c,
         "fin-tabs",
-        640.0,
+        cx,
         y,
         52.0,
         &labels,
@@ -264,26 +286,19 @@ fn header(
     }
     // Account button, top right, and the Jellyfin | Plex switch left of it
     // when both have an account.
-    let Some(a) = accounts.active() else { return };
-    let switch = catostv_core::fin::header_switch(accounts);
+    let Some(a) = acct else { return };
     let acct_index = libs.len() + usize::from(switch);
-    let name = if a.user_name.is_empty() {
-        "Account"
-    } else {
-        &a.user_name
-    };
+    let w = acct_w;
     // The button opens Catfyn's settings: a gear says so.
-    let w = c.text_width(name, 16.0, Weight::Semibold) + if a.incognito { 118.0 } else { 96.0 };
     let rect = c.r(1216.0 - w, y + 2.0, w, 48.0);
     if switch {
-        let sw = 196.0;
         let st = focus_t(c, "fin-hdr-switch", focus == Some(libs.len()));
         let halves = backend_switch(
             c,
             "fin-hdr",
-            1216.0 - w - 12.0 - sw,
+            1216.0 - w - 12.0 - switch_w,
             y + 2.0,
-            sw,
+            switch_w,
             48.0,
             a.backend,
             st,
