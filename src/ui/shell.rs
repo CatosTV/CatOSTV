@@ -1560,6 +1560,16 @@ fn draw_settings(c: &C, v: &ShellView) {
                 255,
             );
         }
+        if row.busy {
+            // Left of the toggle (its right edge is 18 px inside the row).
+            widgets::spinner(
+                &list,
+                368.0 + 836.0 - 18.0 - 44.0 - 22.0,
+                y + row_h / 2.0,
+                9.0,
+                v.now,
+            );
+        }
         if accent_row {
             let pick = if s.settings_rows_focus && s.settings_row == k {
                 s.accent_pick
@@ -1611,12 +1621,14 @@ fn draw_settings(c: &C, v: &ShellView) {
             }
         }
     }
-    // The side without the focus steps back.
+    // The side without the focus steps back. The same 8 px margin below
+    // the last category as above the first (686, inside the right panel's
+    // 688 edge).
     let cats = c.r(
         40.0,
         88.0,
         292.0,
-        Category::ALL.len() as f32 * CAT_STEP + 4.0,
+        (Category::ALL.len() - 1) as f32 * CAT_STEP + CAT_H + 16.0,
     );
     if side > 0.01 {
         c.fill(cats, 24.0, theme::rgba(theme::BG_TOP, (120.0 * side) as u8));

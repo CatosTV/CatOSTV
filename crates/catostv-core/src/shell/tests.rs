@@ -1221,8 +1221,18 @@ fn debug_page_ssh_password_and_old_login() {
     let mut s = Shell::new();
     open_settings(&mut s, &f, Category::Debug);
     assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::DebugSsh(true)]);
+    // While SSH starts the toggle shows on, with a spinner, and OK waits.
+    let ssh = |s: &Shell, f: &Fixture| s.settings_rows(&f.ctx()).remove(0);
+    let row = ssh(&s, &f);
+    assert!(row.busy);
+    assert_eq!(row.kind, RowKind::Toggle(Some(true)));
+    assert_eq!(row.subtitle, "Turning on…");
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![]);
+    s.debug_ssh_busy = None;
     f.sys.debug.ssh_on = true;
+    assert!(!ssh(&s, &f).busy);
     assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::DebugSsh(false)]);
+    s.debug_ssh_busy = None;
     // Change password: typed twice; a mismatch starts over.
     press(&mut s, &f, &[Down, Down, Ok]);
     assert!(matches!(s.overlay(), Some(Overlay::DebugPassword { .. })));

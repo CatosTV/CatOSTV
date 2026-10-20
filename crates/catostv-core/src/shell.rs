@@ -1004,6 +1004,9 @@ pub struct Shell {
     pub bt_scan: Scan<Device>,
     /// Address of the device currently being paired.
     pub bt_busy: Option<String>,
+    /// Debug SSH is being switched on (`true`) or off; starting the SSH
+    /// service takes a few seconds.
+    pub debug_ssh_busy: Option<bool>,
     pub display_pending: Option<PendingMode>,
     /// The confirm dialog is about HDR (just switched on), not a mode.
     pub hdr_pending: bool,
@@ -1097,6 +1100,7 @@ impl Shell {
             eth_draft: None,
             bt_scan: Scan::Idle,
             bt_busy: None,
+            debug_ssh_busy: None,
             display_pending: None,
             hdr_pending: false,
             apks: Scan::Idle,
@@ -1113,6 +1117,18 @@ impl Shell {
                 &self.wifi_scan,
                 self.wifi_connecting.as_deref(),
             ));
+        }
+        if let Some(on) = self.debug_ssh_busy
+            && let Some(r) = rows.iter_mut().find(|r| r.id == RowId::DebugSsh)
+        {
+            r.subtitle = if on {
+                "Turning on…"
+            } else {
+                "Turning off…"
+            }
+            .into();
+            r.kind = RowKind::Toggle(Some(on));
+            r.busy = true;
         }
         rows
     }
@@ -2336,7 +2352,12 @@ impl Shell {
                 vec![]
             }
             RowId::HdmiAudio => vec![Effect::ApplyHdmiProfile],
-            RowId::DebugSsh => vec![Effect::DebugSsh(!sys.debug.ssh_on)],
+            RowId::DebugSsh if self.debug_ssh_busy.is_some() => vec![],
+            RowId::DebugSsh => {
+                let on = !sys.debug.ssh_on;
+                self.debug_ssh_busy = Some(on);
+                vec![Effect::DebugSsh(on)]
+            }
             RowId::DebugPassword => {
                 self.overlays.push(Overlay::DebugPassword {
                     osk: Box::new(Osk::new(true, "Next")),

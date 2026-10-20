@@ -65,6 +65,8 @@ enum Msg {
     Volume(Result<VolumeState, String>),
     BtScan(Result<Vec<Device>, String>),
     BtPaired(String, Result<String, String>),
+    /// Debug SSH was switched on (`true`) or off, or failed to.
+    DebugSsh(bool, Result<(), String>),
     StoreResults(Result<Vec<StoreItem>, String>),
     StoreJob(String, Option<StoreJob>),
     StoreDone(String, Result<String, String>),
@@ -1787,13 +1789,22 @@ impl ShellApp {
             Effect::SetEthernetIp { connection, config } => {
                 self.job(move |r| net::set_ethernet_ip(r, &connection, &config))
             }
-            Effect::DebugSsh(on) => self.job(move |r| {
+            Effect::DebugSsh(on) => self.jobs.spawn(move || {
                 use catostv_core::debug;
-                if on {
-                    debug::run_unit(r, debug::SSH_ON_UNIT, "Turning Debug SSH on")
+                let r = if on {
+                    debug::run_unit(
+                        &mut SystemRunner,
+                        debug::SSH_ON_UNIT,
+                        "Turning Debug SSH on",
+                    )
                 } else {
-                    debug::run_unit(r, debug::SSH_OFF_UNIT, "Turning Debug SSH off")
-                }
+                    debug::run_unit(
+                        &mut SystemRunner,
+                        debug::SSH_OFF_UNIT,
+                        "Turning Debug SSH off",
+                    )
+                };
+                Msg::DebugSsh(on, r.map_err(|e| e.to_string()))
             }),
             Effect::DebugPassword(pw) => self.jobs.spawn(move || {
                 use catostv_core::debug;
@@ -2679,6 +2690,26 @@ impl ShellApp {
             // The panel, Quick settings or Settings shows the level.
             Msg::Volume(Ok(v)) => self.sys.volume = Some(v),
             Msg::BtScan(r) => self.shell.on_bt_scan(r),
+            Msg::DebugSsh(on, r) => {
+                self.shell.debug_ssh_busy = None;
+                match r {
+                    // The unit finished: show the new state now rather than
+                    // flicker back until the refresh reads it.
+                    Ok(()) => {
+                        self.sys.debug.ssh_on = on;
+                        self.show_toast(
+                            ctx,
+                            if on {
+                                "Debug SSH is on"
+                            } else {
+                                "Debug SSH is off"
+                            },
+                        );
+                    }
+                    Err(e) => self.show_toast(ctx, &e),
+                }
+                self.refresh_soon();
+            }
             Msg::BtPaired(mac, r) => {
                 for e in self.shell.on_bt_paired(&mac, r) {
                     self.apply(ctx, e);
@@ -3281,6 +3312,7 @@ impl ShellApp {
         self.sys.android_setup.as_ref().is_some_and(|s| s.running())
             || self.sys.android_repairing
             || self.shell.bt_busy.is_some()
+            || self.shell.debug_ssh_busy.is_some()
             || !self.shell.store_jobs.is_empty()
             || self.bluetooth_on_screen()
     }

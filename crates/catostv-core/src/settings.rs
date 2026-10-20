@@ -310,6 +310,8 @@ pub struct Row {
     pub kind: RowKind,
     /// Greyed out: it only matters while another setting is on.
     pub disabled: bool,
+    /// Something is under way (a spinner next to the toggle).
+    pub busy: bool,
 }
 
 fn row(id: RowId, title: &str, subtitle: &str, value: impl Into<String>, kind: RowKind) -> Row {
@@ -320,6 +322,7 @@ fn row(id: RowId, title: &str, subtitle: &str, value: impl Into<String>, kind: R
         value: value.into(),
         kind,
         disabled: false,
+        busy: false,
     }
 }
 
