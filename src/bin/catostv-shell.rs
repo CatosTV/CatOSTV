@@ -628,10 +628,11 @@ struct ShellApp {
     confirm_deadline: Option<Instant>,
     /// Controller navigation waiting for the next frame.
     pending_nav: Vec<catostv_core::input::Action>,
-    /// Last time the shell asked to be full screen again, and how many
-    /// times in a row.
+    /// Last time the shell asked to be full screen again, how many times
+    /// in a row, and the screen size it last saw.
     refit_at: Option<Instant>,
     refits: u32,
+    refit_screen: Option<egui::Vec2>,
     /// Interface size waiting to be applied: (output, scale, when).
     pending_scale: Option<(String, f32, Instant)>,
     first_snapshot: bool,
@@ -945,6 +946,7 @@ impl ShellApp {
             pending_nav: Vec::new(),
             refit_at: None,
             refits: 0,
+            refit_screen: None,
             first_snapshot: true,
             was_focused: true,
             over_app: None,
@@ -3436,8 +3438,23 @@ impl eframe::App for ShellApp {
                 self.apply(ctx, e);
             }
         }
-        if self.appliance {
-            refit_full_screen(ctx, &mut self.refit_at, &mut self.refits);
+        if self.appliance
+            && refit_full_screen(
+                ctx,
+                &mut self.refit_at,
+                &mut self.refits,
+                &mut self.refit_screen,
+            )
+            && self.started.elapsed() < Duration::from_secs(600)
+        {
+            // labwc only puts a window on a screen when it opens: one that
+            // opened before the TV showed up (a cold boot) never becomes full
+            // screen. Open it again, once per session.
+            let flag = env::runtime_dir().join("catostv-refit-restart");
+            if !flag.exists() && std::fs::write(&flag, "").is_ok() {
+                eprintln!("catostv: still not full screen; restarting the interface");
+                self.apply(ctx, Effect::RestartShell);
+            }
         }
         self.sync_watch();
         // Keep polling app processes and the clock even when idle.
@@ -3872,38 +3889,58 @@ const ANDROID_WINDOW_WAIT: Duration = Duration::from_secs(15);
 /// 1920×1080 corner of the 4K screen until the interface was restarted.
 /// Not full screen, or smaller than the screen → ask again (every 2 s at
 /// most, toggling off first when labwc still calls it full screen).
-fn refit_full_screen(ctx: &egui::Context, last: &mut Option<Instant>, tries: &mut u32) {
+/// On a cold boot the TV can show up well after the shell started, with no
+/// screen to be full on until then: a screen that appears or changes size
+/// starts the quick tries again at once. True when the quick tries did
+/// not help.
+fn refit_full_screen(
+    ctx: &egui::Context,
+    last: &mut Option<Instant>,
+    tries: &mut u32,
+    seen: &mut Option<egui::Vec2>,
+) -> bool {
     let (full, monitor, screen) = ctx.input(|i| {
         let v = i.viewport();
         (v.fullscreen, v.monitor_size, i.viewport_rect().size())
     });
-    let smaller = monitor.is_some_and(|m| {
-        m.x > 0.0 && m.y > 0.0 && (screen.x < m.x * 0.98 || screen.y < m.y * 0.98)
-    });
+    let monitor = monitor.filter(|m| m.x > 0.0 && m.y > 0.0);
+    if monitor != *seen {
+        *seen = monitor;
+        *tries = 0;
+        *last = None;
+    }
+    // No screen (TV off or not detected yet): nothing to fill.
+    let Some(m) = monitor else {
+        return false;
+    };
+    let smaller = screen.x < m.x * 0.98 || screen.y < m.y * 0.98;
     let not_full = full == Some(false);
     if !(smaller || not_full) {
         *tries = 0;
-        return;
+        return false;
     }
     // Three quick tries, then once a minute: a size check that never
     // agrees (an unusual output) must not toggle full screen forever.
-    let wait = if *tries < 3 { 2 } else { 60 };
+    let wait = if *tries <= 3 { 2 } else { 60 };
     if last.is_some_and(|t| t.elapsed() < Duration::from_secs(wait)) {
-        return;
+        return false;
+    }
+    if *tries == 3 {
+        *tries += 1;
+        *last = Some(Instant::now());
+        return true;
     }
     *last = Some(Instant::now());
     *tries += 1;
     eprintln!(
-        "catostv: window {:.0}×{:.0} on a {} screen (full screen: {:?}); filling it again",
-        screen.x,
-        screen.y,
-        monitor.map_or("?".into(), |m| format!("{:.0}×{:.0}", m.x, m.y)),
-        full
+        "catostv: window {:.0}×{:.0} on a {:.0}×{:.0} screen (full screen: {:?}); filling it again",
+        screen.x, screen.y, m.x, m.y, full
     );
     if full == Some(true) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
     }
     ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+    false
 }
 
 /// How long to wait for Android to report the opened app in front.
