@@ -1,0 +1,90 @@
+#!/usr/bin/python3 -I
+# CatosTV: pair one Bluetooth device, saying yes to it on BlueZ's behalf.
+#
+#   bt-pair MAC
+#
+# Runs `bluetoothctl pair MAC` (its output and exit status pass through)
+# while a BlueZ pairing agent is registered for this process. Without an
+# agent BlueZ refuses every pairing that wants a confirmation, and Google TV
+# remotes and many other LE devices ask for one even with nothing to type
+# ("Just Works"). The agent agrees only for MAC and only while this runs,
+# so nothing nearby can pair by itself. It has no screen or keys
+# (NoInputNoOutput); old devices that ask for a PIN are offered 0000.
+#
+# Needs only python-gobject (Gio's D-Bus), which Waydroid already pulls in.
+import subprocess
+import sys
+import threading
+
+from gi.repository import Gio, GLib
+
+AGENT_PATH = "/org/catostv/btpair"
+AGENT_XML = """
+<node><interface name="org.bluez.Agent1">
+  <method name="Release"/>
+  <method name="RequestPinCode"><arg type="o" direction="in"/><arg type="s" direction="out"/></method>
+  <method name="DisplayPinCode"><arg type="o" direction="in"/><arg type="s" direction="in"/></method>
+  <method name="RequestPasskey"><arg type="o" direction="in"/><arg type="u" direction="out"/></method>
+  <method name="DisplayPasskey"><arg type="o" direction="in"/><arg type="u" direction="in"/><arg type="q" direction="in"/></method>
+  <method name="RequestConfirmation"><arg type="o" direction="in"/><arg type="u" direction="in"/></method>
+  <method name="RequestAuthorization"><arg type="o" direction="in"/></method>
+  <method name="AuthorizeService"><arg type="o" direction="in"/><arg type="s" direction="in"/></method>
+  <method name="Cancel"/>
+</interface></node>
+"""
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("usage: bt-pair MAC", file=sys.stderr)
+        return 2
+    mac = sys.argv[1].upper()
+    ours = "/dev_" + mac.replace(":", "_")
+
+    def on_call(_conn, _sender, _path, _iface, method, params, inv):
+        device = params.unpack()[0] if params.n_children() else ""
+        if method in ("Release", "Cancel", "DisplayPinCode", "DisplayPasskey"):
+            inv.return_value(None)
+        elif not device.endswith(ours):
+            inv.return_dbus_error("org.bluez.Error.Rejected", "not the device being paired")
+        elif method == "RequestPinCode":
+            inv.return_value(GLib.Variant("(s)", ("0000",)))
+        elif method == "RequestPasskey":
+            inv.return_dbus_error("org.bluez.Error.Rejected", "no way to enter a passkey")
+        else:
+            inv.return_value(None)
+
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+    node = Gio.DBusNodeInfo.new_for_xml(AGENT_XML)
+    reg = bus.register_object(AGENT_PATH, node.interfaces[0], on_call, None, None)
+
+    def manager(method, args):
+        bus.call_sync("org.bluez", "/org/bluez", "org.bluez.AgentManager1", method,
+                      args, None, Gio.DBusCallFlags.NONE, 5000, None)
+
+    try:
+        manager("RegisterAgent", GLib.Variant("(os)", (AGENT_PATH, "NoInputNoOutput")))
+        manager("RequestDefaultAgent", GLib.Variant("(o)", (AGENT_PATH,)))
+    except GLib.Error as e:
+        # bluetoothctl below says what is wrong (no service, no adapter).
+        print(f"bt-pair: no pairing agent: {e.message}", file=sys.stderr)
+
+    loop = GLib.MainLoop()
+    result = {}
+
+    def pair():
+        result["code"] = subprocess.run(["bluetoothctl", "pair", mac], stdin=subprocess.DEVNULL).returncode
+        GLib.idle_add(loop.quit)
+
+    threading.Thread(target=pair, daemon=True).start()
+    loop.run()
+    try:
+        manager("UnregisterAgent", GLib.Variant("(o)", (AGENT_PATH,)))
+    except GLib.Error:
+        pass
+    bus.unregister_object(reg)
+    return result.get("code", 1)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

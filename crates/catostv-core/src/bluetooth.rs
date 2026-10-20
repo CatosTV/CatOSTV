@@ -88,9 +88,11 @@ pub fn paired_devices(r: &mut dyn Runner) -> Vec<Device> {
 // * In non-interactive mode bluetoothctl does **not** register an agent
 //   (`auto_register_agent && !bt_shell_get_env("NON_INTERACTIVE")`), so
 //   `--agent NoInputNoOutput` has no effect there and is not passed. With no
-//   agent for the calling client, bluetoothd pairs with IO capability
-//   NoInputNoOutput ("Just Works") unless another process registered a
-//   default agent (CatosTV does not run one).
+//   agent at all, bluetoothd rejects every pairing that asks for a
+//   confirmation ("No agent available for request type"), which Google TV
+//   remotes and many LE devices do even for "Just Works". So `pair` runs
+//   through [`PAIR_HELPER`], which registers a NoInputNoOutput default agent
+//   that agrees for that one device while `bluetoothctl pair` runs.
 // * `scan on` replies "Discovery started" and then keeps running
 //   (-EINPROGRESS); `--timeout N` makes it exit after N seconds.
 // * `pair` prints "Pairing successful" / "Failed to pair: <error>",
@@ -102,14 +104,16 @@ pub fn paired_devices(r: &mut dyn Runner) -> Vec<Device> {
 // * Discovered (unpaired) devices are forgotten by bluetoothd about 30 s
 //   after discovery stops (`TemporaryTimeout`), so pair soon after `scan`.
 //
-// LIMITATION: devices that require entering or confirming a PIN/passkey
-// (some keyboards, legacy-pairing devices) cannot be paired this way yet;
-// that needs a D-Bus agent (`org.bluez.Agent1`) that shows the code on the
-// TV. Most gamepads, remotes, headphones and speakers use Just Works.
+// LIMITATION: devices that want a passkey typed on them or shown on the TV
+// (some keyboards) cannot be paired yet; that needs the agent to show the
+// code on the TV. Legacy devices asking for a PIN get 0000. Most gamepads,
+// remotes, headphones and speakers use Just Works.
 //
 // Status: parsers and argv tested with FakeRunner; pairing on real hardware
 // UNVERIFIED.
 
+/// Runs `bluetoothctl pair MAC` with a pairing agent for that device.
+pub const PAIR_HELPER: &str = "/usr/local/lib/catostv/bt-pair";
 /// Shortest/longest scan CatosTV allows, in seconds.
 pub const MIN_SCAN_SECS: u32 = 3;
 pub const MAX_SCAN_SECS: u32 = 60;
@@ -246,9 +250,7 @@ fn friendly_failure(action: &str, text: &str, out: &Output) -> Error {
         || text.contains("AuthenticationRejected")
         || text.contains("AuthenticationCanceled")
     {
-        return Error::msg(
-            "Pairing was rejected. This device may need a PIN, which CatosTV cannot enter yet.",
-        );
+        return Error::msg("Pairing was rejected. Put the device in pairing mode and try again.");
     }
     if text.contains("ConnectionAttemptFailed") || text.contains("Page Timeout") {
         return Error::msg("The device did not respond. Put it in pairing mode and retry.");
@@ -276,7 +278,12 @@ fn device_cmd(
     ok_markers: &[&str],
 ) -> Result<()> {
     let mac = check_mac(mac)?;
-    let out = r.run(&Cmd::new("bluetoothctl").args([verb, &mac]).timeout(timeout))?;
+    let cmd = if verb == "pair" {
+        Cmd::new(PAIR_HELPER).arg(&mac)
+    } else {
+        Cmd::new("bluetoothctl").args([verb, &mac])
+    };
+    let out = r.run(&cmd.timeout(timeout))?;
     let text = strip_ansi(&format!("{}\n{}", out.stdout, out.stderr));
     if ok_markers.iter().any(|m| text.contains(m))
         || (out.success() && !text.contains("Failed") && !text.contains("not available"))
@@ -331,7 +338,7 @@ pub fn scan(r: &mut dyn Runner, secs: u32) -> Result<Vec<Device>> {
     Ok(found)
 }
 
-/// `bluetoothctl pair MAC` (Just Works; see the module notes).
+/// `bt-pair MAC`: `bluetoothctl pair MAC` with an agent (see the module notes).
 pub fn pair(r: &mut dyn Runner, mac: &str) -> Result<()> {
     device_cmd(
         r,
@@ -712,7 +719,7 @@ mod tests {
         assert_eq!(
             shown,
             [
-                "bluetoothctl pair E4:17:D8:AA:BB:CC",
+                "/usr/local/lib/catostv/bt-pair E4:17:D8:AA:BB:CC",
                 "bluetoothctl trust E4:17:D8:AA:BB:CC",
                 "bluetoothctl connect E4:17:D8:AA:BB:CC",
             ]
@@ -745,7 +752,7 @@ mod tests {
             ..Output::default()
         });
         let e = pair_trust_connect(&mut r, "AA:BB:CC:DD:EE:FF").unwrap_err();
-        assert!(e.message().contains("PIN"), "{e}");
+        assert!(e.message().contains("rejected"), "{e}");
         assert_eq!(r.seen.len(), 1);
 
         let mut r = FakeRunner::new();
