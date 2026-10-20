@@ -23,6 +23,8 @@ if ! systemd-detect-virt --chroot >/dev/null 2>&1; then
   # setups get it from android-setup; the next Android start applies it.
   if [[ -e /var/lib/waydroid/images/vendor.img ]]; then
     /usr/local/lib/catostv/android-codecs >/dev/null 2>&1 || true
+    # The Play Store hands out TV builds of apps (android-tv-features).
+    /usr/local/lib/catostv/android-tv-features >/dev/null 2>&1 || true
   fi
 fi
 exit 0

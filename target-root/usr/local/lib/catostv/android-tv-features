@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# CatosTV: make Android say it is a TV, not a phone. The vendor image
+# declares the phone feature set (handheld_core_hardware.xml, a touchscreen,
+# cameras, GPS, motion sensors), so the Play Store handed out phone builds
+# of apps that have a TV build too (and updated a sideloaded TV build back
+# to the phone one).
+# Android drops features listed as <unavailable-feature> after it reads all
+# its permission files, so one extra file in the vendor overlay is enough.
+# Phone-only apps are then not offered in the store, as on any Android TV;
+# installed ones keep working. Takes effect when Android restarts.
+# Run as root; no input.
+set -euo pipefail
+OVERLAY=/var/lib/waydroid/overlay/vendor/etc/permissions/catostv-tv.xml
+FEATURES=(
+  android.hardware.touchscreen
+  android.hardware.touchscreen.multitouch
+  android.hardware.touchscreen.multitouch.distinct
+  android.hardware.touchscreen.multitouch.jazzhand
+  android.hardware.screen.portrait
+  android.hardware.camera
+  android.hardware.camera.any
+  android.hardware.camera.autofocus
+  android.hardware.camera.flash
+  android.hardware.camera.front
+  android.hardware.camera.level.full
+  android.hardware.camera.capability.manual_post_processing
+  android.hardware.camera.capability.manual_sensor
+  android.hardware.camera.capability.raw
+  android.hardware.location.gps
+  android.hardware.sensor.accelerometer
+  android.hardware.sensor.ambient_temperature
+  android.hardware.sensor.barometer
+  android.hardware.sensor.compass
+  android.hardware.sensor.gyroscope
+  android.hardware.sensor.light
+  android.hardware.sensor.proximity
+  android.hardware.sensor.relative_humidity
+)
+
+want="$(
+  echo '<?xml version="1.0" encoding="utf-8"?>'
+  echo '<!-- CatosTV: a TV has none of these (see /usr/local/lib/catostv/android-tv-features). -->'
+  echo '<permissions>'
+  printf '    <unavailable-feature name="%s" />\n' "${FEATURES[@]}"
+  echo '</permissions>'
+)"
+if [[ -f $OVERLAY && "$(cat "$OVERLAY")" == "$want" ]]; then
+  echo "Android already says it is a TV"
+  exit 0
+fi
+mkdir -p "$(dirname "$OVERLAY")"
+printf '%s\n' "$want" >"$OVERLAY.tmp"
+chmod 644 "$OVERLAY.tmp"
+mv "$OVERLAY.tmp" "$OVERLAY"
+echo "Android now says it is a TV (takes effect when Android restarts)"
