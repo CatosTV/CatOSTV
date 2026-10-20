@@ -11,6 +11,8 @@ set -uo pipefail
 systemctl enable catostv-android-watch.service catostv-debug-boot.service 2>/dev/null || true
 # GTK / libadwaita TV defaults (/etc/dconf/db/local.d).
 dconf update 2>/dev/null || true
+# Remote OK and Settings buttons (/etc/udev/hwdb.d/70-catostv-remotes.hwdb).
+systemd-hwdb update 2>/dev/null || true
 # Process IDs below 65536 for Android's 32-bit programs
 # (/etc/sysctl.d/60-catostv-android.conf). Applied now on a running TV;
 # inside the installer's chroot the new system's first boot applies it.
@@ -19,6 +21,8 @@ if ! systemd-detect-virt --chroot >/dev/null 2>&1; then
   # The name Bluetooth devices see. BlueZ keeps the name from the first
   # start, so TVs set up before the rename kept their old name.
   timeout 5 bluetoothctl system-alias CatosTV >/dev/null 2>&1 || true
+  # Remotes already connected pick up the new key mapping.
+  udevadm trigger -s input >/dev/null 2>&1 || true
   # 4K60 in Android apps on Intel and AMD graphics (android-codecs). New
   # setups get it from android-setup; the next Android start applies it.
   if [[ -e /var/lib/waydroid/images/vendor.img ]]; then

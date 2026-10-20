@@ -1,0 +1,15 @@
+# CatosTV: TV remotes (Bluetooth and USB).
+#
+# OK on Google TV and most Android TV remotes is HID "Menu Pick" (c0041),
+# which Linux reports as KEY_SELECT. Neither CatosTV nor Android under
+# Waydroid (its keyboard pipe drops high key codes) acts on that, so make
+# it Enter, which Android maps to DPAD_CENTER itself.
+# The Settings button (c0096) has no Linux key at all; make it the
+# Quick settings key (KEY_CONFIG, XF86Tools in labwc's rc.xml).
+#
+# After a change: systemd-hwdb update && udevadm trigger -s input
+# (post-install does both).
+evdev:input:b0003v*
+evdev:input:b0005v*
+ KEYBOARD_KEY_c0041=enter
+ KEYBOARD_KEY_c0096=config
