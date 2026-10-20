@@ -34,9 +34,14 @@ ANDROID_ENV=(--clear-env
   -v ANDROID_ROOT=/system -v ANDROID_DATA=/data)
 mkdir -p /run/catostv
 last=unset
+# TOP [TMP]: the event reader below writes through its own temporary file.
+write_top() {
+  local tmp="$OUT.${2:-tmp}"
+  printf '%s\n' "$1" >"$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$OUT"
+}
 publish() {
   [[ "$1" == "$last" ]] && return
-  printf '%s\n' "$1" >"$OUT.tmp" && chmod 644 "$OUT.tmp" && mv -f "$OUT.tmp" "$OUT"
+  write_top "$1"
   last=$1
 }
 in_android() {
@@ -169,9 +174,18 @@ publish_tasks() {
 # Android has finished booting: the shell removes Home icons only
 # on app lists from a booted Android, never from one starting or stopping.
 BOOTED=/run/catostv/android-booted
+# No window animations in Android: an app opening faded in over Android's
+# home screen, and leaving one faded that home screen in, so it showed for
+# a moment either way before CatosTV took over. Animations inside apps
+# stay. Android keeps the setting, but a repaired Android starts over.
+no_window_animations() {
+  in_android 'for s in window_animation_scale transition_animation_scale; do
+    [ "$(settings get global $s)" = 0 ] || settings put global $s 0
+  done'
+}
 publish_booted() {
   if [[ "$1" == 1 ]]; then
-    [[ -e $BOOTED ]] || { : >"$BOOTED"; chmod 644 "$BOOTED"; }
+    [[ -e $BOOTED ]] || { : >"$BOOTED"; chmod 644 "$BOOTED"; no_window_animations; }
   else
     rm -f "$BOOTED"
   fi
@@ -275,10 +289,16 @@ stop_hung_watch() {
 # main loop learns it at once instead of at its next check a second later,
 # and Android's own home screen no longer flashes up for a second when you
 # leave an app. One logcat per Android session, nothing polled.
+# Android's home screen is written out right here, not when the main loop
+# next reads (its round of Android calls takes 0.1 to 0.3 s).
 FRONT_LOOP='logcat -b events -T "$(date +%m-%d\ %H:%M:%S).000" -v raw wm_set_resumed_activity:I "*:S" 2>/dev/null'
 front_events() {
   lxc-attach "${LXC[@]}" "${ANDROID_ENV[@]}" -- /system/bin/sh -c "$FRONT_LOOP" 2>/dev/null \
-    | sed -un 's/^\[[0-9]*,\([A-Za-z0-9_.]*\)\/.*/\1/p'
+    | sed -un 's/^\[[0-9]*,\([A-Za-z0-9_.]*\)\/.*/\1/p' \
+    | while IFS= read -r ev; do
+        is_home "$ev" && write_top "$ev" ev
+        printf '%s\n' "$ev"
+      done
 }
 EV=""
 EVP=""
@@ -320,7 +340,7 @@ cap_android_pids() {
 }
 kernel_watch &
 KW=$!
-trap '[[ -n "$KW" ]] && { pkill -P "$KW" 2>/dev/null; kill "$KW" 2>/dev/null; }; stop_watchdog; stop_hung_watch; stop_front_events; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp" "$STARTED"; exit' EXIT TERM INT
+trap '[[ -n "$KW" ]] && { pkill -P "$KW" 2>/dev/null; kill "$KW" 2>/dev/null; }; stop_watchdog; stop_hung_watch; stop_front_events; rm -f "$OUT" "$OUT.tmp" "$OUT.ev" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp" "$STARTED"; exit' EXIT TERM INT
 while true; do
   if [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" != RUNNING ]]; then
     publish ""

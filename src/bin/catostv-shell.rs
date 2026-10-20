@@ -216,6 +216,10 @@ fn spawn_app_watcher(
     const TICK: Duration = Duration::from_millis(300);
     // The shell repaints at least every 250 ms while visible.
     const HIDDEN_AFTER: Duration = Duration::from_millis(1500);
+    // Hidden sooner right after opening an app: the switch to it comes
+    // 60 ms after `Watch::blank` is set (leaving an app that was still
+    // loading showed Android's home screen until the 1.5 s were over).
+    const BEHIND_APP_AFTER: Duration = Duration::from_millis(200);
     // How often the app in front is captured for Recents.
     const THUMB_EVERY: Duration = Duration::from_secs(4);
     let run = move || {
@@ -241,6 +245,9 @@ fn spawn_app_watcher(
         let mut last_top: Option<String> = None;
         let mut last_thumb: Option<Instant> = None;
         let mut generation: HashMap<String, u32> = HashMap::new();
+        // A capture is under way (its own thread: at 4K it takes about a
+        // second, and this loop must notice leaving an app meanwhile).
+        let capturing = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let top_stamp = || {
             std::fs::metadata(android::TOP_PATH)
                 .and_then(|m| m.modified())
@@ -251,8 +258,8 @@ fn spawn_app_watcher(
             // Android's front app changing wakes the loop early: leaving an
             // app (Back past its first screen) shows Android's own home
             // screen until CatosTV takes over, so that has to be quick.
-            for _ in 0..3 {
-                std::thread::sleep(TICK / 3);
+            for _ in 0..10 {
+                std::thread::sleep(TICK / 10);
                 let stamp = top_stamp();
                 if stamp != last_top_stamp {
                     last_top_stamp = stamp;
@@ -266,7 +273,8 @@ fn spawn_app_watcher(
                     w.foreground.clone(),
                     w.android_front,
                     w.appliance,
-                    w.last_frame.is_none_or(|t| t.elapsed() > HIDDEN_AFTER),
+                    w.last_frame.is_none_or(|t| t.elapsed() > HIDDEN_AFTER)
+                        || w.blank.is_some_and(|t| t.elapsed() > BEHIND_APP_AFTER),
                     w.foreground_window.clone(),
                 )
             };
@@ -373,15 +381,27 @@ fn spawn_app_watcher(
             // Android's previous task instead: an app that was
             // running before CatosTV opened this one means the user backed
             // out too, unless the app itself brought it forward.
+            //
+            // The app CatosTV opened coming to the front counts from the
+            // start, before CatosTV counts as hidden: leaving an app that was
+            // still loading goes Home too, not after the start time is over.
+            let opened = lock(&watch).android_opened.clone();
+            if opened_key != opened {
+                opened_seen = false;
+                opened_key = opened.clone();
+            }
+            if appliance
+                && android_front
+                && !opened_seen
+                && let Some((p, _)) = &opened
+                && android::read_top().as_deref() == Some(p.as_str())
+            {
+                opened_seen = true;
+            }
             if appliance && hidden && android_front {
                 let launched = android::read_launched();
                 if launch_seen.as_ref() != launched.as_ref() {
                     launch_seen = None;
-                }
-                let opened = lock(&watch).android_opened.clone();
-                if opened_key != opened {
-                    opened_seen = false;
-                    opened_key = opened.clone();
                 }
                 let grace_over = opened
                     .as_ref()
@@ -476,7 +496,11 @@ fn spawn_app_watcher(
                 fg
             };
             let Some(id) = id else { continue };
-            if !appliance || !hidden || last_thumb.is_some_and(|t| t.elapsed() < THUMB_EVERY) {
+            if !appliance
+                || !hidden
+                || last_thumb.is_some_and(|t| t.elapsed() < THUMB_EVERY)
+                || capturing.load(std::sync::atomic::Ordering::Acquire)
+            {
                 continue;
             }
             last_thumb = Some(Instant::now());
@@ -498,12 +522,17 @@ fn spawn_app_watcher(
             let cmd = Cmd::new("grim")
                 .args(["-s", "0.25", "-l", "1", "-t", "png", &shot])
                 .timeout(Duration::from_secs(5));
-            if SystemRunner.run(&cmd).is_ok_and(|o| o.success())
-                && catostv::images::blurred_copy(&shot, &blur)
-            {
-                let _ = tx.send(Msg::Thumb(id, shot, blur));
-                ctx.request_repaint();
-            }
+            capturing.store(true, std::sync::atomic::Ordering::Release);
+            let (tx, ctx, capturing) = (tx.clone(), ctx.clone(), capturing.clone());
+            std::thread::spawn(move || {
+                if SystemRunner.run(&cmd).is_ok_and(|o| o.success())
+                    && catostv::images::blurred_copy(&shot, &blur)
+                {
+                    let _ = tx.send(Msg::Thumb(id, shot, blur));
+                    ctx.request_repaint();
+                }
+                capturing.store(false, std::sync::atomic::Ordering::Release);
+            });
         }
     };
     if let Err(e) = std::thread::Builder::new()
