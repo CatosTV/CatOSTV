@@ -9,10 +9,11 @@
 # Android apps behave like the rest of the TV.
 #
 # Cheap on purpose: lxc-attach directly (no Python `waydroid shell`), one
-# `dumpsys window` per second, and nothing at all while Android is not
-# running. The focused window ("mCurrentFocus=Window{… u0 <pkg>/<class>}")
-# is used because Android 13 no longer prints `mResumedActivity` lines in
-# `dumpsys activity activities` (seen on the TV).
+# `dumpsys window` per second (sooner when Android's event log says an app
+# came to the front), and nothing at all while Android is not running.
+# The focused window ("mCurrentFocus=Window{… u0 <pkg>/<class>}") is used
+# because Android 13 no longer prints `mResumedActivity` lines in `dumpsys
+# activity activities` (seen on the TV).
 #
 # It is also the screen-service watchdog: Android's
 # surfaceflinger crashed on an Intel GPU whenever an app drew with
@@ -269,6 +270,37 @@ stop_hung_watch() {
   kill "$HW" 2>/dev/null || true
   HW=""
 }
+# Android logs every app coming to the front ("wm_set_resumed_activity"),
+# about 0.2 s before its window takes the focus. Following that log, the
+# main loop learns it at once instead of at its next check a second later,
+# and Android's own home screen no longer flashes up for a second when you
+# leave an app. One logcat per Android session, nothing polled.
+FRONT_LOOP='logcat -b events -T "$(date +%m-%d\ %H:%M:%S).000" -v raw wm_set_resumed_activity:I "*:S" 2>/dev/null'
+front_events() {
+  lxc-attach "${LXC[@]}" "${ANDROID_ENV[@]}" -- /system/bin/sh -c "$FRONT_LOOP" 2>/dev/null \
+    | sed -un 's/^\[[0-9]*,\([A-Za-z0-9_.]*\)\/.*/\1/p'
+}
+EV=""
+EVP=""
+stop_front_events() {
+  [[ -n "$EVP" ]] || return 0
+  pkill -P "$EVP" 2>/dev/null || true
+  kill "$EVP" 2>/dev/null || true
+  exec {EV}<&-
+  EV=""
+  EVP=""
+}
+# Android's own home screen, as the shell's is_android_home sees it.
+is_home() {
+  case "$1" in
+    *launcher*|*trebuchet*|*catapult*|*leanback*|com.android.settings.fallbackhome) return 0 ;;
+  esac
+  return 1
+}
+# The app the last event brought to the front, and how many more checks
+# (0.2 s apart) it counts for while the focused window is still the old one.
+resumed=""
+resumed_checks=0
 # Process IDs below 65536 inside Android (see
 # /etc/sysctl.d/60-catostv-android.conf for why): each process-ID
 # namespace has its own limit and Android's container starts with the
@@ -288,7 +320,7 @@ cap_android_pids() {
 }
 kernel_watch &
 KW=$!
-trap '[[ -n "$KW" ]] && { pkill -P "$KW" 2>/dev/null; kill "$KW" 2>/dev/null; }; stop_watchdog; stop_hung_watch; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp" "$STARTED"; exit' EXIT TERM INT
+trap '[[ -n "$KW" ]] && { pkill -P "$KW" 2>/dev/null; kill "$KW" 2>/dev/null; }; stop_watchdog; stop_hung_watch; stop_front_events; rm -f "$OUT" "$OUT.tmp" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp" "$STARTED"; exit' EXIT TERM INT
 while true; do
   if [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" != RUNNING ]]; then
     publish ""
@@ -300,6 +332,8 @@ while true; do
       rm -f "$SF" "$APPS"
     fi
     stop_hung_watch
+    stop_front_events
+    resumed=""
     sleep 3
     continue
   fi
@@ -312,16 +346,45 @@ while true; do
     hung_watch &
     HW=$!
   fi
+  if [[ -z "$EVP" ]] || ! kill -0 "$EVP" 2>/dev/null; then
+    stop_front_events
+    exec {EV}< <(front_events)
+    EVP=$!
+  fi
   # One attach: boot state, Android's focused window, its tasks top to
   # bottom.
   state=$(in_android 'echo "booted=$(getprop sys.boot_completed)"; dumpsys window 2>/dev/null | grep "mCurrentFocus="; dumpsys activity activities 2>/dev/null | grep "^  \* Task{"' | tr -d '\r')
   publish_booted "$(grep -qx 'booted=1' <<<"$state" && echo 1)"
   line=$(grep -m1 'mCurrentFocus=' <<<"$state")
   pkg=$(sed -n 's/.* \([A-Za-z][A-Za-z0-9_.]*\)\/[^ ]*.*/\1/p' <<<"$line" | head -n1)
-  publish "$pkg"
+  # Until the focus follows the app the last event named (2 s at most),
+  # that app is the one in front, and the next check comes sooner.
+  wait=1
+  if [[ -n "$resumed" && "$pkg" != "$resumed" ]] && (( resumed_checks-- > 0 )); then
+    pkg=$resumed
+    wait=0.2
+  else
+    resumed=""
+  fi
+  # Tasks first: the shell reads them for the app it is told about.
   publish_tasks "$(sed -n 's/^  \* Task{.* A=[0-9]*:\([A-Za-z0-9_.]*\).*/\1/p' <<<"$state" | awk 'NR<=40')"
+  publish "$pkg"
   keep_full_ui "$pkg"
   publish_apps
   publish_gsf
-  sleep 1
+  # Wait for the next check, or for Android to bring an app to the front.
+  # Android's home screen is told at once; any other app after a fresh
+  # look at the tasks (the shell must not see the new app with the old
+  # task order).
+  if read -r -t "$wait" -u "$EV" ev 2>/dev/null; then
+    while read -r -t 0.05 -u "$EV" next 2>/dev/null; do ev=$next; done
+    resumed=$ev
+    resumed_checks=10
+    is_home "$ev" && publish "$ev"
+  elif (( $? <= 128 )); then
+    # Not a timeout: the log ended (Android stopping). Started again on
+    # the next round.
+    stop_front_events
+    sleep "$wait"
+  fi
 done

@@ -239,8 +239,24 @@ fn spawn_app_watcher(
         let mut last_top: Option<String> = None;
         let mut last_thumb: Option<Instant> = None;
         let mut generation: HashMap<String, u32> = HashMap::new();
+        let top_stamp = || {
+            std::fs::metadata(android::TOP_PATH)
+                .and_then(|m| m.modified())
+                .ok()
+        };
+        let mut last_top_stamp = top_stamp();
         loop {
-            std::thread::sleep(TICK);
+            // Android's front app changing wakes the loop early: leaving an
+            // app (Back past its first screen) shows Android's own home
+            // screen until CatosTV takes over, so that has to be quick.
+            for _ in 0..3 {
+                std::thread::sleep(TICK / 3);
+                let stamp = top_stamp();
+                if stamp != last_top_stamp {
+                    last_top_stamp = stamp;
+                    break;
+                }
+            }
             let events = lock(&manager).poll();
             let (fg, android_front, appliance, hidden, fg_window) = {
                 let w = lock(&watch);
