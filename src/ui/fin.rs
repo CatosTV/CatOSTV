@@ -407,7 +407,7 @@ fn hero_text_with(c: &C, it: &Item, x: f32, y: f32, w: f32, now_k: f32, action_c
     // What OK does: an accent chip, with the progress line beside it.
     let action = match (it.progress(), it.kind()) {
         (Some(_), _) => "Resume",
-        (None, Kind::Series) => "Open",
+        (None, Kind::Series | Kind::Library | Kind::Season | Kind::Other) => "Open",
         _ => "Play",
     };
     let aw = c.text_width(action, 14.0, Weight::Semibold) + 50.0;
