@@ -97,9 +97,16 @@ from the page to reach it; the tab you're on lights up.
 
 ### App options
 
-Hold **OK** on an app (or press the Options/Menu button) for *Open* or
-*Resume*, *Restart*, *Close*, and *Uninstall* for apps from the Store or
-Android.
+Press the Options/Menu button on an app (or hold **OK** in Apps and
+Recents) for *Open* or *Resume*, *Restart*, *Close*, and *Uninstall* for
+apps from the Store or Android.
+
+### Arranging apps on Home
+
+Hold **OK** on an app on Home to pick it up. Move it with Left and Right,
+then press **OK** (or Back) to put it down. Down puts it down and opens its
+options. *Move* in an app's options picks it up too. New apps go at the
+end.
 
 ### Leaving an app
 
@@ -302,8 +309,8 @@ the TV, so the slideshow still runs when the internet is down.
   the picture if the edges are cut off), adaptive sync, HDR.
 - **Sound**: volume, mute, output device, and *Use TV speakers (HDMI)*
   for when the TV stays silent.
-- **Customization**: accent colour, 12/24-hour clock, the glow behind the
-  focused app on Home, and the screensaver.
+- **Customization**: accent colour, 12/24-hour clock, *Home background*
+  (*NOICE CATS*, *Random photos* or *Glow*), and the screensaver.
 - **Apps**: installed apps, search, *Update apps*.
 - **Android**: set up and manage Android ([ANDROID.md](ANDROID.md)).
 - **Cast & remote**: casting, phone remote, KDE Connect devices.

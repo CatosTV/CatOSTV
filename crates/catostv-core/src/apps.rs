@@ -327,9 +327,38 @@ pub fn merge(
     apps
 }
 
+/// Put `apps` in the user's `order` (app ids, Home → hold OK → move).
+/// Apps not in `order` (new ones) follow, in the order they came.
+pub fn apply_order(apps: &mut [AppEntry], order: &[String]) {
+    let rank = |a: &AppEntry| {
+        order
+            .iter()
+            .position(|id| *id == a.id)
+            .unwrap_or(usize::MAX)
+    };
+    apps.sort_by_key(rank);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_order_first_new_apps_after() {
+        let mut apps = defaults();
+        let ids: Vec<String> = apps.iter().map(|a| a.id.clone()).collect();
+        assert!(ids.len() >= 3);
+        let order = vec![ids[2].clone(), "gone.app".into(), ids[0].clone()];
+        apply_order(&mut apps, &order);
+        let got: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+        let mut want = vec![ids[2].as_str(), ids[0].as_str()];
+        want.extend(
+            ids.iter()
+                .map(String::as_str)
+                .filter(|id| *id != ids[0] && *id != ids[2]),
+        );
+        assert_eq!(got, want);
+    }
 
     #[test]
     fn merge_dedups_store_copies_of_configured_apps() {

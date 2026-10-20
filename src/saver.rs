@@ -27,6 +27,10 @@ pub struct Slideshow {
     pub prev: Option<Slide>,
     /// A decode in flight: `Some(result)` once it is done.
     decoding: Option<Decoded>,
+    /// Seconds each picture stays.
+    pub secs: f32,
+    /// Softly blurred, for Home's background.
+    blur: bool,
 }
 
 impl Slideshow {
@@ -40,7 +44,23 @@ impl Slideshow {
             cur: None,
             prev: None,
             decoding: None,
+            secs: ss::PICTURE_SECS,
+            blur: false,
         }
+    }
+
+    /// Home's background: the same pictures, softly blurred, changing
+    /// slowly.
+    pub fn backdrop(pics: Vec<PathBuf>) -> Self {
+        Self {
+            secs: BACKDROP_SECS,
+            blur: true,
+            ..Self::new(pics)
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pics.is_empty()
     }
 
     /// Newly downloaded pictures come next.
@@ -82,15 +102,16 @@ impl Slideshow {
         let due = self
             .cur
             .as_ref()
-            .is_none_or(|s| s.since.elapsed().as_secs_f32() >= ss::PICTURE_SECS);
+            .is_none_or(|s| s.since.elapsed().as_secs_f32() >= self.secs);
         if due && self.decoding.is_none() && !self.pics.is_empty() {
             let path = self.pics[self.next % self.pics.len()].clone();
             self.next = (self.next + 1) % self.pics.len();
             let slot: Decoded = Arc::new(Mutex::new(None));
             self.decoding = Some(slot.clone());
             let ctx = ctx.clone();
+            let blur = self.blur;
             std::thread::spawn(move || {
-                let img = decode(&path, px);
+                let img = decode(&path, px, blur);
                 if img.is_none() {
                     // A broken download: gone, so it is not tried again.
                     let _ = std::fs::remove_file(&path);
@@ -110,9 +131,18 @@ impl Slideshow {
     }
 }
 
+/// How long each picture stays behind Home (seconds).
+pub const BACKDROP_SECS: f32 = 40.0;
+
 /// Decode a JPEG and cut it to the screen's shape, no bigger than the
-/// screen.
-fn decode(path: &Path, px: [u32; 2]) -> Option<ColorImage> {
+/// screen. `blur`: a quarter of the screen's size, softened, for Home's
+/// background (stretched back up it stays soft and costs little memory).
+fn decode(path: &Path, px: [u32; 2], blur: bool) -> Option<ColorImage> {
+    let px = if blur {
+        [(px[0] / 4).clamp(16, 960), (px[1] / 4).clamp(16, 540)]
+    } else {
+        px
+    };
     use image::imageops::{self, FilterType};
     let img = image::open(path).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
@@ -132,6 +162,7 @@ fn decode(path: &Path, px: [u32; 2]) -> Option<ColorImage> {
     } else {
         crop
     };
+    let out = if blur { imageops::blur(&out, 3.0) } else { out };
     let (ow, oh) = out.dimensions();
     Some(ColorImage::from_rgba_unmultiplied(
         [ow as usize, oh as usize],

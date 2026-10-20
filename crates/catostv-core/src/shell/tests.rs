@@ -119,20 +119,72 @@ fn home_rail_launches_and_resumes() {
 }
 
 #[test]
-fn long_press_opens_app_options() {
+fn menu_key_opens_app_options() {
     let mut f = Fixture::new();
     let mut s = Shell::new();
-    press(&mut s, &f, &[OkLong]);
+    press(&mut s, &f, &[Options]);
     assert!(matches!(
         s.overlay(),
-        Some(Overlay::AppOptions { app: 0, .. })
+        Some(Overlay::AppOptions {
+            app: 0,
+            movable: true,
+            ..
+        })
     ));
-    // Not running, configured app: Open / Cancel.
+    // Not running, configured app on Home: Open / Move / Cancel.
     assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::Launch(0)]);
     assert!(s.overlay().is_none());
     f.apps[0].running = true;
     press(&mut s, &f, &[Options]);
     assert_eq!(press(&mut s, &f, &[Down, Down, Ok]), vec![Effect::Close(0)]);
+}
+
+#[test]
+fn hold_ok_picks_an_app_up_and_moves_it() {
+    let f = Fixture::new();
+    let mut s = Shell::new();
+    press(&mut s, &f, &[Right, OkLong]);
+    assert!(s.moving);
+    assert!(s.overlay().is_none());
+    // Carried along the row; not past either end.
+    assert_eq!(
+        press(&mut s, &f, &[Right]),
+        vec![Effect::MoveApp { from: 1, to: 2 }]
+    );
+    assert_eq!(s.rail_index, 2);
+    assert_eq!(
+        press(&mut s, &f, &[Left, Left]),
+        vec![
+            Effect::MoveApp { from: 2, to: 1 },
+            Effect::MoveApp { from: 1, to: 0 }
+        ]
+    );
+    assert!(press(&mut s, &f, &[Left]).is_empty());
+    // Up stays with the app; OK puts it down without opening it.
+    press(&mut s, &f, &[Up]);
+    assert!(s.moving && !s.top_focus);
+    assert!(press(&mut s, &f, &[Ok]).is_empty());
+    assert!(!s.moving);
+    // Back puts it down too, Down opens its options.
+    press(&mut s, &f, &[OkLong, Back]);
+    assert!(!s.moving && s.page == Page::Home);
+    press(&mut s, &f, &[OkLong, Down]);
+    assert!(!s.moving);
+    assert!(matches!(
+        s.overlay(),
+        Some(Overlay::AppOptions { app: 0, .. })
+    ));
+}
+
+#[test]
+fn move_from_the_options_picks_the_app_up() {
+    let f = Fixture::new();
+    let mut s = Shell::new();
+    press(&mut s, &f, &[Right, Right, Options, Down, Ok]);
+    assert!(s.moving);
+    assert_eq!(s.rail_index, 2);
+    // Only Home's row offers Move.
+    assert!(!app_options(false, false, false).contains(&AppOption::Move));
 }
 
 #[test]
@@ -142,9 +194,15 @@ fn store_apps_can_be_uninstalled() {
         app_id: "tv.kodi.Kodi".into(),
     };
     let mut s = Shell::new();
-    press(&mut s, &f, &[Right, Right, Right, OkLong]);
-    assert_eq!(press(&mut s, &f, &[Down, Ok]), vec![Effect::Uninstall(3)]);
-    assert_eq!(app_options(true, true), app_options(true, false));
+    press(&mut s, &f, &[Right, Right, Right, Options]);
+    assert_eq!(
+        press(&mut s, &f, &[Down, Down, Ok]),
+        vec![Effect::Uninstall(3)]
+    );
+    assert_eq!(
+        app_options(true, true, false),
+        app_options(true, false, false)
+    );
 }
 
 #[test]
@@ -256,13 +314,17 @@ fn settings_sliders_choices_and_soon_rows() {
     open_settings(&mut s, &f, Category::Updates);
     assert_eq!(press(&mut s, &f, &[Down, Ok]), vec![Effect::CheckUpdates]);
 
-    // Customization: clock format flips with Left/Right/OK, glow toggles.
+    // Customization: clock format flips with Left/Right/OK, the Home
+    // background cycles.
     open_settings(&mut s, &f, Category::Customization);
     assert_eq!(
         press(&mut s, &f, &[Down, Right]),
         vec![Effect::SetClock24(false)]
     );
-    assert_eq!(press(&mut s, &f, &[Down, Ok]), vec![Effect::SetGlow(false)]);
+    assert_eq!(
+        press(&mut s, &f, &[Down, Ok]),
+        vec![Effect::SetHomeBackground("photos".into())]
+    );
 }
 
 #[test]

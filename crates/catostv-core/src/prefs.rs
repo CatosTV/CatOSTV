@@ -39,8 +39,6 @@ pub struct UiPrefs {
     pub key_guide_seen: bool,
     /// Clock shows 24-hour time (`false` → 12-hour with AM/PM).
     pub clock_24h: bool,
-    /// Soft colour glows behind the interface (theme customisation).
-    pub glow: bool,
     /// HDR output (experimental). Not persisted across reboots: the shell
     /// derives it from [`hdr_flag_path`] at start, and `catostv-session`
     /// starts labwc with the Vulkan renderer and `<hdr>yes</hdr>` only
@@ -70,6 +68,39 @@ pub struct UiPrefs {
     pub saver_pictures: String,
     /// Minutes without input, one of `screensaver::MINUTES`.
     pub saver_minutes: u32,
+    /// Home's apps in the order the user put them (app ids); apps not
+    /// listed follow in their usual order.
+    pub app_order: Vec<String>,
+    /// Behind the interface: one of [`HOME_BACKGROUNDS`] (keys).
+    pub home_background: String,
+}
+
+/// Settings → Customization → Home background: key and label. "glow" is
+/// the drifting light; the others are softly blurred pictures from the
+/// screensaver's collections. Cats by default.
+pub const HOME_BACKGROUNDS: [(&str, &str); 3] = [
+    ("glow", "Glow"),
+    ("cats", "NOICE CATS"),
+    ("photos", "Random photos"),
+];
+pub const DEFAULT_HOME_BACKGROUND: &str = "cats";
+
+/// The label of a [`HOME_BACKGROUNDS`] key (unknown → Glow).
+pub fn home_background_label(key: &str) -> &'static str {
+    HOME_BACKGROUNDS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map_or(HOME_BACKGROUNDS[0].1, |(_, l)| l)
+}
+
+/// The next Home background in `delta`'s direction (wraps).
+pub fn cycle_home_background(key: &str, delta: i32) -> &'static str {
+    let n = HOME_BACKGROUNDS.len() as i32;
+    let i = HOME_BACKGROUNDS
+        .iter()
+        .position(|(k, _)| *k == key)
+        .unwrap_or(0) as i32;
+    HOME_BACKGROUNDS[(i + delta).rem_euclid(n) as usize].0
 }
 
 /// The countdown lengths Settings → Catfyn offers.
@@ -90,7 +121,6 @@ impl Default for UiPrefs {
             accent: DEFAULT_ACCENT.into(),
             key_guide_seen: false,
             clock_24h: true,
-            glow: true,
             hdr: false,
             pad_nav: true,
             pad_nintendo: false,
@@ -102,6 +132,8 @@ impl Default for UiPrefs {
             screensaver: true,
             saver_pictures: "cats".into(),
             saver_minutes: crate::screensaver::DEFAULT_MINUTES,
+            app_order: Vec::new(),
+            home_background: DEFAULT_HOME_BACKGROUND.into(),
         }
     }
 }
@@ -177,12 +209,15 @@ impl UiPrefs {
                 "accent" if ACCENTS.iter().any(|(n, _)| *n == v) => p.accent = v.into(),
                 "key_guide_seen" => p.key_guide_seen = v == "true",
                 "clock_24h" => p.clock_24h = v != "false",
-                "glow" => p.glow = v != "false",
                 "hdr" => p.hdr = v == "true",
                 "pad_nav" => p.pad_nav = v != "false",
                 "pad_nintendo" => p.pad_nintendo = v == "true",
                 "pad_nintendo_device" if !v.is_empty() && v.len() <= 128 => {
                     p.pad_nintendo_devices.push(v.to_string())
+                }
+                "app" if !v.is_empty() && v.len() <= 256 => p.app_order.push(v.to_string()),
+                "home_background" if HOME_BACKGROUNDS.iter().any(|(k, _)| *k == v) => {
+                    p.home_background = v.to_string()
                 }
                 "fin_autoplay" => p.fin_autoplay = v != "false",
                 "fin_countdown" => {
@@ -223,16 +258,16 @@ impl UiPrefs {
 
     pub fn to_conf(&self) -> String {
         let mut s = format!(
-            "# CatosTV interface preferences (written by the shell)\naccent = {}\nkey_guide_seen = {}\nclock_24h = {}\nglow = {}\nhdr = {}\npad_nav = {}\npad_nintendo = {}\n",
+            "# CatosTV interface preferences (written by the shell)\naccent = {}\nkey_guide_seen = {}\nclock_24h = {}\nhdr = {}\npad_nav = {}\npad_nintendo = {}\n",
             self.accent,
             self.key_guide_seen,
             self.clock_24h,
-            self.glow,
             self.hdr,
             self.pad_nav,
             self.pad_nintendo
         );
         s.push_str(&format!("android_variant = {}\n", self.android_variant));
+        s.push_str(&format!("home_background = {}\n", self.home_background));
         s.push_str(&format!(
             "fin_autoplay = {}\nfin_countdown = {}\n",
             self.fin_autoplay, self.fin_countdown
@@ -248,6 +283,10 @@ impl UiPrefs {
             // One line per device; names never contain newlines (sysfs).
             let d: String = d.chars().filter(|c| !c.is_control()).collect();
             s.push_str(&format!("pad_nintendo_device = {d}\n"));
+        }
+        for id in &self.app_order {
+            let id: String = id.chars().filter(|c| !c.is_control()).collect();
+            s.push_str(&format!("app = {id}\n"));
         }
         s
     }
@@ -299,7 +338,6 @@ mod tests {
             accent: "teal".into(),
             key_guide_seen: true,
             clock_24h: false,
-            glow: false,
             hdr: true,
             pad_nav: false,
             pad_nintendo: true,
@@ -311,8 +349,19 @@ mod tests {
             screensaver: false,
             saver_pictures: "photos".into(),
             saver_minutes: 10,
+            app_order: vec!["catfyn".into(), "com.example.Tv".into()],
+            home_background: "photos".into(),
         };
         assert_eq!(UiPrefs::from_conf(&p.to_conf()), p);
+        // Home background: cats by default, unknown values ignored, wraps.
+        assert_eq!(UiPrefs::default().home_background, "cats");
+        assert_eq!(
+            UiPrefs::from_conf("home_background = dogs\n").home_background,
+            "cats"
+        );
+        assert_eq!(cycle_home_background("glow", -1), "photos");
+        assert_eq!(cycle_home_background("photos", 1), "glow");
+        assert_eq!(home_background_label("cats"), "NOICE CATS");
         // Catfyn autoplay: on, 10 s by default; only 5/10/15.
         let d = UiPrefs::default();
         assert!(d.fin_autoplay);

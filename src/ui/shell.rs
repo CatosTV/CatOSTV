@@ -64,6 +64,9 @@ pub struct ShellView<'a> {
     pub volume_t: f32,
     /// The screensaver, over everything but the volume panel.
     pub saver: Option<crate::ui::saver::SaverView<'a>>,
+    /// Pictures behind the interface (Settings → Customization → Home
+    /// background); `None` for the glow.
+    pub home_bg: Option<&'a crate::saver::Slideshow>,
 }
 
 pub struct Clock {
@@ -120,7 +123,7 @@ pub fn draw(c: &C, v: &ShellView) {
     };
     // Same clock on every page (no jump when leaving Home); only Home
     // keeps frames coming, so elsewhere the light simply holds still.
-    c.background_at(tint, v.ctx.prefs.glow, v.now);
+    backdrop(c, v, tint);
     // Page transitions: the new page rises a little and fades in.
     let ease = 1.0 - (1.0 - v.page_t).powi(3);
     let fin_open = s.fin.is_some() || s.files.is_some();
@@ -170,6 +173,36 @@ pub fn draw(c: &C, v: &ShellView) {
     }
     // Last: nothing covers the volume panel.
     draw_volume_panel(c, v);
+}
+
+/// Behind every page: the drifting glow, or softly blurred pictures that
+/// change slowly, dimmed so the interface reads on any of them.
+fn backdrop(c: &C, v: &ShellView, tint: Option<theme::Rgb>) {
+    use crate::ui::saver::slide_for;
+    let Some(show) = v.home_bg.filter(|s| s.cur.is_some()) else {
+        c.background_at(tint, true, v.now);
+        return;
+    };
+    if show.prev.is_none() {
+        // The first picture fades in over the glow.
+        c.background_at(tint, true, v.now);
+    }
+    if let Some(p) = &show.prev {
+        slide_for(c, p, 1.0, show.secs);
+    }
+    if let Some(s) = &show.cur {
+        slide_for(c, s, show.fade(), show.secs);
+    }
+    c.fill(c.screen, 0.0, theme::rgba(theme::BG_TOP, 110));
+    if let Some(t) = tint {
+        c.fill(c.screen, 0.0, theme::rgba(t, 16));
+    }
+    // Deeper towards the bottom, where the apps and rows are.
+    c.vgradient(
+        c.screen,
+        theme::rgba(theme::BLACK, 0),
+        theme::rgba(theme::BLACK, 90),
+    );
 }
 
 /// How long the start-up animation lasts (seconds).
@@ -674,38 +707,101 @@ fn draw_home(c: &C, v: &ShellView) {
     }
 
     let up = 540.0 * shift;
-    let rail = c.clipped(0.0, 90.0, 1280.0, 630.0);
-    widgets::section(&rail, 64.0, 404.0 - up, "Apps");
+    widgets::section(c, 64.0, 384.0 - up, "Apps");
     let (tw, th, gap) = (208.0, 117.0, 24.0);
     let step = tw + gap;
     let visible = 5usize;
-    let first = s.rail_index.saturating_sub(visible - 1) as f32;
-    let scroll = c.anim("rail-scroll", first * step);
+    let row_y = 446.0;
     let rail_focus = s.overlay().is_none() && !s.top_focus && !in_media;
-    for (i, app) in apps.iter().enumerate() {
-        // The focused tile grows; its neighbours step aside for it.
-        let push = c.anim(
-            ("rail-push", i),
-            match rail_focus.then_some(s.rail_index) {
-                Some(f) if i < f => -tw * 0.08,
-                Some(f) if i > f => tw * 0.08,
-                _ => 0.0,
-            },
-        );
-        let x = 64.0 + i as f32 * step - scroll + push;
+    let moving = s.moving && rail_focus;
+    // The glass shelf the apps stand on.
+    let shelf = c.r(36.0, 410.0 - up, 1208.0, 204.0);
+    glass_shelf(c, shelf, 1.0 - shift);
+    let rail = c.clipped(36.0, 90.0, 1208.0, 630.0);
+    let first = s.rail_index.saturating_sub(visible - 1) as f32;
+    let (scroll, _) = c.spring("rail-scroll", first * step, 0.5, 0.86);
+    let time = c.ctx.input(|i| i.time) as f32;
+    // Where each app sits: by app, not by place, so when an app is moved
+    // its neighbours glide out of its way.
+    let slot = |i: usize, app: &AppView| {
+        let push = match rail_focus.then_some(s.rail_index) {
+            Some(f) if i < f => -tw * 0.08,
+            Some(f) if i > f => tw * 0.08,
+            _ => 0.0,
+        };
+        let damping = if moving { 0.7 } else { 0.86 };
+        c.spring(
+            ("rail-x", &app.entry.id),
+            i as f32 * step + push,
+            0.42,
+            damping,
+        )
+    };
+    // The lens: a drop of clear glass that slides from tile to tile,
+    // stretching as it goes and settling with a little bounce.
+    let (lens_on, _) = c.spring(
+        "rail-lens-on",
+        if rail_focus && !moving { 1.0 } else { 0.0 },
+        0.3,
+        1.0,
+    );
+    if let Some(app) = apps.get(s.rail_index)
+        && lens_on > 0.01
+    {
+        let target = 64.0 + s.rail_index as f32 * step - scroll + tw / 2.0;
+        let (lx, lv) = c.spring("rail-lens-x", target, 0.38, 0.68);
+        let stretch = (lv.abs() / 2600.0).min(0.32);
+        let lw = (tw * (1.0 + widgets::HOME_LIFT) + 22.0) * (1.0 + stretch);
+        let lh = (th * (1.0 + widgets::HOME_LIFT) + 22.0) * (1.0 - 0.22 * stretch);
+        let cy = row_y + th / 2.0 - 4.0 - 40.0 * widgets::HOME_LIFT - up;
+        let lens = rail.r(lx - lw / 2.0, cy - lh / 2.0, lw, lh);
+        glass_lens(&rail, lens, theme::app_rgb(&app.entry.accent), lens_on);
+    }
+    // The picked-up app is drawn last, over its neighbours.
+    let order = (0..apps.len())
+        .filter(|&i| !(moving && i == s.rail_index))
+        .chain(moving.then_some(s.rail_index));
+    for i in order {
+        let app = &apps[i];
+        let (sx, _) = slot(i, app);
+        let x = 64.0 + sx - scroll;
         if x < -tw || x > 1280.0 {
             continue;
         }
         // Tiles rise into place one after another when Home opens.
         let shown = ease(v.page_t * 2.2 - (i as f32 - first).max(0.0) * 0.12);
-        let y = 428.0 + 26.0 * (1.0 - shown) - up;
+        let held = moving && s.rail_index == i;
+        // The picked-up app floats a little above the others.
+        let float = if held {
+            5.0 + 3.0 * (time * 5.0).sin()
+        } else {
+            0.0
+        };
+        let y = row_y + 26.0 * (1.0 - shown) - up - float;
         let rect = rail.r(x, y, tw, th);
-        let t = focus_t(c, ("rail", i), rail_focus && s.rail_index == i);
+        let focused = rail_focus && s.rail_index == i;
+        let target = if held {
+            1.5
+        } else if focused {
+            1.0
+        } else {
+            0.0
+        };
+        let (t, _) = c.spring(("rail-t", &app.entry.id), target, 0.42, 0.62);
+        if held {
+            c.ctx.request_repaint();
+            widgets::focus_lift(
+                &rail,
+                widgets::lifted_by(&rail, rect, t, widgets::HOME_LIFT),
+                22.0,
+                1.0,
+            );
+        }
         widgets::home_glow(
             &rail,
             widgets::lifted_by(&rail, rect, t, widgets::HOME_LIFT),
             22.0,
-            t,
+            t.min(1.0),
             theme::app_rgb(&app.entry.accent),
         );
         widgets::app_tile_lift(
@@ -717,13 +813,29 @@ fn draw_home(c: &C, v: &ShellView) {
             bounce_of(app),
             widgets::HOME_LIFT,
         );
-        if !in_media {
-            c.hit(c.r(x, 428.0, tw, th + 36.0), Target::Rail(i));
+        if held {
+            let big = widgets::lifted_by(&rail, rect, t, widgets::HOME_LIFT);
+            let (bx, by) = rail.to_design(big.min);
+            let (bw, bh) = rail.dsize(big);
+            let (k, _) = c.spring("rail-arrows", 1.0, 0.3, 1.0);
+            let a = (255.0 * k) as u8;
+            if i > 0 {
+                move_arrow(c, bx - 30.0, by + bh / 2.0, false, a);
+            }
+            if i + 1 < apps.len() {
+                move_arrow(c, bx + bw + 30.0, by + bh / 2.0, true, a);
+            }
         }
+        if !in_media {
+            c.hit(c.r(x, row_y, tw, th + 36.0), Target::Rail(i));
+        }
+    }
+    if moving {
+        move_hint(c, 1244.0, 386.0 - up);
     }
     if !media.is_empty() {
         let focus = if in_media { s.home_media } else { None };
-        crate::ui::fin::home_rows(c, &pics, server, media, focus, 604.0 - 254.0 * shift);
+        crate::ui::fin::home_rows(c, &pics, server, media, focus, 628.0 - 278.0 * shift);
     }
     if apps.is_empty() {
         c.text(
@@ -736,6 +848,72 @@ fn draw_home(c: &C, v: &ShellView) {
             Weight::Regular,
         );
     }
+}
+
+/// Home's glass shelf: frosted, lit from above, with a hairline edge.
+fn glass_shelf(c: &C, rect: Rect, k: f32) {
+    if k <= 0.01 {
+        return;
+    }
+    let a = |v: f32| (v * k) as u8;
+    c.soft_shadow(rect, 40.0, 26.0, 14.0, theme::rgba(theme::BLACK, a(90.0)));
+    c.fill(rect, 40.0, theme::rgba(theme::BG_TOP, a(70.0)));
+    c.fill(rect, 40.0, theme::rgba(theme::WHITE, a(9.0)));
+    c.rounded_gradient(rect, 40.0, theme::WHITE, a(20.0), 0);
+    c.top_highlight(rect, 40.0, theme::rgba(theme::WHITE, a(90.0)));
+    c.outline(rect, 40.0, 1.0, theme::rgba(theme::WHITE, a(16.0)));
+}
+
+/// The focus lens on Home's shelf: clear glass with the app's colour
+/// shining through, a bright rim on top.
+fn glass_lens(c: &C, rect: Rect, tint: theme::Rgb, k: f32) {
+    let a = |v: f32| (v * k).clamp(0.0, 255.0) as u8;
+    c.soft_shadow(rect, 30.0, 22.0, 6.0, theme::rgba(tint, a(60.0)));
+    c.fill(rect, 30.0, theme::rgba(theme::WHITE, a(10.0)));
+    c.fill(rect, 30.0, theme::rgba(tint, a(18.0)));
+    c.rounded_gradient(rect, 30.0, theme::WHITE, a(26.0), 0);
+    c.top_highlight(rect, 30.0, theme::rgba(theme::WHITE, a(170.0)));
+    c.outline(rect, 30.0, 1.0, theme::rgba(theme::WHITE, a(36.0)));
+}
+
+/// A round glass button with a chevron, beside a picked-up app.
+fn move_arrow(c: &C, x: f32, y: f32, right: bool, alpha: u8) {
+    let r = c.r(x - 20.0, y - 20.0, 40.0, 40.0);
+    c.fill(r, 20.0, theme::rgba(theme::WHITE, alpha / 6));
+    c.top_highlight(r, 20.0, theme::rgba(theme::WHITE, alpha / 2));
+    c.outline(r, 20.0, 1.0, theme::rgba(theme::WHITE, alpha / 5));
+    let d = if right { 1.0 } else { -1.0 };
+    c.polyline(
+        &[
+            (x - 4.0 * d, y - 8.0),
+            (x + 4.0 * d, y),
+            (x - 4.0 * d, y + 8.0),
+        ],
+        2.6,
+        theme::rgba(theme::WHITE, alpha),
+    );
+}
+
+/// Above the shelf, at its right end, while an app is picked up: how to
+/// put it down.
+fn move_hint(c: &C, right: f32, cy: f32) {
+    let (k, _) = c.spring("move-hint", 1.0, 0.35, 1.0);
+    let text = "Move with the arrows  ·  OK to place it  ·  Down for options";
+    let w = c.text_width(text, 15.0, Weight::Medium) + 44.0;
+    let pill = c.r(right - w, cy - 18.0 + 8.0 * (1.0 - k), w, 36.0);
+    c.fill(pill, 18.0, theme::rgba(theme::BG_TOP, (150.0 * k) as u8));
+    c.fill(pill, 18.0, theme::rgba(theme::WHITE, (14.0 * k) as u8));
+    c.top_highlight(pill, 18.0, theme::rgba(theme::WHITE, (90.0 * k) as u8));
+    let (px, py) = c.to_design(pill.center());
+    c.text(
+        px,
+        py,
+        Align2::CENTER_CENTER,
+        text,
+        15.0,
+        theme::rgba(theme::INK, (220.0 * k) as u8),
+        Weight::Medium,
+    );
 }
 
 // ------------------------------------------------------------------ recents
@@ -1376,7 +1554,7 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::UpdateStatus | R::UpdateCheck | R::UpdateInstall => "download",
         R::Storage => "disk",
         R::ClockFormat => "spark",
-        R::Glow => "palette",
+        R::HomeBackground => "palette",
         R::Screensaver | R::SaverPictures => "cat",
         R::SaverMinutes => "moon",
         R::IpAddress => "globe",
@@ -2027,9 +2205,13 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                 );
             }
         }
-        Overlay::AppOptions { app, index } => {
+        Overlay::AppOptions {
+            app,
+            index,
+            movable,
+        } => {
             let Some(a) = ctx.apps.get(*app) else { return };
-            let opts = shell::app_options(a.running, shell::is_removable(ctx, *app));
+            let opts = shell::app_options(a.running, shell::is_removable(ctx, *app), *movable);
             let h = 150.0 + opts.len() as f32 * 62.0;
             let m = widgets::modal(c, 440.0, h);
             c.hit(m, Target::Item(usize::MAX));
@@ -2743,7 +2925,7 @@ fn draw_store_app(c: &C, v: &ShellView, item: &StoreItem, index: usize) {
     let s = v.shell;
     let tint = theme::app_rgb(catostv_core::desktop::accent_for(&item.id));
     c.fill(c.screen, 0.0, theme::rgb(theme::BG_BOTTOM));
-    c.background(Some(tint), v.ctx.prefs.glow);
+    c.background(Some(tint), true);
     c.hit(c.screen, Target::Item(usize::MAX));
     let details = match &s.store_details {
         Some((id, d)) if *id == item.id => Some(d),

@@ -351,6 +351,8 @@ impl PowerItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppOption {
     Open,
+    /// Pick the app up to move it along Home's row.
+    Move,
     Resume,
     Restart,
     Close,
@@ -362,6 +364,7 @@ impl AppOption {
     pub fn label(self) -> &'static str {
         match self {
             Self::Open => "Open",
+            Self::Move => "Move",
             Self::Resume => "Resume",
             Self::Restart => "Restart",
             Self::Close => "Close",
@@ -372,13 +375,16 @@ impl AppOption {
 }
 
 /// Options offered for an app. `removable`: a Flatpak or Android app that
-/// CatosTV can uninstall.
-pub fn app_options(running: bool, removable: bool) -> Vec<AppOption> {
+/// CatosTV can uninstall. `movable`: opened from Home's row.
+pub fn app_options(running: bool, removable: bool, movable: bool) -> Vec<AppOption> {
     let mut v = if running {
         vec![AppOption::Resume, AppOption::Restart, AppOption::Close]
     } else {
         vec![AppOption::Open]
     };
+    if movable {
+        v.push(AppOption::Move);
+    }
     if removable && !running {
         v.push(AppOption::Uninstall);
     }
@@ -628,6 +634,8 @@ pub enum Overlay {
     AppOptions {
         app: usize,
         index: usize,
+        /// From Home's row: offers Move.
+        movable: bool,
     },
     Power {
         index: usize,
@@ -820,6 +828,12 @@ pub enum Target {
 pub enum Effect {
     /// Start the app (index into `ctx.apps`).
     Launch(usize),
+    /// Home: the picked-up app swapped places with its neighbour; keep the
+    /// new order.
+    MoveApp {
+        from: usize,
+        to: usize,
+    },
     /// Bring the running app to the front.
     Resume(usize),
     Close(usize),
@@ -898,10 +912,11 @@ pub enum Effect {
     SetFinCountdown(u32),
     SetScreensaver(bool),
     SetSaverPictures(String),
+    /// Settings → Customization → Home background (a `prefs` key).
+    SetHomeBackground(String),
     SetSaverMinutes(u32),
     /// Show the screensaver now (Sleep).
     Screensaver,
-    SetGlow(bool),
     /// Controllers navigate CatosTV (read by catostv-inputd).
     SetPadNav(bool),
     /// Nintendo controller layout (right button = OK).
@@ -973,6 +988,8 @@ pub struct Shell {
     pub top_focus: bool,
     pub top_index: usize,
     pub rail_index: usize,
+    /// The app at `rail_index` is picked up and moves along Home's row.
+    pub moving: bool,
     pub grid_index: usize,
     pub store_cat: usize,
     /// Focus is in the store grid (else in the category list).
@@ -1093,6 +1110,7 @@ impl Shell {
             top_focus: false,
             top_index: 0,
             rail_index: 0,
+            moving: false,
             grid_index: 0,
             store_cat: 0,
             store_grid: false,
@@ -1274,9 +1292,9 @@ impl Shell {
     pub fn overlay_len(&self, o: &Overlay, ctx: &ShellContext) -> usize {
         match o {
             Overlay::Quick { .. } => self.quick_offset() + QUICK_ITEMS.len() + 1,
-            Overlay::AppOptions { app, .. } => {
+            Overlay::AppOptions { app, movable, .. } => {
                 let running = ctx.apps.get(*app).is_some_and(|a| a.running);
-                app_options(running, is_removable(ctx, *app)).len()
+                app_options(running, is_removable(ctx, *app), *movable).len()
             }
             Overlay::Power { .. } => POWER_ITEMS.len(),
             Overlay::BtScan { .. } => self.bt_scan.items().len() + 1,
@@ -1354,6 +1372,10 @@ impl Shell {
     pub fn clamp(&mut self, ctx: &ShellContext) {
         let n_apps = ctx.apps.len();
         self.rail_index = self.rail_index.min(n_apps.saturating_sub(1));
+        // A picked-up app is put down when Home is left or covered.
+        if self.page != Page::Home || self.top_focus || n_apps == 0 || !self.overlays.is_empty() {
+            self.moving = false;
+        }
         self.grid_index = self.grid_index.min(n_apps.saturating_sub(1));
         let rows = self.settings_rows(ctx);
         self.settings_row = self.settings_row.min(rows.len().saturating_sub(1));
@@ -1856,14 +1878,46 @@ impl Shell {
         }
     }
 
-    fn open_app_options(&mut self, app: usize, ctx: &ShellContext) {
+    fn open_app_options(&mut self, app: usize, ctx: &ShellContext, movable: bool) {
         if app < ctx.apps.len() {
-            self.overlays.push(Overlay::AppOptions { app, index: 0 });
+            self.overlays.push(Overlay::AppOptions {
+                app,
+                index: 0,
+                movable,
+            });
         }
+    }
+
+    /// Home's row while an app is picked up (hold OK): Left / Right carry
+    /// it along, OK or Back puts it down, Down puts it down and opens its
+    /// options.
+    fn handle_moving(&mut self, action: Action, ctx: &ShellContext) -> Vec<Effect> {
+        let n = ctx.apps.len();
+        let i = self.rail_index;
+        match action {
+            Action::Left if i > 0 => {
+                self.rail_index = i - 1;
+                return vec![Effect::MoveApp { from: i, to: i - 1 }];
+            }
+            Action::Right if i + 1 < n => {
+                self.rail_index = i + 1;
+                return vec![Effect::MoveApp { from: i, to: i + 1 }];
+            }
+            Action::Ok | Action::OkLong | Action::Back => self.moving = false,
+            Action::Down => {
+                self.moving = false;
+                self.open_app_options(i, ctx, true);
+            }
+            _ => {}
+        }
+        vec![]
     }
 
     fn handle_home(&mut self, action: Action, ctx: &ShellContext) -> Vec<Effect> {
         let n_apps = ctx.apps.len();
+        if self.moving {
+            return self.handle_moving(action, ctx);
+        }
         let media = &ctx.media.home;
         // Media rows under the apps (Catfyn): Continue
         // watching, Movies, TV shows.
@@ -1912,7 +1966,10 @@ impl Shell {
                 self.top_index = 0;
             }
             Action::Ok => return self.activate_app(self.rail_index, ctx),
-            Action::OkLong | Action::Options => self.open_app_options(self.rail_index, ctx),
+            // Hold OK picks the app up (see handle_moving); the Menu key
+            // opens its options.
+            Action::OkLong if n_apps > 0 => self.moving = true,
+            Action::Options => self.open_app_options(self.rail_index, ctx, true),
             _ => {}
         }
         vec![]
@@ -1967,7 +2024,7 @@ impl Shell {
                 return vec![Effect::Close(running[self.recents_index])];
             }
             Action::Ok => return vec![Effect::Resume(running[self.recents_index])],
-            Action::Options => self.open_app_options(running[self.recents_index], ctx),
+            Action::Options => self.open_app_options(running[self.recents_index], ctx, false),
             Action::Back => self.go_home(),
             _ => {}
         }
@@ -1978,7 +2035,7 @@ impl Shell {
         let n = ctx.apps.len();
         match action {
             Action::Ok => return self.activate_app(self.grid_index, ctx),
-            Action::OkLong | Action::Options => self.open_app_options(self.grid_index, ctx),
+            Action::OkLong | Action::Options => self.open_app_options(self.grid_index, ctx, false),
             Action::Back => self.go_home(),
             Action::Up | Action::Down | Action::Left | Action::Right => {
                 match grid_move(self.grid_index, action, APPS_GRID_COLS, n) {
@@ -2139,7 +2196,7 @@ impl Shell {
                 },
                 Action::OkLong | Action::Options => {
                     if let Some(SearchHit::App(i)) = hits.get(self.search_index) {
-                        self.open_app_options(*i, ctx);
+                        self.open_app_options(*i, ctx, false);
                     }
                 }
                 _ => {}
@@ -2180,6 +2237,9 @@ impl Shell {
                 prefs::cycle_accent(&ctx.prefs.accent, delta).to_string(),
             )]),
             RowId::ClockFormat => Some(vec![Effect::SetClock24(!ctx.prefs.clock_24h)]),
+            RowId::HomeBackground => Some(vec![Effect::SetHomeBackground(
+                prefs::cycle_home_background(&ctx.prefs.home_background, delta).to_string(),
+            )]),
             RowId::SaverPictures => Some(vec![Effect::SetSaverPictures(
                 crate::screensaver::Pictures::from_key(&ctx.prefs.saver_pictures)
                     .other()
@@ -2363,7 +2423,6 @@ impl Shell {
                 None => vec![],
             },
             RowId::Mute => vec![Effect::ToggleMute],
-            RowId::Glow => vec![Effect::SetGlow(!ctx.prefs.glow)],
             RowId::Screensaver => vec![Effect::SetScreensaver(!ctx.prefs.screensaver)],
             RowId::PadNav => vec![Effect::SetPadNav(!ctx.prefs.pad_nav)],
             RowId::Controller(i) => match ctx.sys.controllers.get(i) {
@@ -2395,7 +2454,7 @@ impl Shell {
             }
             RowId::DebugRemoveOld => vec![Effect::DebugRemoveOld],
             RowId::App(i) => {
-                self.open_app_options(i, ctx);
+                self.open_app_options(i, ctx, false);
                 vec![]
             }
             RowId::AppSearch => {
@@ -2570,16 +2629,25 @@ impl Shell {
                 }
                 vec![]
             }
-            Overlay::AppOptions { app, index } => {
+            Overlay::AppOptions {
+                app,
+                index,
+                movable,
+            } => {
                 if vertical(index) || !is_ok {
                     return vec![];
                 }
-                let (app, index) = (*app, *index);
+                let (app, index, movable) = (*app, *index, *movable);
                 let running = ctx.apps.get(app).is_some_and(|a| a.running);
-                let choice = app_options(running, is_removable(ctx, app))[index];
+                let choice = app_options(running, is_removable(ctx, app), movable)[index];
                 self.overlays.pop();
                 match choice {
                     AppOption::Open => vec![Effect::Launch(app)],
+                    AppOption::Move => {
+                        self.rail_index = app;
+                        self.moving = true;
+                        vec![]
+                    }
                     AppOption::Resume => vec![Effect::Resume(app)],
                     AppOption::Restart => vec![Effect::Restart(app)],
                     AppOption::Close => vec![Effect::Close(app)],

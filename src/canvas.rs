@@ -439,6 +439,48 @@ impl<H: Copy> Canvas<H> {
         value.0
     }
 
+    /// A damped spring towards `target`, keyed by `id`: `(value, velocity)`.
+    /// `response` is roughly how long it takes to get there (seconds);
+    /// `damping` 1.0 lands without overshoot, lower values overshoot a
+    /// little and settle, which reads as fluid. The first value is the
+    /// target itself.
+    pub fn spring(
+        &self,
+        id: impl std::hash::Hash + std::fmt::Debug,
+        target: f32,
+        response: f32,
+        damping: f32,
+    ) -> (f32, f32) {
+        let id = egui::Id::new(("spring", id));
+        let now = self.ctx.input(|i| i.time);
+        let k = (std::f32::consts::TAU / response.max(0.05)).powi(2);
+        let c = 2.0 * damping * k.sqrt();
+        let (x, v, moving) = self.ctx.data_mut(|d| {
+            let e: &mut (f32, f32, f64) = d.get_temp_mut_or_insert_with(id, || (target, 0.0, now));
+            // After a pause (it was resting, nothing was drawn) it moves
+            // on from where it rested, one frame at a time.
+            let gap = now - e.2;
+            let mut dt = if gap > 0.1 { 1.0 / 60.0 } else { gap as f32 };
+            e.2 = now;
+            while dt > 0.0 {
+                let h = dt.min(1.0 / 240.0);
+                e.1 += (-k * (e.0 - target) - c * e.1) * h;
+                e.0 += e.1 * h;
+                dt -= h;
+            }
+            let scale = target.abs().max(1.0);
+            let moving = (e.0 - target).abs() > 1e-3 * scale || e.1.abs() > 1e-2 * scale;
+            if !moving {
+                (e.0, e.1) = (target, 0.0);
+            }
+            (e.0, e.1, moving)
+        });
+        if moving {
+            self.ctx.request_repaint();
+        }
+        (x, v)
+    }
+
     /// The shared backdrop: a deep, nearly black base lit by a slow
     /// "nebula" of soft colour bands, violet, a warm amber swirl, deep blue
     /// and a hint of teal, like frosted glass held in front of coloured

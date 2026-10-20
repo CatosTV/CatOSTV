@@ -99,6 +99,8 @@ enum Msg {
     OverApp(ShellCommand),
     /// New screensaver pictures on disk.
     SaverPictures(Vec<PathBuf>),
+    /// New pictures for Home's background, of this kind.
+    HomePictures(String, Vec<PathBuf>),
     Weather(Option<catostv_core::screensaver::Weather>),
     /// Catfyn results.
     FinServers(Vec<jf::Server>),
@@ -658,6 +660,10 @@ struct ShellApp {
     /// The screensaver while it shows, the last weather and when it came,
     /// and the last key, click or app change (for the idle start).
     saver: Option<catostv::saver::Slideshow>,
+    /// Pictures behind the interface, and which kind (Settings →
+    /// Customization → Home background).
+    home_bg: Option<(String, catostv::saver::Slideshow)>,
+    home_bg_fetching: bool,
     weather: Option<(catostv_core::screensaver::Weather, Instant)>,
     saver_fetching: bool,
     last_input: Instant,
@@ -959,6 +965,8 @@ impl ShellApp {
             saver: None,
             weather: None,
             saver_fetching: false,
+            home_bg: None,
+            home_bg_fetching: false,
             last_input: Instant::now(),
             appliance,
             home: home_dir(),
@@ -1072,6 +1080,7 @@ impl ShellApp {
         // Apps whose program is missing are not shown at all;
         // a running one stays so it can be resumed/closed.
         apps.retain(|a| a.is_installed() || self.mgr().is_running(&a.id));
+        catostv_core::apps::apply_order(&mut apps, &self.prefs.app_order);
         // Papirus icons where the theme has one.
         for a in &mut apps {
             if let Some(p) = catostv_core::icon_theme::papirus_for(a) {
@@ -1116,6 +1125,36 @@ impl ShellApp {
             .and_then(|w| catostv_core::toplevel::is_fullscreen(&w))
             .unwrap_or(false);
         self.shell.quick_app = Some((name, fullscreen));
+    }
+
+    /// Keep Home's background pictures in step with the setting: start or
+    /// drop the slideshow, fetch a few pictures when there are none on the
+    /// TV yet (the screensaver's collection), and move it along.
+    fn tick_home_bg(&mut self, ctx: &egui::Context) {
+        use catostv_core::screensaver::{self as ss, Pictures};
+        let want = self.prefs.home_background.clone();
+        if want == "glow" {
+            self.home_bg = None;
+            return;
+        }
+        let kind = Pictures::from_key(&want);
+        if self.home_bg.as_ref().is_none_or(|(k, _)| *k != want) {
+            let pics = ss::cached(&ss::cache_dir(&self.home, kind));
+            self.home_bg = Some((want.clone(), catostv::saver::Slideshow::backdrop(pics)));
+        }
+        let Some((_, show)) = self.home_bg.as_mut() else {
+            return;
+        };
+        if show.is_empty() && !self.home_bg_fetching {
+            self.home_bg_fetching = true;
+            let home = self.home.clone();
+            self.jobs
+                .spawn(move || Msg::HomePictures(want, catostv::saver::fetch(&home, kind)));
+        }
+        let px = ctx.content_rect().size() * ctx.pixels_per_point();
+        show.tick(ctx, [px.x.round() as u32, px.y.round() as u32]);
+        // The slow drift and the cross-fades.
+        ctx.request_repaint_after(Duration::from_millis(50));
     }
 
     /// Show the screensaver: the pictures on disk at once, a few new ones
@@ -1663,6 +1702,16 @@ impl ShellApp {
         }
         match effect {
             Effect::Launch(i) => self.launch(ctx, i),
+            Effect::MoveApp { from, to } => {
+                if from < self.apps.len() && to < self.apps.len() {
+                    self.apps.swap(from, to);
+                    self.installed.swap(from, to);
+                    self.prefs.app_order = self.apps.iter().map(|a| a.id.clone()).collect();
+                    if let Err(e) = prefs::save(&self.prefs) {
+                        eprintln!("catostv-shell: saving the app order: {e}");
+                    }
+                }
+            }
             Effect::Resume(i) => {
                 let Some(app) = self.apps.get(i).cloned() else {
                     return;
@@ -1983,12 +2032,12 @@ impl ShellApp {
                 self.prefs.clock_24h = on;
                 self.save_prefs(ctx);
             }
-            Effect::SetGlow(on) => {
-                self.prefs.glow = on;
-                self.save_prefs(ctx);
-            }
             Effect::SetScreensaver(on) => {
                 self.prefs.screensaver = on;
+                self.save_prefs(ctx);
+            }
+            Effect::SetHomeBackground(kind) => {
+                self.prefs.home_background = kind;
                 self.save_prefs(ctx);
             }
             Effect::SetSaverPictures(kind) => {
@@ -2948,6 +2997,14 @@ impl ShellApp {
                     self.fin_effect(ctx, FinEffect::LoadHome);
                 }
             }
+            Msg::HomePictures(kind, new) => {
+                self.home_bg_fetching = false;
+                if let Some((k, s)) = self.home_bg.as_mut()
+                    && *k == kind
+                {
+                    s.add(new);
+                }
+            }
             Msg::SaverPictures(new) => {
                 self.saver_fetching = false;
                 if let Some(s) = self.saver.as_mut() {
@@ -3691,6 +3748,7 @@ impl eframe::App for ShellApp {
             self.apply(&ctx, Effect::RestartShell);
         }
         let views = self.views();
+        self.tick_home_bg(&ctx);
         let sctx = ShellContext {
             apps: &views,
             sys: &self.sys,
@@ -3791,6 +3849,7 @@ impl eframe::App for ShellApp {
                 over_app: self.over_app.is_some(),
                 blank: lock(&self.watch).blank.is_some(),
                 volume_t: self.volume_since.elapsed().as_secs_f32() / 0.22,
+                home_bg: self.home_bg.as_ref().map(|(_, s)| s),
                 saver: self
                     .saver
                     .as_ref()
@@ -3800,7 +3859,6 @@ impl eframe::App for ShellApp {
                         time: &saver_clock.time,
                         date: &saver_clock.date,
                         night: !(6..19).contains(&saver_clock.hour),
-                        glow: self.prefs.glow,
                         now: keys::now(&ctx),
                     }),
             },
@@ -3811,7 +3869,9 @@ impl eframe::App for ShellApp {
         }
         // The Home backdrop drifts slowly: keep frames coming while
         // Home is on screen; ~30 fps is plenty for slow light.
-        if self.prefs.glow && self.shell.page == catostv_core::shell::Page::Home {
+        if self.prefs.home_background == "glow"
+            && self.shell.page == catostv_core::shell::Page::Home
+        {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
         let fin_loading = self.shell.fin.as_ref().is_some_and(|f| {

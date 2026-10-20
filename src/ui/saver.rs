@@ -14,8 +14,6 @@ pub struct SaverView<'a> {
     pub time: &'a str,
     pub date: &'a str,
     pub night: bool,
-    /// Home's backdrop settings, for the time before the first picture.
-    pub glow: bool,
     pub now: f64,
 }
 
@@ -27,7 +25,7 @@ pub fn draw<H: Copy>(c: &Canvas<H>, v: &SaverView) {
         theme::rgba(theme::BLACK, (255.0 * fade_in) as u8),
     );
     if v.show.cur.is_none() {
-        c.background_at(None, v.glow, v.now);
+        c.background_at(None, true, v.now);
     }
     if let Some(p) = &v.show.prev {
         slide(c, p, 1.0);
@@ -114,7 +112,13 @@ pub fn draw<H: Copy>(c: &Canvas<H>, v: &SaverView) {
 /// One picture, slowly zooming in (and drifting the other way every
 /// other picture), at opacity `alpha`.
 fn slide<H: Copy>(c: &Canvas<H>, s: &Slide, alpha: f32) {
-    let t = (s.since.elapsed().as_secs_f32() / (ss::PICTURE_SECS + ss::FADE_SECS)).min(1.0);
+    slide_for(c, s, alpha, ss::PICTURE_SECS);
+}
+
+/// One picture of a slideshow showing `secs` each: a slow zoom and drift,
+/// the other way for every other picture.
+pub fn slide_for<H: Copy>(c: &Canvas<H>, s: &Slide, alpha: f32, secs: f32) {
+    let t = (s.since.elapsed().as_secs_f32() / (secs + ss::FADE_SECS)).min(1.0);
     let zoom = 1.0 + 0.07 * t;
     let drift = if s.n.is_multiple_of(2) { 1.0 } else { -1.0 };
     let size = c.screen.size() * zoom;
