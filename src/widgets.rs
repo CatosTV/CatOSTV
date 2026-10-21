@@ -481,6 +481,10 @@ pub fn tab_bar<H: Copy>(
     labels: &[&str],
     selected: Option<usize>,
     focus: Option<usize>,
+    // Focus is on another control of the same bar (the account button,
+    // the Control Center pill): the open page keeps only its dot, so the
+    // pill does not look like it is still there.
+    elsewhere: bool,
 ) -> Vec<Rect> {
     let widths: Vec<f32> = labels.iter().map(|l| tab_width(c, l)).collect();
     let pad = 6.0;
@@ -498,7 +502,9 @@ pub fn tab_bar<H: Copy>(
         x += w + pad;
     }
     let r = (h - 2.0 * pad) / 2.0;
-    let cur = focus.or(selected).filter(|i| *i < rects.len());
+    let cur = focus
+        .or(selected.filter(|_| !elsewhere))
+        .filter(|i| *i < rects.len());
     let pill = cur.map(|i| {
         let target = rects[i];
         let (tx, _) = c.to_design(target.min);

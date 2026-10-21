@@ -324,8 +324,9 @@ fn draw_top_bar(c: &C, v: &ShellView) {
     let focus = (no_overlay && s.top_focus)
         .then(|| items.iter().position(|(i, _)| *i == s.top_index))
         .flatten();
+    let on_quick = no_overlay && s.top_focus && s.top_index == TOP_ITEMS.len() - 1;
     for ((i, _), rect) in items.iter().zip(widgets::tab_bar(
-        c, "top", 640.0, y, h, &labels, selected, focus,
+        c, "top", 640.0, y, h, &labels, selected, focus, on_quick,
     )) {
         c.hit(rect, Target::Top(*i));
     }

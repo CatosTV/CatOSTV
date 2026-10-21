@@ -318,6 +318,7 @@ fn header(
         &labels,
         Some(selected.map_or(0, |i| i + 1)),
         focus.filter(|i| *i < libs.len()).map(|i| i + 1),
+        focus.is_some_and(|i| i >= libs.len()),
     );
     for (i, rect) in rects.iter().enumerate().skip(1) {
         c.hit(*rect, Target::Fin(usize::MAX, i - 1));
@@ -345,19 +346,29 @@ fn header(
             c.hit(h, Target::Fin(usize::MAX, libs.len()));
         }
     }
+    // Focused: the same accent pill as the tabs.
     let t = focus_t(c, "fin-acct", focus == Some(acct_index));
     c.glass(rect, 24.0);
-    widgets::focus_pill(c, rect, 24.0, t);
+    if t > 0.01 {
+        widgets::bar_pill(c, rect, 24.0, t);
+    }
+    let ink = widgets::mix(theme::text(), theme::on_accent(), t);
     let x = 1216.0 - w;
     let cy = y + 26.0;
-    c.circle(x + 26.0, cy, 15.0, theme::accent());
+    // The initial's disc swaps colours on the accent pill, so it stays seen.
+    c.circle(
+        x + 26.0,
+        cy,
+        15.0,
+        widgets::mix(theme::accent(), theme::on_accent(), t),
+    );
     c.text(
         x + 26.0,
         cy,
         Align2::CENTER_CENTER,
         &name.chars().take(1).collect::<String>().to_uppercase(),
         15.0,
-        theme::on_accent(),
+        widgets::mix(theme::on_accent(), theme::accent(), t),
         Weight::Semibold,
     );
     c.text(
@@ -366,13 +377,14 @@ fn header(
         Align2::LEFT_CENTER,
         name,
         16.0,
-        theme::text(),
+        ink,
         Weight::Semibold,
     );
+    let quiet = widgets::mix(theme::text2(), theme::on_accent(), t);
     if a.incognito {
-        icons::draw(c, "lock", x + w - 52.0, cy, 15.0, theme::text2());
+        icons::draw(c, "lock", x + w - 52.0, cy, 15.0, quiet);
     }
-    icons::draw(c, "gear", x + w - 26.0, cy, 16.0, theme::text2());
+    icons::draw(c, "gear", x + w - 26.0, cy, 16.0, quiet);
     c.hit(rect, Target::Fin(usize::MAX, acct_index));
 }
 
