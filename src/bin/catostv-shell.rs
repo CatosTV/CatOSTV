@@ -334,12 +334,16 @@ fn spawn_app_watcher(
                 front_app = fg.clone();
                 last_window = None;
             }
-            // The app's newest window is the one to bring back: a player it
-            // opened is newer than its own list (bringing back the list hid
-            // CatTube's video).
-            if let Some(t) = windows.iter().flatten().rev().find(|t| {
+            // The window to bring back: the one that was in front (a video
+            // player in front of its app's list, CatTube's), else the newest.
+            let ours = |t: &&catostv_core::toplevel::Toplevel| {
                 !is_android_window(&t.app_id) && !t.app_id.is_empty() && t.app_id != SHELL_APP_ID
-            }) {
+            };
+            if let Some(t) = windows.iter().flatten().filter(ours).find(|t| t.activated) {
+                last_window = Some(t.app_id.clone());
+            } else if last_window.is_none()
+                && let Some(t) = windows.iter().flatten().rev().find(ours)
+            {
                 last_window = Some(t.app_id.clone());
             }
             if android_on_top
