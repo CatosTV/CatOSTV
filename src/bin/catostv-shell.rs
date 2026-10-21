@@ -121,7 +121,7 @@ enum Msg {
     FinSeasons(String, Result<Vec<Item>, String>),
     FinEpisodes(String, Result<Vec<Item>, String>),
     /// CatosTV Home's media rows (home account).
-    FinHomeMedia(Vec<fin::Row>),
+    FinHomeMedia(Vec<fin::Row>, Option<String>),
     /// A Catfyn picture (URL) is in the cache at the path (None: failed).
     FinImage(String, Option<String>),
     /// Playback ended and was reported: refresh the rows.
@@ -996,6 +996,7 @@ impl ShellApp {
                     a
                 },
                 home: Vec::new(),
+                home_note: None,
             },
             fin_images: HashMap::new(),
             plex_wait: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -2792,6 +2793,7 @@ impl ShellApp {
                 self.save_accounts(ctx);
                 self.last_media_refresh = None;
                 self.media.home.clear();
+                self.media.home_note = None;
             }
             FinEffect::Toast(t) => self.show_toast(ctx, &t),
             FinEffect::ToggleAutoplay => {
@@ -2869,11 +2871,12 @@ impl ShellApp {
         let cattube = find_executable(catostv_core::cattube::BINARY).is_some();
         if accounts.is_empty() && !cattube {
             self.media.home.clear();
+            self.media.home_note = None;
             return;
         }
         self.jobs.spawn(move || {
-            let mut rows = if accounts.is_empty() {
-                Vec::new()
+            let (mut rows, failed) = if accounts.is_empty() {
+                (Vec::new(), Vec::new())
             } else {
                 catfyn::home_rows(&device, &accounts)
             };
@@ -2896,7 +2899,13 @@ impl ShellApp {
                     );
                 }
             }
-            Msg::FinHomeMedia(rows)
+            // Every server silent and nothing else to show: Home says why.
+            let note = if rows.is_empty() && failed.len() == accounts.len() {
+                fin::unreachable_note(&failed)
+            } else {
+                None
+            };
+            Msg::FinHomeMedia(rows, note)
         });
     }
 
@@ -3220,7 +3229,10 @@ impl ShellApp {
                     f.on_episodes(&season, r);
                 }
             }
-            Msg::FinHomeMedia(items) => self.media.home = items,
+            Msg::FinHomeMedia(items, note) => {
+                self.media.home = items;
+                self.media.home_note = note;
+            }
             Msg::FinImage(url, path) => {
                 self.fin_fetching.remove(&url);
                 self.fin_images.insert(url, path);

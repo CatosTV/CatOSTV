@@ -714,10 +714,8 @@ fn draw_home(c: &C, v: &ShellView) {
     let row_y = 446.0;
     let rail_focus = s.overlay().is_none() && !s.top_focus && !in_media;
     let moving = s.moving && rail_focus;
-    // The glass shelf the apps stand on.
-    let shelf = c.r(36.0, 410.0 - up, 1208.0, 204.0);
-    glass_shelf(c, shelf, 1.0 - shift);
-    let rail = c.clipped(36.0, 90.0, 1208.0, 630.0);
+    // The row runs to the screen's edge, so the next app peeks in there.
+    let rail = c.clipped(0.0, 90.0, 1280.0, 630.0);
     let first = s.rail_index.saturating_sub(visible - 1) as f32;
     let (scroll, _) = c.spring("rail-scroll", first * step, 0.5, 0.86);
     let time = c.ctx.input(|i| i.time) as f32;
@@ -737,26 +735,6 @@ fn draw_home(c: &C, v: &ShellView) {
             damping,
         )
     };
-    // The lens: a drop of clear glass that slides from tile to tile,
-    // stretching as it goes and settling with a little bounce.
-    let (lens_on, _) = c.spring(
-        "rail-lens-on",
-        if rail_focus && !moving { 1.0 } else { 0.0 },
-        0.3,
-        1.0,
-    );
-    if let Some(app) = apps.get(s.rail_index)
-        && lens_on > 0.01
-    {
-        let target = 64.0 + s.rail_index as f32 * step - scroll + tw / 2.0;
-        let (lx, lv) = c.spring("rail-lens-x", target, 0.38, 0.68);
-        let stretch = (lv.abs() / 2600.0).min(0.32);
-        let lw = (tw * (1.0 + widgets::HOME_LIFT) + 22.0) * (1.0 + stretch);
-        let lh = (th * (1.0 + widgets::HOME_LIFT) + 22.0) * (1.0 - 0.22 * stretch);
-        let cy = row_y + th / 2.0 - 4.0 - 40.0 * widgets::HOME_LIFT - up;
-        let lens = rail.r(lx - lw / 2.0, cy - lh / 2.0, lw, lh);
-        glass_lens(&rail, lens, theme::app_rgb(&app.entry.accent), lens_on);
-    }
     // The picked-up app is drawn last, over its neighbours.
     let order = (0..apps.len())
         .filter(|&i| !(moving && i == s.rail_index))
@@ -837,6 +815,21 @@ fn draw_home(c: &C, v: &ShellView) {
         let focus = if in_media { s.home_media } else { None };
         crate::ui::fin::home_rows(c, &pics, server, media, focus, 628.0 - 278.0 * shift);
     }
+    // No rows because the media server is not answering: say so where
+    // they would be.
+    if media.is_empty()
+        && let Some(note) = &v.ctx.media.home_note
+    {
+        c.text(
+            64.0,
+            648.0,
+            Align2::LEFT_CENTER,
+            &c.fit(note, 1150.0, 16.0, Weight::Regular),
+            16.0,
+            theme::text3(),
+            Weight::Regular,
+        );
+    }
     if apps.is_empty() {
         c.text(
             64.0,
@@ -848,32 +841,6 @@ fn draw_home(c: &C, v: &ShellView) {
             Weight::Regular,
         );
     }
-}
-
-/// Home's glass shelf: frosted, lit from above, with a hairline edge.
-fn glass_shelf(c: &C, rect: Rect, k: f32) {
-    if k <= 0.01 {
-        return;
-    }
-    let a = |v: f32| (v * k) as u8;
-    c.soft_shadow(rect, 40.0, 26.0, 14.0, theme::rgba(theme::BLACK, a(90.0)));
-    c.fill(rect, 40.0, theme::rgba(theme::BG_TOP, a(70.0)));
-    c.fill(rect, 40.0, theme::rgba(theme::WHITE, a(9.0)));
-    c.rounded_gradient(rect, 40.0, theme::WHITE, a(20.0), 0);
-    c.top_highlight(rect, 40.0, theme::rgba(theme::WHITE, a(90.0)));
-    c.outline(rect, 40.0, 1.0, theme::rgba(theme::WHITE, a(16.0)));
-}
-
-/// The focus lens on Home's shelf: clear glass with the app's colour
-/// shining through, a bright rim on top.
-fn glass_lens(c: &C, rect: Rect, tint: theme::Rgb, k: f32) {
-    let a = |v: f32| (v * k).clamp(0.0, 255.0) as u8;
-    c.soft_shadow(rect, 30.0, 22.0, 6.0, theme::rgba(tint, a(60.0)));
-    c.fill(rect, 30.0, theme::rgba(theme::WHITE, a(10.0)));
-    c.fill(rect, 30.0, theme::rgba(tint, a(18.0)));
-    c.rounded_gradient(rect, 30.0, theme::WHITE, a(26.0), 0);
-    c.top_highlight(rect, 30.0, theme::rgba(theme::WHITE, a(170.0)));
-    c.outline(rect, 30.0, 1.0, theme::rgba(theme::WHITE, a(36.0)));
 }
 
 /// A round glass button with a chevron, beside a picked-up app.

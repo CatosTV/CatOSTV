@@ -258,12 +258,29 @@ pub fn search(device: &str, a: &Account, term: &str, limit: u32) -> Result<Vec<I
 /// CatosTV Home's rows (Continue watching, Movies, TV shows) from every
 /// home account, Jellyfin and Plex side by side: each row takes its items
 /// in turn from each server.
-pub fn home_rows(device: &str, accounts: &[Account]) -> Vec<catostv_core::fin::Row> {
+/// Home's rows from every account, and the servers that did not answer
+/// (backend, name).
+pub fn home_rows(
+    device: &str,
+    accounts: &[Account],
+) -> (Vec<catostv_core::fin::Row>, Vec<(jf::Backend, String)>) {
+    let mut failed = Vec::new();
     let per: Vec<Vec<catostv_core::fin::Row>> = accounts
         .iter()
-        .map(|a| home(device, a).map(|d| d.home_rows()).unwrap_or_default())
+        .map(|a| match home(device, a) {
+            Ok(d) => d.home_rows(),
+            Err(_) => {
+                let name = if a.server_name.is_empty() {
+                    &a.server
+                } else {
+                    &a.server_name
+                };
+                failed.push((a.backend, name.clone()));
+                Vec::new()
+            }
+        })
         .collect();
-    catostv_core::fin::merge_rows(per)
+    (catostv_core::fin::merge_rows(per), failed)
 }
 
 // ------------------------------------------------------------------ pictures

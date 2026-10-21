@@ -36,6 +36,23 @@ pub struct Media {
     /// Rows for CatosTV Home (Continue watching, Movies, TV shows), from the
     /// home account; empty until Catfyn is signed in.
     pub home: Vec<Row>,
+    /// Why Home has no rows when it should have some ("Your Jellyfin
+    /// server at … isn't answering"); `None` when there is nothing to say.
+    pub home_note: Option<String>,
+}
+
+/// What Home says when no media server answered.
+pub fn unreachable_note(failed: &[(crate::jellyfin::Backend, String)]) -> Option<String> {
+    match failed {
+        [] => None,
+        [(backend, name)] => Some(format!(
+            "Your {} server at {name} isn't answering, so there are no shows here right now.",
+            backend.label()
+        )),
+        _ => Some(
+            "Your media servers aren't answering, so there are no shows here right now.".into(),
+        ),
+    }
 }
 
 impl Media {
@@ -91,6 +108,7 @@ pub static NO_MEDIA: Media = Media {
         active: 0,
     },
     home: Vec::new(),
+    home_note: None,
 };
 
 /// Poster grid columns in a library.
