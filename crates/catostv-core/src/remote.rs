@@ -13,8 +13,11 @@
 //!   total. Tokens live in memory, so restarting the daemon (new PIN)
 //!   unpairs every phone.
 //! * Actions: `POST /api/key` (`key=<name>` from a strict whitelist, sent as
-//!   `wtype -k <keysym>`) and `POST /api/text` (`text=…`, at most 200
-//!   characters, control characters removed, sent as `wtype -- <text>`).
+//!   `wtype -k <keysym>`), `POST /api/text` (`text=…`, at most 200
+//!   characters, control characters removed, sent as `wtype -- <text>`) and
+//!   `POST /api/pointer` from the page's touchpad (`dx`, `dy`, `wheel`,
+//!   `hwheel` as bounded whole numbers, `click=left|right`), sent to a
+//!   virtual mouse ("CatosTV phone touchpad").
 //!   labwc matches key bindings by keysym for virtual keyboards, so Home
 //!   (`XF86HomePage`) and Control Center (`F10`) trigger CatosTV's global
 //!   bindings exactly like a real remote.
@@ -197,6 +200,60 @@ pub struct Remote {
     /// Real key presses (uinput, see `crate::uinput`); `None` = through
     /// the runner with `wtype` (tests, and the fallback).
     keys: Option<Mutex<crate::uinput::KeySender>>,
+    /// The touchpad's pointer; `None`: the page's touchpad gets an error.
+    pointer: Option<Mutex<PointerSink>>,
+}
+
+/// What the touchpad asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerAction {
+    Move(i32, i32),
+    /// Wheel notches: vertical (positive up), horizontal (positive right).
+    Wheel(i32, i32),
+    Click {
+        right: bool,
+    },
+}
+
+/// Carries out pointer actions; false when the TV could not.
+pub type PointerSink = Box<dyn FnMut(PointerAction) -> bool + Send>;
+
+/// The largest move, and wheel, one request may ask for.
+pub const MAX_MOVE: i32 = 4000;
+pub const MAX_WHEEL: i32 = 50;
+
+/// `/api/pointer` form → actions (moves first, then wheel, then the
+/// click). Every value must be a whole number within bounds.
+pub fn parse_pointer(pairs: &[(String, String)]) -> Result<Vec<PointerAction>, &'static str> {
+    let num = |key: &str, max: i32| -> Result<i32, &'static str> {
+        match http::form_value(pairs, key) {
+            None | Some("") => Ok(0),
+            Some(v) => v
+                .parse::<i32>()
+                .ok()
+                .filter(|n| n.abs() <= max)
+                .ok_or("bad number"),
+        }
+    };
+    let (dx, dy) = (num("dx", MAX_MOVE)?, num("dy", MAX_MOVE)?);
+    let (wheel, hwheel) = (num("wheel", MAX_WHEEL)?, num("hwheel", MAX_WHEEL)?);
+    let mut out = Vec::new();
+    if dx != 0 || dy != 0 {
+        out.push(PointerAction::Move(dx, dy));
+    }
+    if wheel != 0 || hwheel != 0 {
+        out.push(PointerAction::Wheel(wheel, hwheel));
+    }
+    match http::form_value(pairs, "click") {
+        None | Some("") => {}
+        Some("left") => out.push(PointerAction::Click { right: false }),
+        Some("right") => out.push(PointerAction::Click { right: true }),
+        Some(_) => return Err("unknown button"),
+    }
+    if out.is_empty() {
+        return Err("nothing to do");
+    }
+    Ok(out)
 }
 
 impl Remote {
@@ -206,6 +263,56 @@ impl Remote {
             "CatosTV phone remote",
         )));
         self
+    }
+
+    /// The touchpad moves a virtual mouse (made on first use, made again
+    /// after a failure).
+    pub fn with_virtual_mouse(mut self) -> Self {
+        let mut mouse: Option<crate::uinput::VirtualMouse> = None;
+        self.pointer = Some(Mutex::new(Box::new(move |a| {
+            if mouse.is_none() {
+                match crate::uinput::VirtualMouse::create("CatosTV phone touchpad") {
+                    Ok(m) => mouse = Some(m),
+                    Err(e) => {
+                        eprintln!("catostv-remoted: no touchpad pointer: {e}");
+                        return false;
+                    }
+                }
+            }
+            let Some(m) = mouse.as_mut() else {
+                return false;
+            };
+            let r = match a {
+                PointerAction::Move(dx, dy) => m.move_by(dx, dy),
+                PointerAction::Wheel(v, h) => m.wheel(v, h),
+                PointerAction::Click { right } => m.click(if right {
+                    crate::uinput::BTN_RIGHT
+                } else {
+                    crate::uinput::BTN_LEFT
+                }),
+            };
+            if r.is_err() {
+                mouse = None;
+            }
+            r.is_ok()
+        })));
+        self
+    }
+
+    /// Where touchpad actions go (tests).
+    pub fn with_pointer(mut self, sink: PointerSink) -> Self {
+        self.pointer = Some(Mutex::new(sink));
+        self
+    }
+
+    fn point(&self, actions: &[PointerAction]) -> bool {
+        let Some(p) = &self.pointer else {
+            return false;
+        };
+        let Ok(mut f) = p.lock() else {
+            return false;
+        };
+        actions.iter().all(|a| f(*a))
     }
 
     fn press(&self, keysym: &str) -> bool {
@@ -222,6 +329,7 @@ impl Remote {
             limiter: Mutex::new(PinLimiter::default()),
             runner: Mutex::new(runner),
             keys: None,
+            pointer: None,
         }
     }
 
@@ -348,9 +456,22 @@ pub fn handle_http(req: &Request, remote: &Remote) -> Response {
                 }
             }
         }
-        (_, "/" | "/favicon.ico" | "/api/pair" | "/api/check" | "/api/key" | "/api/text") => {
-            Response::status_only(405)
+        ("POST", "/api/pointer") => {
+            if !remote.authorised(req) {
+                json_msg(401, "error", "not paired")
+            } else {
+                match parse_pointer(&req.form_pairs()) {
+                    Err(e) => json_msg(400, "error", e),
+                    Ok(actions) if remote.point(&actions) => json_msg(200, "ok", "moved"),
+                    Ok(_) => json_msg(500, "error", "the TV could not move the pointer"),
+                }
+            }
         }
+        (
+            _,
+            "/" | "/favicon.ico" | "/api/pair" | "/api/check" | "/api/key" | "/api/text"
+            | "/api/pointer",
+        ) => Response::status_only(405),
         _ => Response::status_only(404),
     };
     secure(resp)
@@ -420,6 +541,13 @@ form button{padding:0 18px}
 #pair p{margin:0;color:var(--dim)}
 .err{color:#ff9d8a;min-height:20px;font-size:14px}
 body.unpaired #remote{display:none}body.unpaired #pair{display:flex}
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:5px;background:var(--glass);border:1px solid var(--line);border-radius:20px}
+.tabs button{min-height:42px;border:none;background:transparent;border-radius:15px;font-weight:600;color:var(--dim)}
+.tabs button.on{background:var(--glass2);color:var(--text)}
+.touchpad{height:min(52vh,360px);border-radius:22px;background:rgba(0,0,0,.24);border:1px solid var(--line);touch-action:none;display:flex;align-items:flex-end;justify-content:center;padding:16px;text-align:center;font-size:13px;color:var(--dim)}
+.touchpad.active{border-color:rgba(255,255,255,.3)}
+.two{grid-template-columns:1fr 1fr;margin-top:12px}
+body.touch #dpad{display:none}body:not(.touch) #touch{display:none}
 </style>
 </head>
 <body class="unpaired">
@@ -433,7 +561,12 @@ body.unpaired #remote{display:none}body.unpaired #pair{display:flex}
 </section>
 
 <div id="remote" style="display:flex;flex-direction:column;gap:18px">
-<section class="card">
+<nav class="tabs"><button type="button" data-view="buttons" class="on">Remote</button><button type="button" data-view="touch">Touchpad</button></nav>
+<section class="card" id="touch">
+<div class="touchpad" id="touchpad">Slide to move the pointer. Tap to click, tap with two fingers for the right button, slide two fingers to scroll.</div>
+<div class="row two"><button type="button" id="lclick">Click</button><button type="button" id="rclick">Right click</button></div>
+</section>
+<section class="card" id="dpad">
 <div class="pad">
 <button class="u" data-key="up" data-repeat aria-label="Up"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button>
 <button class="l" data-key="left" data-repeat aria-label="Left"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
@@ -514,6 +647,74 @@ document.querySelectorAll("button[data-key]").forEach((b) => {
   ["pointerup", "pointerleave", "pointercancel"].forEach((t) => b.addEventListener(t, stop));
   b.addEventListener("contextmenu", (ev) => ev.preventDefault());
 });
+// Remote / Touchpad, remembered on this phone.
+const VIEW_KEY = "catostv-remote-view";
+function setView(v) {
+  document.body.classList.toggle("touch", v === "touch");
+  document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
+  try { localStorage.setItem(VIEW_KEY, v); } catch (e) {}
+}
+document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+try { if (localStorage.getItem(VIEW_KEY) === "touch") setView("touch"); } catch (e) {}
+
+// Touchpad: moves are added up and sent one request at a time, so a slow
+// network never queues up a backlog of old moves.
+const pend = { dx: 0, dy: 0, wheel: 0 };
+let sending = false;
+function flush() {
+  if (sending) return;
+  const dx = Math.trunc(pend.dx), dy = Math.trunc(pend.dy), wheel = Math.trunc(pend.wheel);
+  if (!dx && !dy && !wheel) return;
+  pend.dx -= dx; pend.dy -= dy; pend.wheel -= wheel;
+  sending = true;
+  api("/api/pointer", { dx, dy, wheel }).finally(() => { sending = false; flush(); });
+}
+function click(right) {
+  if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) {} }
+  api("/api/pointer", { click: right ? "right" : "left" });
+}
+document.getElementById("lclick").addEventListener("click", () => click(false));
+document.getElementById("rclick").addEventListener("click", () => click(true));
+const pad = document.getElementById("touchpad");
+const fingers = new Map();
+let gesture = null;
+pad.addEventListener("pointerdown", (ev) => {
+  ev.preventDefault();
+  try { pad.setPointerCapture(ev.pointerId); } catch (e) {}
+  fingers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY, t: ev.timeStamp });
+  if (!gesture) gesture = { start: ev.timeStamp, moved: 0, most: 0 };
+  gesture.most = Math.max(gesture.most, fingers.size);
+  pad.classList.add("active");
+});
+pad.addEventListener("pointermove", (ev) => {
+  const f = fingers.get(ev.pointerId);
+  if (!f || !gesture) return;
+  const dx = ev.clientX - f.x, dy = ev.clientY - f.y;
+  const dt = Math.max(1, ev.timeStamp - f.t);
+  f.x = ev.clientX; f.y = ev.clientY; f.t = ev.timeStamp;
+  gesture.moved += Math.abs(dx) + Math.abs(dy);
+  if (fingers.size >= 2) {
+    // Two fingers scroll the page under the pointer, like on the phone:
+    // a notch for every 26 pixels the fingers travel.
+    pend.wheel += dy / fingers.size / 26;
+  } else {
+    // Faster strokes go further.
+    const gain = 1.3 + Math.min(Math.hypot(dx, dy) / dt, 2) * 1.4;
+    pend.dx += dx * gain; pend.dy += dy * gain;
+  }
+  flush();
+});
+function lift(ev, cancelled) {
+  if (!fingers.delete(ev.pointerId) || fingers.size > 0) return;
+  pad.classList.remove("active");
+  const g = gesture;
+  gesture = null;
+  if (!cancelled && g && g.moved < 12 && ev.timeStamp - g.start < 320) click(g.most >= 2);
+}
+pad.addEventListener("pointerup", (ev) => lift(ev, false));
+pad.addEventListener("pointercancel", (ev) => lift(ev, true));
+pad.addEventListener("contextmenu", (ev) => ev.preventDefault());
+
 document.getElementById("textform").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const input = document.getElementById("text");
@@ -640,6 +841,61 @@ mod tests {
         // must never return loopback.
         if let Some(ip) = local_ipv4() {
             assert!(!ip.is_loopback());
+        }
+    }
+
+    #[test]
+    fn touchpad_moves_the_pointer_once_paired() {
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let sink = got.clone();
+        let r = Remote::new("123456".into(), Box::new(FakeRunner::new())).with_pointer(Box::new(
+            move |a| {
+                sink.lock().unwrap().push(a);
+                true
+            },
+        ));
+        let post = |auth: &[(&str, &str)], body: &str| {
+            handle_http(&req("POST", "/api/pointer", auth, body, PHONE), &r).status
+        };
+        assert_eq!(post(&[], "dx=5&dy=-3"), 401);
+        let token = pair_ok(&r);
+        let auth = [(TOKEN_HEADER, token.as_str())];
+        assert_eq!(post(&auth, "dx=5&dy=-3"), 200);
+        assert_eq!(post(&auth, "dx=0&dy=0&wheel=-2"), 200);
+        assert_eq!(post(&auth, "click=right"), 200);
+        assert_eq!(post(&auth, "dx=99999"), 400);
+        assert_eq!(post(&auth, "dx=1.5"), 400);
+        assert_eq!(post(&auth, "click=middle"), 400);
+        assert_eq!(post(&auth, "dx=0"), 400);
+        assert_eq!(
+            *got.lock().unwrap(),
+            [
+                PointerAction::Move(5, -3),
+                PointerAction::Wheel(-2, 0),
+                PointerAction::Click { right: true }
+            ]
+        );
+        // Without a pointer (no /dev/uinput) the page hears about it.
+        let (plain, _) = remote();
+        let token = pair_ok(&plain);
+        let auth = [(TOKEN_HEADER, token.as_str())];
+        let resp = handle_http(&req("POST", "/api/pointer", &auth, "dx=1", PHONE), &plain);
+        assert_eq!(resp.status, 500);
+        assert_eq!(
+            handle_http(&req("GET", "/api/pointer", &auth, "", PHONE), &plain).status,
+            405
+        );
+    }
+
+    #[test]
+    fn the_page_has_a_touchpad() {
+        for part in [
+            "id=\"touchpad\"",
+            "/api/pointer",
+            "data-view=\"touch\"",
+            "Right click",
+        ] {
+            assert!(PAGE_HTML.contains(part), "{part}");
         }
     }
 

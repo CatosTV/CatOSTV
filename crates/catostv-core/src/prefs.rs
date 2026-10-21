@@ -73,6 +73,9 @@ pub struct UiPrefs {
     pub app_order: Vec<String>,
     /// Behind the interface: one of [`HOME_BACKGROUNDS`] (keys).
     pub home_background: String,
+    /// Mouse mode chosen per app (app id, on) in the Control Center; apps
+    /// not listed follow `cursor::starts_on`.
+    pub mouse_apps: Vec<(String, bool)>,
 }
 
 /// Settings → Customization → Home background: key and label. "glow" is
@@ -134,6 +137,7 @@ impl Default for UiPrefs {
             saver_minutes: crate::screensaver::DEFAULT_MINUTES,
             app_order: Vec::new(),
             home_background: DEFAULT_HOME_BACKGROUND.into(),
+            mouse_apps: Vec::new(),
         }
     }
 }
@@ -187,6 +191,19 @@ impl UiPrefs {
             .collect()
     }
 
+    /// Mouse mode as chosen for app `id`, if it was.
+    pub fn mouse_choice(&self, id: &str) -> Option<bool> {
+        self.mouse_apps
+            .iter()
+            .find(|(a, _)| a == id)
+            .map(|(_, on)| *on)
+    }
+
+    pub fn set_mouse_choice(&mut self, id: &str, on: bool) {
+        self.mouse_apps.retain(|(a, _)| a != id);
+        self.mouse_apps.push((id.to_string(), on));
+    }
+
     pub fn set_nintendo_for(&mut self, name: &str, on: bool) {
         self.pad_nintendo_devices.retain(|d| d != name);
         if on {
@@ -216,6 +233,15 @@ impl UiPrefs {
                     p.pad_nintendo_devices.push(v.to_string())
                 }
                 "app" if !v.is_empty() && v.len() <= 256 => p.app_order.push(v.to_string()),
+                "mouse_app" => {
+                    if let Some((id, on)) = v.rsplit_once(' ')
+                        && !id.trim().is_empty()
+                        && id.len() <= 256
+                        && (on == "on" || on == "off")
+                    {
+                        p.set_mouse_choice(id.trim(), on == "on");
+                    }
+                }
                 "home_background" if HOME_BACKGROUNDS.iter().any(|(k, _)| *k == v) => {
                     p.home_background = v.to_string()
                 }
@@ -288,6 +314,13 @@ impl UiPrefs {
             let id: String = id.chars().filter(|c| !c.is_control()).collect();
             s.push_str(&format!("app = {id}\n"));
         }
+        for (id, on) in &self.mouse_apps {
+            let id: String = id.chars().filter(|c| !c.is_control()).collect();
+            s.push_str(&format!(
+                "mouse_app = {id} {}\n",
+                if *on { "on" } else { "off" }
+            ));
+        }
         s
     }
 }
@@ -333,6 +366,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mouse_choice_per_app() {
+        let mut p = UiPrefs::default();
+        assert_eq!(p.mouse_choice("org.videolan.VLC"), None);
+        p.set_mouse_choice("org.videolan.VLC", false);
+        p.set_mouse_choice("tv.kodi.Kodi", true);
+        p.set_mouse_choice("org.videolan.VLC", true);
+        let back = UiPrefs::from_conf(&p.to_conf());
+        assert_eq!(back.mouse_choice("org.videolan.VLC"), Some(true));
+        assert_eq!(back.mouse_choice("tv.kodi.Kodi"), Some(true));
+        assert_eq!(back.mouse_apps.len(), 2);
+        let junk = UiPrefs::from_conf(
+            "mouse_app = x maybe\nmouse_app = \nmouse_app = on\nmouse_app = a.b off\n",
+        );
+        assert_eq!(junk.mouse_apps, [("a.b".to_string(), false)]);
+    }
+
+    #[test]
     fn round_trip_and_junk() {
         let p = UiPrefs {
             accent: "teal".into(),
@@ -351,6 +401,7 @@ mod tests {
             saver_minutes: 10,
             app_order: vec!["catfyn".into(), "com.example.Tv".into()],
             home_background: "photos".into(),
+            mouse_apps: vec![("io.freetubeapp.FreeTube".into(), true)],
         };
         assert_eq!(UiPrefs::from_conf(&p.to_conf()), p);
         // Home background: cats by default, unknown values ignored, wraps.

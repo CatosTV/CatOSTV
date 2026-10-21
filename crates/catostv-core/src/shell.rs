@@ -18,7 +18,8 @@
 //! ```text
 //! Home      top bar · app row (the focused app is shown large above it)
 //! Apps      top bar · app grid (APPS_GRID_COLS wide)
-//! Store     top bar · category chips (Left/Right) · store grid (STORE_COLS wide)
+//! Store     top bar · sections (a list on the left, Up/Down) · the focused
+//!           app's spotlight · store grid (STORE_COLS wide, Right of the list)
 //! Search    top bar · on-screen keyboard · results (apps, settings, store)
 //! Settings  categories · rows
 //! Overlays  a stack; Back closes the top one (see [`Overlay`])
@@ -41,7 +42,7 @@ use crate::prefs;
 use crate::settings::{self, Category, RowId, RowKind, ShellContext};
 
 pub const APPS_GRID_COLS: usize = 6;
-pub const STORE_COLS: usize = 4;
+pub const STORE_COLS: usize = 5;
 pub const MAX_SEARCH_RESULTS: usize = 8;
 pub const VOLUME_STEP: i8 = 5;
 
@@ -309,18 +310,25 @@ pub enum EthRow {
     Save,
 }
 
-/// Controls for the app behind Quick settings, in order.
+/// Controls for the app behind Quick settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickAppItem {
     BackToApp,
     Fullscreen,
+    /// Mouse mode for this app (`crate::cursor`): not for Android apps.
+    Mouse,
     Close,
 }
-pub const QUICK_APP_ITEMS: [QuickAppItem; 3] = [
-    QuickAppItem::BackToApp,
-    QuickAppItem::Fullscreen,
-    QuickAppItem::Close,
-];
+
+/// The app behind Quick settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuickApp {
+    pub name: String,
+    pub fullscreen: bool,
+    /// Mouse mode is on in this app right now; `None`: not offered
+    /// (Android).
+    pub mouse: Option<bool>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowerItem {
@@ -540,12 +548,13 @@ pub enum StoreLogState {
     Failed(String),
 }
 
+/// Buttons of an app's Store page (Back leaves the page; while an app
+/// installs or is removed there are none).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreAction {
     Install,
     Open,
     Remove,
-    Close,
 }
 
 impl StoreAction {
@@ -554,9 +563,21 @@ impl StoreAction {
             Self::Install => "Install",
             Self::Open => "Open",
             Self::Remove => "Remove",
-            Self::Close => "Close",
         }
     }
+}
+
+/// How a Store app works on the TV, for the apps CatosTV knows
+/// (`flatpak::CURATED`); `None` for the rest.
+pub fn remote_fit(id: &str) -> Option<&'static str> {
+    let app = flatpak::CURATED.iter().find(|a| a.id == id)?;
+    Some(if flatpak::NEEDS_MOUSE.contains(&id) {
+        "The remote works as a mouse"
+    } else if app.category == "Play" || app.category == "Stream" {
+        "Best with a game controller"
+    } else {
+        "Works with the remote"
+    })
 }
 
 /// Buttons of the store detail panel.
@@ -594,12 +615,12 @@ pub fn store_actions_installed(
     installed: bool,
 ) -> Vec<StoreAction> {
     if jobs.iter().any(|(i, _)| *i == item.id) {
-        return vec![StoreAction::Close];
+        return Vec::new();
     }
     if installed {
-        vec![StoreAction::Open, StoreAction::Remove, StoreAction::Close]
+        vec![StoreAction::Open, StoreAction::Remove]
     } else {
-        vec![StoreAction::Install, StoreAction::Close]
+        vec![StoreAction::Install]
     }
 }
 
@@ -934,6 +955,8 @@ pub enum Effect {
     /// Close / minimise / (un)fullscreen the app behind Quick settings
     ///.
     AppWindow(crate::toplevel::WindowAction),
+    /// Mouse mode for the app in front, on or off (kept for that app).
+    AppMouse(bool),
     /// Open Catfyn (its Home tile).
     OpenFin,
     /// Open Catfyn on an item's details (Options on a Home media tile).
@@ -1024,8 +1047,8 @@ pub struct Shell {
     pub quick_over_app: bool,
     /// The volume panel, on top of everything while it shows.
     pub volume: Option<crate::volume_panel::VolumePanel>,
-    /// The app behind Quick settings: (name, is full screen).
-    pub quick_app: Option<(String, bool)>,
+    /// The app behind Quick settings.
+    pub quick_app: Option<QuickApp>,
     /// KDE Connect pairing requests already shown as a pop-up.
     pub kde_prompted: Vec<String>,
     /// Catfyn, while it is open (drawn full screen over the page).
@@ -1230,10 +1253,25 @@ impl Shell {
     /// not opened from an app).
     pub fn quick_offset(&self) -> usize {
         if self.quick_over_app {
-            QUICK_APP_ITEMS.len()
+            self.quick_app_items().len()
         } else {
             0
         }
+    }
+
+    /// The app controls, in order: Back · Full screen · Mouse · Close
+    /// (no Mouse for Android apps).
+    pub fn quick_app_items(&self) -> Vec<QuickAppItem> {
+        let mouse = self.quick_app.as_ref().is_some_and(|a| a.mouse.is_some());
+        [
+            Some(QuickAppItem::BackToApp),
+            Some(QuickAppItem::Fullscreen),
+            mouse.then_some(QuickAppItem::Mouse),
+            Some(QuickAppItem::Close),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
     pub fn open_quick(&mut self, over_app: bool) {
@@ -2089,22 +2127,22 @@ impl Shell {
     fn handle_store(&mut self, action: Action, ctx: &ShellContext) -> Vec<Effect> {
         let n_items = self.store_items(ctx).len();
         if !self.store_grid {
-            // A horizontal row of category chips under the top bar; moving
-            // along it switches the category immediately (like tabs).
+            // The sections, a list on the left; moving along it switches
+            // the section at once (like tabs). Right goes to its apps.
             match action {
-                Action::Up => {
+                Action::Up if self.store_cat == 0 => {
                     self.top_focus = true;
                     self.top_index = top_index_of(Page::Store);
                 }
-                Action::Left if self.store_cat > 0 => {
+                Action::Up => {
                     self.store_cat -= 1;
                     self.store_index = 0;
                 }
-                Action::Right if self.store_cat + 1 < STORE_CATS.len() => {
+                Action::Down if self.store_cat + 1 < STORE_CATS.len() => {
                     self.store_cat += 1;
                     self.store_index = 0;
                 }
-                Action::Down if n_items > 0 => self.store_grid = true,
+                Action::Right if n_items > 0 => self.store_grid = true,
                 Action::Ok | Action::OkLong => {
                     if self.current_store_cat() == StoreCat::Search {
                         self.open_store_search();
@@ -2120,11 +2158,16 @@ impl Shell {
         match action {
             Action::Ok | Action::OkLong => return self.open_store_item(self.store_index, ctx),
             Action::Back => self.store_grid = false,
+            // Left of the first column: the sections.
+            Action::Left if self.store_index.is_multiple_of(STORE_COLS) => self.store_grid = false,
             Action::Up | Action::Down | Action::Left | Action::Right => {
                 match grid_move(self.store_index, action, STORE_COLS, n_items) {
                     Some(i) => self.store_index = i,
-                    // Up from the first row returns to the category chips.
-                    None if action == Action::Up => self.store_grid = false,
+                    // Up from the first row: the top bar.
+                    None if action == Action::Up => {
+                        self.top_focus = true;
+                        self.top_index = top_index_of(Page::Store);
+                    }
                     None => {}
                 }
             }
@@ -2560,13 +2603,14 @@ impl Shell {
             }
             _ => false,
         };
+        let app_items = self.quick_app_items();
         let Some(top) = self.overlays.last_mut() else {
             return vec![];
         };
         match top {
             Overlay::Quick { index } => {
                 let off = if self.quick_over_app {
-                    QUICK_APP_ITEMS.len()
+                    app_items.len()
                 } else {
                     0
                 };
@@ -2578,8 +2622,9 @@ impl Shell {
                         Action::Right => *index = (*index + 1).min(off - 1),
                         Action::Down => *index = off,
                         Action::Ok | Action::OkLong => {
-                            let item = QUICK_APP_ITEMS[*index];
-                            let fullscreen = self.quick_app.as_ref().is_some_and(|a| a.1);
+                            let item = app_items[*index];
+                            let fullscreen = self.quick_app.as_ref().is_some_and(|a| a.fullscreen);
+                            let mouse = self.quick_app.as_ref().and_then(|a| a.mouse);
                             self.overlays.pop();
                             self.quick_over_app = false;
                             return match item {
@@ -2590,6 +2635,12 @@ impl Shell {
                                     )),
                                     Effect::ReturnToApp,
                                 ],
+                                QuickAppItem::Mouse => {
+                                    vec![
+                                        Effect::AppMouse(!mouse.unwrap_or(false)),
+                                        Effect::ReturnToApp,
+                                    ]
+                                }
                                 QuickAppItem::Close => {
                                     vec![Effect::AppWindow(crate::toplevel::WindowAction::Close)]
                                 }
@@ -3014,8 +3065,12 @@ impl Shell {
                 let on_shot = *index >= n_acts;
                 match action {
                     Action::Left if on_shot => *index = (*index).max(n_acts + 1) - 1,
-                    Action::Right if on_shot => *index = (*index + 1).min(n_acts + n_shots - 1),
-                    Action::Up if on_shot => *index = 0,
+                    Action::Right if on_shot && n_shots > 0 => {
+                        *index = (*index + 1).min(n_acts + n_shots - 1)
+                    }
+                    Action::Right if on_shot => {}
+                    Action::Up if on_shot && n_acts > 0 => *index = 0,
+                    Action::Up if on_shot => {}
                     Action::Down if !on_shot && n_shots > 0 => *index = n_acts,
                     Action::Left => *index = index.saturating_sub(1),
                     Action::Right => *index = step(*index, 1, n_acts),
@@ -3047,10 +3102,6 @@ impl Shell {
                                     StoreLogState::Removing,
                                 );
                                 vec![Effect::StoreUninstall(id)]
-                            }
-                            StoreAction::Close => {
-                                self.overlays.pop();
-                                vec![]
                             }
                         };
                     }
@@ -3397,6 +3448,13 @@ impl Shell {
     /// back to "Get" until the next system refresh).
     pub fn on_store_done(&mut self, id: &str, result: Result<(), String>) {
         self.on_store_job(id, None);
+        // Its page is open: focus goes back to the buttons that came back
+        // (Open after an install, Install after a removal).
+        if let Some(Overlay::StoreApp { item, index }) = self.overlays.last_mut()
+            && item.id == id
+        {
+            *index = 0;
+        }
         if let Some(e) = self.store_log.iter_mut().find(|e| e.item.id == id) {
             e.snapshots = 0;
             e.state = match (&e.state, result) {

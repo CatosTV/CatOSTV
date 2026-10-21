@@ -15,8 +15,8 @@ use catostv_core::prefs;
 use catostv_core::settings::{self, AppView, Category, RowKind, ShellContext};
 use catostv_core::shell::{
     self, AppOption, BT_OPTIONS, CONFIRM_ITEMS, Overlay, POWER_ITEMS, Page, QUICK_COLS,
-    QUICK_ITEMS, QuickItem, STORE_CATS, STORE_COLS, SearchFocus, SearchHit, Shell, StoreCat,
-    StoreItem, StoreJob, TOP_ITEMS, Target, TopItem,
+    QUICK_ITEMS, QuickApp, QuickAppItem, QuickItem, STORE_CATS, STORE_COLS, SearchFocus, SearchHit,
+    Shell, StoreCat, StoreItem, StoreJob, TOP_ITEMS, Target, TopItem,
 };
 use eframe::egui::{Align2, Color32, Rect};
 use std::collections::HashMap;
@@ -1257,150 +1257,301 @@ fn store_status(v: &ShellView, item: &StoreItem) -> (Option<String>, Option<f32>
     }
 }
 
+/// The Store's sections as the list on the left calls them.
+fn section_label(cat: StoreCat) -> &'static str {
+    match cat {
+        StoreCat::Search => "Search Flathub",
+        other => other.label(),
+    }
+}
+
+/// What the spotlight says when a section has no app to show:
+/// (title, one line).
+fn store_empty(v: &ShellView, cat: StoreCat, n: usize) -> Option<(String, String)> {
+    let s = v.shell;
+    if !v.ctx.sys.flatpak_available && v.ctx.sys.appliance {
+        return Some((
+            "The Store needs Flatpak".into(),
+            "Flatpak is not installed on this TV.".into(),
+        ));
+    }
+    match (cat, &s.store_results) {
+        (StoreCat::Search, Scan::Busy) => Some((
+            "Searching Flathub".into(),
+            format!("Looking for “{}”", s.store_query),
+        )),
+        (StoreCat::Search, Scan::Failed(e)) => Some(("Search did not work".into(), e.clone())),
+        (StoreCat::Search, Scan::Idle) => Some((
+            "Search Flathub".into(),
+            "Press OK and type the name of an app.".into(),
+        )),
+        (StoreCat::Search, Scan::Done(r)) if r.is_empty() => Some((
+            format!("Nothing found for “{}”", s.store_query),
+            "Press OK to try another name.".into(),
+        )),
+        (StoreCat::Installed, _) if n == 0 => Some((
+            "Nothing installed yet".into(),
+            "Apps you install from the Store are listed here.".into(),
+        )),
+        (StoreCat::Downloads, _) if n == 0 => Some((
+            "No downloads".into(),
+            "Apps you install or remove show up here while it happens.".into(),
+        )),
+        _ => None,
+    }
+}
+
 fn draw_store(c: &C, v: &ShellView) {
     let s = v.shell;
     let no_overlay = s.overlay().is_none() && !s.top_focus;
-    // Category chips, left to right.
-    let mut x = 52.0;
-    for (i, cat) in STORE_CATS.iter().enumerate() {
-        let w = widgets::filter_chip_width(c, cat.label());
-        let rect = c.r(x, 100.0, w, 44.0);
-        let selected = s.store_cat == i;
-        let t = focus_t(c, ("scat", i), no_overlay && !s.store_grid && selected);
-        widgets::filter_chip(c, rect, cat.label(), selected, t);
-        c.hit(rect, Target::StoreCat(i));
-        x += w + 10.0;
-    }
+    let busy = !s.store_jobs.is_empty();
 
-    let cat = s.current_store_cat();
-    let items = s.store_items(v.ctx);
-    let status = match (cat, &s.store_results) {
-        (_, _) if !v.ctx.sys.flatpak_available && v.ctx.sys.appliance => {
-            Some("Flatpak is not installed".to_string())
-        }
-        (StoreCat::Search, Scan::Busy) => Some("Searching Flathub…".into()),
-        (StoreCat::Search, Scan::Failed(e)) => Some(e.clone()),
-        (StoreCat::Search, Scan::Idle) => Some("Press OK to search Flathub".into()),
-        (StoreCat::Search, Scan::Done(r)) if r.is_empty() => Some("No apps found".into()),
-        (StoreCat::Installed, _) if items.is_empty() => Some("Nothing installed yet".into()),
-        (StoreCat::Downloads, _) if items.is_empty() => {
-            Some("Apps you install show up here".into())
-        }
-        _ => None,
-    };
-    let mut top = 176.0;
-    if cat == StoreCat::Search && !s.store_query.is_empty() {
-        widgets::section(c, 56.0, 178.0, &format!("Results for “{}”", s.store_query));
-        top = 200.0;
-    }
-    if let Some(st) = status {
-        let busy = cat == StoreCat::Search && matches!(s.store_results, Scan::Busy);
-        let mut tx = 56.0;
-        if busy {
-            widgets::spinner(c, 68.0, top + 16.0, 11.0, v.now);
-            tx += 34.0;
-        }
-        c.text(
-            tx,
-            top + 6.0,
-            Align2::LEFT_TOP,
-            &st,
-            17.0,
-            if busy { theme::text2() } else { theme::text3() },
-            Weight::Regular,
-        );
-    }
-    let cols = STORE_COLS as f32;
-    let gap = 20.0;
-    let w = (1176.0 - gap * (cols - 1.0)) / cols;
-    let h = 168.0;
-    let row = s.store_index / STORE_COLS;
-    let scroll = c.anim("store-scroll", row.saturating_sub(1) as f32 * (h + gap));
-    for (i, item) in items.iter().enumerate() {
-        let x = 52.0 + (i % STORE_COLS) as f32 * (w + gap);
-        let y = top + (i / STORE_COLS) as f32 * (h + gap) - scroll;
-        if !(150.0..=700.0).contains(&y) {
-            continue;
-        }
-        let t = focus_t(
-            c,
-            ("sitem", i),
-            no_overlay && s.store_grid && s.store_index == i,
-        );
-        let rect = widgets::grow(c.r(x, y, w, h), t);
-        widgets::card(c, rect, 26.0, t);
-        c.hit(c.r(x, y, w, h), Target::StoreItem(i));
-        store_icon_or_mono(c, v, item, x + 50.0, y + 50.0, 56.0);
-        c.text(
-            x + 92.0,
-            y + 38.0,
-            Align2::LEFT_CENTER,
-            &c.fit(&item.name, w - 108.0, 18.0, Weight::Semibold),
-            18.0,
-            theme::text(),
-            Weight::Semibold,
-        );
-        if !item.blurb.is_empty() {
-            c.paragraph(
-                x + 92.0,
-                y + 52.0,
-                w - 112.0,
-                &c.fit(&item.blurb, (w - 112.0) * 1.8, 13.5, Weight::Regular),
-                13.5,
-                theme::text3(),
-                Weight::Regular,
+    // Sections: a plain list down the left. The one shown is lit; the
+    // focused one gets the focus pill.
+    let mut y = 102.0;
+    for (i, cat) in STORE_CATS.iter().enumerate() {
+        if *cat == StoreCat::Downloads {
+            // Your own apps sit apart from the catalogue.
+            c.fill(
+                c.r(56.0, y + 6.0, 168.0, 1.0),
+                0.0,
+                theme::rgba(theme::WHITE, 22),
             );
+            y += 14.0;
         }
-        // Action pill along the bottom.
-        let pill = c.r(x + 18.0, y + h - 50.0, w - 36.0, 34.0);
-        let (label, frac, installed) = store_status(v, item);
-        c.fill(
-            pill,
-            17.0,
-            theme::rgba(theme::WHITE, (14.0 + 16.0 * t) as u8),
-        );
-        if let Some(f) = frac {
-            let pw = (w - 36.0) * f.clamp(0.0, 1.0);
-            if pw > 1.0 {
-                c.fill(
-                    c.r(x + 18.0, y + h - 50.0, pw.max(34.0), 34.0),
-                    17.0,
-                    theme::accent_a(120),
-                );
-            }
+        let rect = c.r(40.0, y, 200.0, 42.0);
+        let shown = s.store_cat == i;
+        let t = focus_t(c, ("scat", i), no_overlay && !s.store_grid && shown);
+        if t > 0.01 {
+            widgets::card(c, rect, 14.0, t);
+        } else if shown {
+            c.fill(rect, 14.0, theme::rgba(theme::WHITE, 16));
         }
-        let py = y + h - 33.0;
-        let (left, left_col) = match &label {
-            Some(l) if installed => (l.as_str(), theme::rgb(theme::SUCCESS)),
-            Some(l) => (l.as_str(), theme::text()),
-            None => ("Flathub", theme::text3()),
-        };
+        c.hit(rect, Target::StoreCat(i));
         c.text(
-            x + 34.0,
-            py,
+            58.0,
+            y + 21.0,
             Align2::LEFT_CENTER,
-            left,
-            13.5,
-            left_col,
-            Weight::Medium,
-        );
-        if frac.is_none() {
-            let right = if installed { "Open" } else { "Get" };
-            let rc = if t > 0.5 {
+            section_label(*cat),
+            16.0,
+            if shown || t > 0.5 {
                 theme::text()
             } else {
                 theme::text2()
-            };
-            icons::draw(c, "chevron", x + w - 38.0, py, 12.0, rc);
+            },
+            if shown {
+                Weight::Semibold
+            } else {
+                Weight::Medium
+            },
+        );
+        let right = match cat {
+            StoreCat::Installed if !v.ctx.sys.flatpaks.is_empty() => {
+                Some(v.ctx.sys.flatpaks.len().to_string())
+            }
+            _ => None,
+        };
+        if let Some(r) = right {
             c.text(
-                x + w - 50.0,
-                py,
+                224.0,
+                y + 21.0,
                 Align2::RIGHT_CENTER,
-                right,
+                &r,
                 13.5,
-                rc,
+                theme::text3(),
+                Weight::Medium,
+            );
+        }
+        if *cat == StoreCat::Downloads && busy {
+            widgets::spinner(c, 216.0, y + 21.0, 7.0, v.now);
+        }
+        y += 46.0;
+    }
+
+    let x0 = 280.0;
+    let cat = s.current_store_cat();
+    let items = s.store_items(v.ctx);
+    let grid_focus = no_overlay && s.store_grid;
+
+    // Spotlight: the focused app (or the section's first) in large type.
+    let empty = store_empty(v, cat, items.len());
+    let tile = c.r(x0, 104.0, 128.0, 128.0);
+    c.shadow(tile, 30.0, 14.0, 36.0, theme::rgba(theme::BLACK, 90));
+    c.fill(tile, 30.0, theme::glass_hi());
+    c.outline(tile, 30.0, 1.0, theme::border());
+    let tx = x0 + 156.0;
+    let spot = items.get(s.store_index.min(items.len().saturating_sub(1)));
+    match (&empty, spot) {
+        (Some((title, line)), _) => {
+            icons::draw(c, cat.icon(), x0 + 64.0, 168.0, 34.0, theme::text2());
+            c.text(
+                tx,
+                132.0,
+                Align2::LEFT_CENTER,
+                &c.fit(title, 760.0, 32.0, Weight::Semibold),
+                32.0,
+                theme::text(),
                 Weight::Semibold,
             );
+            let searching = cat == StoreCat::Search && matches!(s.store_results, Scan::Busy);
+            let mut lx = tx;
+            if searching {
+                widgets::spinner(c, tx + 10.0, 176.0, 9.0, v.now);
+                lx += 28.0;
+            }
+            c.text(
+                lx,
+                176.0,
+                Align2::LEFT_CENTER,
+                &c.fit(line, 740.0, 17.0, Weight::Regular),
+                17.0,
+                theme::text2(),
+                Weight::Regular,
+            );
+        }
+        (None, Some(item)) => {
+            store_icon_or_mono(c, v, item, x0 + 64.0, 168.0, 84.0);
+            c.text(
+                tx,
+                132.0,
+                Align2::LEFT_CENTER,
+                &c.fit(&item.name, 760.0, 34.0, Weight::Semibold),
+                34.0,
+                theme::text(),
+                Weight::Semibold,
+            );
+            // No description line: the rest moves up.
+            let lift = if item.blurb.is_empty() { 30.0 } else { 0.0 };
+            if !item.blurb.is_empty() {
+                c.text(
+                    tx,
+                    174.0,
+                    Align2::LEFT_CENTER,
+                    &c.fit(&item.blurb, 760.0, 18.0, Weight::Regular),
+                    18.0,
+                    theme::text2(),
+                    Weight::Regular,
+                );
+            }
+            let fit = shell::remote_fit(&item.id).unwrap_or("From Flathub");
+            c.text(
+                tx,
+                204.0 - lift,
+                Align2::LEFT_CENTER,
+                fit,
+                14.5,
+                theme::text3(),
+                Weight::Medium,
+            );
+            // Where it stands: installed, installing, or nothing yet.
+            let (label, frac, installed) = store_status(v, item);
+            if let Some(f) = frac {
+                widgets::progress_bar(c, tx, 224.0 - lift, 220.0, f, v.now);
+            }
+            if let Some(l) = label {
+                let lx = if frac.is_some() { tx + 236.0 } else { tx };
+                if installed {
+                    icons::draw(
+                        c,
+                        "check",
+                        lx + 7.0,
+                        230.0 - lift,
+                        12.0,
+                        theme::rgb(theme::SUCCESS),
+                    );
+                }
+                c.text(
+                    if installed { lx + 22.0 } else { lx },
+                    230.0 - lift,
+                    Align2::LEFT_CENTER,
+                    &l,
+                    14.5,
+                    if installed {
+                        theme::rgb(theme::SUCCESS)
+                    } else {
+                        theme::text2()
+                    },
+                    Weight::Medium,
+                );
+            }
+        }
+        (None, None) => {}
+    }
+
+    // The section's apps: icon tiles, five to a row.
+    let mut top = 276.0;
+    if cat == StoreCat::Search && !s.store_query.is_empty() && !items.is_empty() {
+        widgets::section(
+            c,
+            x0 + 4.0,
+            280.0,
+            &format!("Results for “{}”", s.store_query),
+        );
+        top = 300.0;
+    }
+    let cols = STORE_COLS as f32;
+    let gap = 20.0;
+    let w = (948.0 - gap * (cols - 1.0)) / cols;
+    let (h, row_h) = (112.0, 156.0);
+    let row = s.store_index / STORE_COLS;
+    let scroll = c.anim("store-scroll", row.saturating_sub(1) as f32 * row_h);
+    for (i, item) in items.iter().enumerate() {
+        let x = x0 + (i % STORE_COLS) as f32 * (w + gap);
+        let y = top + 12.0 + (i / STORE_COLS) as f32 * row_h - scroll;
+        // Rows scrolled up go under the spotlight: not drawn.
+        if !(top - 4.0..=700.0).contains(&y) {
+            continue;
+        }
+        let t = focus_t(c, ("sitem", i), grid_focus && s.store_index == i);
+        let base = c.r(x, y, w, h);
+        widgets::card(c, widgets::grow(base, t), 24.0, t);
+        c.hit(c.r(x, y, w, h + 30.0), Target::StoreItem(i));
+        store_icon_or_mono(c, v, item, x + w / 2.0, y + h / 2.0, 60.0);
+        c.text(
+            x + w / 2.0,
+            y + h + 18.0,
+            Align2::CENTER_CENTER,
+            &c.fit(&item.name, w - 8.0, 15.0, Weight::Medium),
+            15.0,
+            if t > 0.5 {
+                theme::text()
+            } else {
+                theme::text2()
+            },
+            Weight::Medium,
+        );
+        // Installed: a small tick in the corner. Installing: a thin bar
+        // along the bottom of the tile.
+        let (_, frac, installed) = store_status(v, item);
+        if installed {
+            c.circle(x + w - 18.0, y + 18.0, 9.0, theme::rgb(theme::SUCCESS));
+            icons::draw(
+                c,
+                "check",
+                x + w - 18.0,
+                y + 18.0,
+                9.0,
+                theme::rgb(theme::BG_BOTTOM),
+            );
+        } else if let Some(f) = frac {
+            let track = c.r(x + 18.0, y + h - 14.0, w - 36.0, 4.0);
+            c.fill(track, 2.0, theme::rgba(theme::WHITE, 36));
+            if f > 0.0 {
+                c.fill(
+                    c.r(
+                        x + 18.0,
+                        y + h - 14.0,
+                        ((w - 36.0) * f.clamp(0.0, 1.0)).max(4.0),
+                        4.0,
+                    ),
+                    2.0,
+                    theme::accent(),
+                );
+            } else {
+                widgets::spinner(c, x + w - 18.0, y + 18.0, 7.0, v.now);
+            }
+        } else if v.shell.store_job(&item.id).is_some() {
+            widgets::spinner(c, x + w - 18.0, y + 18.0, 7.0, v.now);
         }
     }
 }
@@ -2082,47 +2233,54 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
             let off = s.quick_offset();
             let mut top = 150.0;
             if off > 0 {
-                let (name, fullscreen) =
-                    s.quick_app.clone().unwrap_or_else(|| ("App".into(), false));
+                let app = s.quick_app.clone().unwrap_or(QuickApp {
+                    name: "App".into(),
+                    fullscreen: false,
+                    mouse: None,
+                });
                 c.text(
                     870.0,
                     146.0,
                     Align2::LEFT_CENTER,
-                    &c.fit(&name, 340.0, 13.0, Weight::Semibold),
+                    &c.fit(&app.name, 340.0, 13.0, Weight::Semibold),
                     13.0,
                     theme::text3(),
                     Weight::Semibold,
                 );
-                let items = [
-                    ("back", "Back"),
-                    (
-                        if fullscreen { "shrink" } else { "expand" },
-                        if fullscreen {
-                            "Windowed"
-                        } else {
-                            "Full screen"
-                        },
-                    ),
-                    ("close", "Close"),
-                ];
-                for (k, (icon, label)) in items.iter().enumerate() {
-                    let x = 868.0 + k as f32 * 120.0;
+                let items = s.quick_app_items();
+                // Four buttons share the width three had.
+                let (step, w) = if items.len() > 3 {
+                    (90.0, 84.0)
+                } else {
+                    (120.0, 112.0)
+                };
+                for (k, item) in items.iter().enumerate() {
+                    let (icon, label, on) = match item {
+                        QuickAppItem::BackToApp => ("back", "Back", false),
+                        QuickAppItem::Fullscreen if app.fullscreen => ("shrink", "Windowed", false),
+                        QuickAppItem::Fullscreen => ("expand", "Full screen", false),
+                        QuickAppItem::Mouse => ("pointer", "Mouse", app.mouse == Some(true)),
+                        QuickAppItem::Close => ("close", "Close", false),
+                    };
+                    let x = 868.0 + k as f32 * step;
                     let t = focus_t(c, ("quick-app", k), *index == k);
-                    let base = c.r(x, 162.0, 112.0, 64.0);
+                    let base = c.r(x, 162.0, w, 64.0);
                     let rect = widgets::grow(base, t);
                     widgets::card(c, rect, 20.0, t);
                     c.hit(base, Target::Item(k));
-                    let col = if k == 2 && t > 0.5 {
+                    let col = if *item == QuickAppItem::Close && t > 0.5 {
                         theme::rgb(theme::DANGER)
+                    } else if on {
+                        theme::accent()
                     } else {
                         theme::text()
                     };
-                    icons::draw(c, icon, x + 56.0, 182.0, 16.0, col);
+                    icons::draw(c, icon, x + w / 2.0, 182.0, 16.0, col);
                     c.text(
-                        x + 56.0,
+                        x + w / 2.0,
                         208.0,
                         Align2::CENTER_CENTER,
-                        label,
+                        &c.fit(label, w - 8.0, 12.5, Weight::Medium),
                         12.5,
                         if t > 0.5 {
                             theme::text()
@@ -2131,6 +2289,10 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                         },
                         Weight::Medium,
                     );
+                    if on {
+                        // Mouse mode is on for this app: a dot under its name.
+                        c.circle(x + w / 2.0, 222.0, 2.5, theme::accent());
+                    }
                 }
                 top = 246.0;
             }
@@ -2926,6 +3088,22 @@ fn draw_store_app(c: &C, v: &ShellView, item: &StoreItem, index: usize) {
     let tint = theme::app_rgb(catostv_core::desktop::accent_for(&item.id));
     c.fill(c.screen, 0.0, theme::rgb(theme::BG_BOTTOM));
     c.background(Some(tint), true);
+    // Behind it all: the app's first screenshot, blurred and dimmed.
+    let shots = s.store_shots(&item.id);
+    if let Some(tex) = shots
+        .first()
+        .and_then(|u| v.shots.get(&format!("{u}#blur")))
+        .and_then(|p| v.images.get(&c.ctx, p))
+    {
+        let k = c.appear(("store-backdrop", &item.id), 0.5);
+        c.image(c.screen, tex, Color32::from_white_alpha((255.0 * k) as u8));
+        c.fill(c.screen, 0.0, theme::rgba(theme::BG_TOP, 180));
+        c.vgradient(
+            c.screen,
+            theme::rgba(theme::BLACK, 0),
+            theme::rgba(theme::BLACK, 120),
+        );
+    }
     c.hit(c.screen, Target::Item(usize::MAX));
     let details = match &s.store_details {
         Some((id, d)) if *id == item.id => Some(d),
@@ -2936,46 +3114,37 @@ fn draw_store_app(c: &C, v: &ShellView, item: &StoreItem, index: usize) {
         _ => None,
     };
 
-    // Back hint.
-    let kw = widgets::keycap(c, 64.0, 46.0, "Back");
-    c.text(
-        64.0 + kw + 10.0,
-        46.0,
-        Align2::LEFT_CENTER,
-        "Store",
-        15.0,
-        theme::text3(),
-        Weight::Regular,
-    );
-
     // Header: icon tile, name, developer, summary.
-    let tile = c.r(64.0, 84.0, 124.0, 124.0);
+    let tile = c.r(64.0, 72.0, 136.0, 136.0);
     c.shadow(tile, 30.0, 14.0, 40.0, theme::rgba(theme::BLACK, 110));
     c.fill(tile, 30.0, theme::glass_hi());
     c.outline(tile, 30.0, 1.0, theme::border());
-    store_icon_or_mono(c, v, item, 126.0, 146.0, 92.0);
+    store_icon_or_mono(c, v, item, 132.0, 140.0, 96.0);
     let name = ready
         .map(|d| d.name.as_str())
         .filter(|n| !n.is_empty())
         .unwrap_or(&item.name);
     c.text(
-        212.0,
-        84.0,
+        228.0,
+        76.0,
         Align2::LEFT_TOP,
-        &c.fit(name, 1000.0, 42.0, Weight::Semibold),
+        &c.fit(name, 980.0, 42.0, Weight::Semibold),
         42.0,
         theme::text(),
         Weight::Semibold,
     );
-    let developer = ready
-        .map(|d| d.developer.clone())
-        .filter(|d| !d.is_empty())
-        .unwrap_or_else(|| item.id.clone());
+    // "Developer · how it works with the remote".
+    let developer = ready.map(|d| d.developer.clone()).filter(|d| !d.is_empty());
+    let byline = [developer.as_deref(), shell::remote_fit(&item.id)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("  ·  ");
     c.text(
-        214.0,
-        140.0,
+        230.0,
+        132.0,
         Align2::LEFT_TOP,
-        &c.fit(&developer, 1000.0, 16.0, Weight::Medium),
+        &c.fit(&byline, 980.0, 16.0, Weight::Medium),
         16.0,
         theme::text3(),
         Weight::Medium,
@@ -2985,35 +3154,36 @@ fn draw_store_app(c: &C, v: &ShellView, item: &StoreItem, index: usize) {
         .filter(|t| !t.is_empty())
         .unwrap_or(&item.blurb);
     c.text(
-        214.0,
-        168.0,
+        230.0,
+        162.0,
         Align2::LEFT_TOP,
-        &c.fit(summary, 1000.0, 19.0, Weight::Regular),
+        &c.fit(summary, 980.0, 19.0, Weight::Regular),
         19.0,
         theme::text2(),
         Weight::Regular,
     );
 
-    // Actions.
+    // Install, or Open and Remove. While it installs: how far along.
     let acts = s.actions_for(item, v.ctx);
     for (k, a) in acts.iter().enumerate() {
         let t = focus_t(c, ("storeact", k), index == k);
-        let rect = c.r(212.0 + k as f32 * 180.0, 214.0, 164.0, 52.0);
+        let rect = c.r(228.0 + k as f32 * 180.0, 214.0, 164.0, 52.0);
         let style = match a {
             shell::StoreAction::Install | shell::StoreAction::Open => ButtonStyle::Primary,
-            shell::StoreAction::Remove => ButtonStyle::Danger,
-            shell::StoreAction::Close => ButtonStyle::Secondary,
+            shell::StoreAction::Remove => ButtonStyle::Secondary,
         };
         widgets::button(c, rect, a.label(), style, t);
         c.hit(rect, Target::Item(k));
     }
-    let after_buttons = 212.0 + acts.len() as f32 * 180.0 + 8.0;
-    let (label, frac, _) = store_status(v, item);
+    let after_buttons =
+        228.0 + acts.len() as f32 * 180.0 + if acts.is_empty() { 4.0 } else { 12.0 };
+    let (label, frac, installed) = store_status(v, item);
     if let Some(f) = frac {
         widgets::progress_bar(c, after_buttons, 232.0, 260.0, f, v.now);
     }
-    if let Some(l) = label {
-        status_line(c, after_buttons, 254.0, &l);
+    if let Some(l) = label.filter(|_| !installed || acts.is_empty()) {
+        let y = if frac.is_some() { 256.0 } else { 240.0 };
+        status_line(c, after_buttons, y, &l);
     }
 
     // Description (a few lines) or the loading state.
@@ -3053,7 +3223,6 @@ fn draw_store_app(c: &C, v: &ShellView, item: &StoreItem, index: usize) {
     }
 
     // Screenshots: one row, the focused one lifted; glides to stay visible.
-    let shots = s.store_shots(&item.id);
     if shots.is_empty() {
         return;
     }

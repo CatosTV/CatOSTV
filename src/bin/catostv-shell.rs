@@ -30,7 +30,9 @@ use catostv_core::prefs::{self, UiPrefs};
 use catostv_core::process::{Cmd, Runner, SystemRunner, find_executable};
 use catostv_core::settings::{AppView, RemoteInfo, ShellContext, SystemSnapshot};
 use catostv_core::shell::{Effect, Page, Shell, StoreItem, StoreJob, Target};
-use catostv_core::{android, cec, compositor, desktop, env, kdeconnect, power, remote, uinput};
+use catostv_core::{
+    android, cec, compositor, cursor, desktop, env, kdeconnect, power, remote, uinput,
+};
 use eframe::egui::{self, Rect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -164,6 +166,11 @@ struct Watch {
     android_front: bool,
     /// The window of `foreground` (see `ShellApp::window_pattern`).
     foreground_window: Option<String>,
+    /// Mouse mode is chosen for `foreground` (`catostv_core::cursor`).
+    mouse: bool,
+    /// Mouse mode was on when the app was last in front (Back in the app
+    /// turns it off): what the Control Center's Mouse button shows.
+    mouse_live: bool,
     /// Last time the shell drew a frame; old = the shell is hidden.
     last_frame: Option<Instant>,
     appliance: bool,
@@ -235,6 +242,10 @@ fn spawn_app_watcher(
     const THUMB_EVERY: Duration = Duration::from_secs(4);
     let run = move || {
         let mut front = None;
+        // What mouse mode was last set for: (front, app, chosen). It is set
+        // again only when one of them changes, so Back (which turns it off
+        // in catostv-inputd) holds until you leave the app.
+        let mut mouse_for: Option<(uinput::Front, Option<String>, bool)> = None;
         // The Android app on screen has been seen in front since it was
         // opened (so Android's home screen showing afterwards means the user
         // backed out of it, not that it is still starting).
@@ -278,7 +289,7 @@ fn spawn_app_watcher(
                 }
             }
             let events = lock(&manager).poll();
-            let (fg, android_front, appliance, hidden, fg_window) = {
+            let (fg, android_front, appliance, hidden, fg_window, mouse) = {
                 let w = lock(&watch);
                 (
                     w.foreground.clone(),
@@ -287,6 +298,7 @@ fn spawn_app_watcher(
                     w.last_frame.is_none_or(|t| t.elapsed() > HIDDEN_AFTER)
                         || w.blank.is_some_and(|t| t.elapsed() > BEHIND_APP_AFTER),
                     w.foreground_window.clone(),
+                    w.mouse,
                 )
             };
             // Android opened its window over the app in front (its session
@@ -330,7 +342,23 @@ fn spawn_app_watcher(
             };
             if front != Some(now_front) && appliance {
                 uinput::set_front(now_front);
+                // Controllers go to Android only while it is in front
+                // (also at start: a leftover hand-over is taken back).
+                let android_changed = front.is_none()
+                    || front == Some(uinput::Front::Android)
+                    || now_front == uinput::Front::Android;
+                if android_changed {
+                    let _ = SystemRunner.run(&android::pads_cmd());
+                }
                 front = Some(now_front);
+            }
+            if appliance && now_front == uinput::Front::App {
+                lock(&watch).mouse_live = cursor::is_on();
+            }
+            let key = (now_front, fg.clone(), mouse);
+            if appliance && mouse_for.as_ref() != Some(&key) {
+                cursor::set_on(now_front == uinput::Front::App && mouse);
+                mouse_for = Some(key);
             }
             // CatosTV just came to the front: Waydroid's window goes away.
             if appliance && was_hidden && !hidden {
@@ -1154,7 +1182,35 @@ impl ShellApp {
             .and_then(|f| self.window_pattern(f))
             .and_then(|w| catostv_core::toplevel::is_fullscreen(&w))
             .unwrap_or(false);
-        self.shell.quick_app = Some((name, fullscreen));
+        // Offered as chosen, showing whether it is on right now.
+        let live = lock(&self.watch).mouse_live;
+        let mouse = self
+            .foreground
+            .as_deref()
+            .and_then(|f| self.mouse_for(f))
+            .map(|_| live);
+        self.shell.quick_app = Some(catostv_core::shell::QuickApp {
+            name,
+            fullscreen,
+            mouse,
+        });
+    }
+
+    /// Mouse mode for app `id`: as chosen in the Control Center, else as
+    /// the app needs (`cursor::starts_on`). `None` for Android apps.
+    fn mouse_for(&self, id: &str) -> Option<bool> {
+        if id == android::SESSION_APP_ID {
+            return None;
+        }
+        let entry = self.apps.iter().find(|a| a.id == id);
+        if entry.is_some_and(|a| matches!(a.source, AppSource::Android { .. })) {
+            return None;
+        }
+        Some(
+            self.prefs
+                .mouse_choice(id)
+                .unwrap_or_else(|| entry.is_some_and(cursor::starts_on)),
+        )
     }
 
     /// Keep Home's background pictures in step with the setting: start or
@@ -2278,6 +2334,13 @@ impl ShellApp {
             Effect::KdeReject(id) => self.job(move |r| kdeconnect::reject_pairing(r, &id)),
             Effect::KdePing(id) => self.job(move |r| kdeconnect::ping(r, &id)),
             Effect::KdeUnpair(id) => self.job(move |r| kdeconnect::unpair(r, &id)),
+            Effect::AppMouse(on) => {
+                if let Some(id) = self.foreground.clone() {
+                    self.prefs.set_mouse_choice(&id, on);
+                    self.save_prefs(ctx);
+                    self.sync_watch();
+                }
+            }
             Effect::AppWindow(action) => {
                 if action == catostv_core::toplevel::WindowAction::Close {
                     self.leave_to_shell = true;
@@ -3062,6 +3125,9 @@ impl ShellApp {
                     for url in d.screenshots.clone() {
                         self.fetch_screenshot(url);
                     }
+                    if let Some(first) = d.screenshots.first() {
+                        self.fetch_store_backdrop(first.clone());
+                    }
                 }
                 self.shell.on_store_details(&id, res);
             }
@@ -3547,6 +3613,53 @@ impl ShellApp {
     }
 
     /// A Store screenshot from the cache, or download it in the background.
+    /// The app page's backdrop: its first screenshot, blurred
+    /// (`<url>#blur` in `store_shots`).
+    fn fetch_store_backdrop(&mut self, url: String) {
+        let key = format!("{url}#blur");
+        if self.store_shots.contains_key(&key) {
+            return;
+        }
+        let path = flatpak::screenshot_cache_path(&self.home, &key);
+        if path.is_file() {
+            self.store_shots
+                .insert(key, path.to_string_lossy().into_owned());
+            return;
+        }
+        let src = flatpak::screenshot_cache_path(&self.home, &url);
+        self.jobs.spawn(move || {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            // Its own download (the screenshot row may be fetching the
+            // same picture into its own partial file right now).
+            let picture = if src.is_file() {
+                src
+            } else {
+                let tmp = path.with_extension("src.part");
+                let ok = flatpak::screenshot_cmd(&url, &tmp)
+                    .is_ok_and(|cmd| SystemRunner.run(&cmd).is_ok_and(|o| o.success()));
+                if !ok {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Msg::Nothing;
+                }
+                tmp
+            };
+            let tmp = path.with_extension("part.png");
+            let made =
+                catfyn::blur_into(&picture, &tmp).is_some() && std::fs::rename(&tmp, &path).is_ok();
+            if picture.extension().is_some_and(|e| e == "part") {
+                let _ = std::fs::remove_file(&picture);
+            }
+            if made {
+                Msg::Screenshot(key, path.to_string_lossy().into_owned())
+            } else {
+                let _ = std::fs::remove_file(&tmp);
+                Msg::Nothing
+            }
+        });
+    }
+
     fn fetch_screenshot(&mut self, url: String) {
         if self.store_shots.contains_key(&url) {
             return;
@@ -3602,10 +3715,16 @@ impl ShellApp {
             .foreground
             .as_deref()
             .and_then(|f| self.window_pattern(f));
+        let mouse = self
+            .foreground
+            .as_deref()
+            .and_then(|f| self.mouse_for(f))
+            .unwrap_or(false);
         let mut w = lock(&self.watch);
         w.foreground = self.foreground.clone();
         w.android_front = android_front;
         w.foreground_window = window;
+        w.mouse = mouse;
     }
 
     fn busy(&self) -> bool {

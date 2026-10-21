@@ -65,6 +65,23 @@ const fn c(
     }
 }
 
+/// Store apps made for a mouse: mouse mode starts on for them
+/// ([`crate::cursor::starts_on`]) and the Store says the remote works as a
+/// mouse in them. Every other app on the list works with the remote or a
+/// controller as it is.
+pub const NEEDS_MOUSE: &[&str] = &[
+    "com.stremio.Stremio",
+    "io.freetubeapp.FreeTube",
+    "app.grayjay.Grayjay",
+    "org.videolan.VLC",
+    "com.spotify.Client",
+    "com.plexamp.Plexamp",
+    "de.haeckerfelix.Shortwave",
+    "org.gnome.Podcasts",
+    "net.lutris.Lutris",
+    "com.github.tchx84.Flatseal",
+];
+
 /// TV-focused front page of the store.
 pub const CURATED: &[CuratedApp] = &[
     // Watch
@@ -964,6 +981,9 @@ mod tests {
             assert!(CATEGORIES.contains(&a.category), "{}", a.id);
             assert!(!a.name.is_empty() && !a.blurb.is_empty());
             assert!(ids.insert(a.id), "duplicate {}", a.id);
+        }
+        for id in NEEDS_MOUSE {
+            assert!(CURATED.iter().any(|a| a.id == *id), "{id}");
         }
         assert!(CURATED.len() >= 20);
         for cat in CATEGORIES {

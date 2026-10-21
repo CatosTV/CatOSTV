@@ -300,7 +300,7 @@ fn plex_headers_for(url: &str) -> Option<std::path::PathBuf> {
 
 /// A softened copy of a picture: scaled down and blurred (YouTube's
 /// thumbnails behind a focused video; Jellyfin and Plex blur on the server).
-fn blur_into(src: &Path, out: &Path) -> Option<()> {
+pub fn blur_into(src: &Path, out: &Path) -> Option<()> {
     let img = image::load_from_memory(&std::fs::read(src).ok()?).ok()?;
     let small = img.resize(480, 270, image::imageops::FilterType::Triangle);
     let soft = image::imageops::blur(&small.to_rgba8(), 7.0);

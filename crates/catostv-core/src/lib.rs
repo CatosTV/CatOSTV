@@ -37,6 +37,7 @@ pub mod process;
 pub mod input;
 pub mod osk;
 
+pub mod cursor;
 pub mod evdev;
 pub mod gamepad;
 pub mod gesture;

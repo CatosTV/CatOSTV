@@ -4,7 +4,8 @@
 // validation as android-stop) and the per-app "uninstall" template unit
 // (android-remove, same validation), the APK install unit (a fixed
 // root script over a file the shell staged) and the "send Android
-// home" unit (a fixed root script, no input),
+// home" unit (a fixed root script, no input), the "controllers follow
+// what is in front" unit (a fixed root script, no input),
 // nothing else (the density unit runs a fixed root script with no input). The setup unit
 // runs a fixed root script that takes no input
 // (/usr/local/lib/catostv/android-setup); the stop unit's only input is the
@@ -20,6 +21,7 @@ polkit.addRule(function(action, subject) {
          action.lookup("unit") == "catostv-android-repair.service" ||
          action.lookup("unit") == "catostv-android-install.service" ||
          action.lookup("unit") == "catostv-android-home.service" ||
+         action.lookup("unit") == "catostv-android-pads.service" ||
          (/^catostv-android-(stop|launch|remove)@[A-Za-z][A-Za-z0-9_.]*\.service$/).test(action.lookup("unit") || "")) &&
         action.lookup("verb") == "start" &&
         subject.user == "catostv" &&

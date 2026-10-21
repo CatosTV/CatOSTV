@@ -3,9 +3,12 @@
 //! Used by `catostv-inputd` to watch keyboards and remotes for the escape
 //! gesture ([`crate::gesture`]). Design rules:
 //!
-//! * **Passive.** Devices are opened read-only and never grabbed (no
-//!   `EVIOCGRAB`), so the compositor and apps still receive every key.
-//!   Several readers of one evdev node each get their own copy of events.
+//! * **Passive.** Devices are opened read-only and not grabbed, so the
+//!   compositor and apps still receive every key. Several readers of one
+//!   evdev node each get their own copy of events. The one exception is
+//!   mouse mode ([`crate::cursor`]): while it is on, keyboards and remotes
+//!   are held ([`Watcher::grab`]) and their keys come as [`DeviceMsg::Raw`]
+//!   so `catostv-inputd` can pass them on; game controllers are never held.
 //! * **No ioctl.** Which devices are interesting is decided from sysfs
 //!   (`/sys/class/input/eventN/device/capabilities/{ev,key}`), parsed by
 //!   pure, tested functions.
@@ -14,7 +17,8 @@
 //!   other than the Back-class keys never reach the rest of the program, and
 //!   every other event type (including `EV_MSC` scan codes) is dropped.
 //!   Game controllers are the exception: their face buttons and D-pad pass
-//!   as [`crate::gamepad::PadEvent`]s (they carry no typing).
+//!   as [`crate::gamepad::PadEvent`]s (they carry no typing), and in mouse
+//!   mode their sticks as [`DeviceMsg::Axis`].
 //! * **One thread per device**, doing blocking `read()`s; a read error
 //!   (`ENODEV` when the device is unplugged) or end-of-file ends the thread
 //!   and is reported as [`DeviceMsg::Gone`]. Hot-plug is handled by calling
@@ -33,10 +37,12 @@
 //! below the gesture thresholds.
 
 use crate::gesture::{BackKey, KeyAction, KeyClass, KeyEvent};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -195,13 +201,16 @@ pub struct DeviceInfo {
     /// A game controller: the south face button (`BTN_SOUTH`) or generic
     /// joystick buttons (`BTN_TRIGGER`, cheap USB pads).
     pub gamepad: bool,
+    /// One of mouse mode's own devices ([`crate::cursor::is_own_device`]):
+    /// never read, or inputd would read back what it sends.
+    pub own: bool,
 }
 
 impl DeviceInfo {
     /// Watched devices: they send key events and have a Back key, or are
     /// game controllers.
     pub fn is_interesting(&self) -> bool {
-        self.has_ev_key && (!self.back_keys.is_empty() || self.gamepad)
+        self.has_ev_key && !self.own && (!self.back_keys.is_empty() || self.gamepad)
     }
 
     /// e.g. `"Escape, Backspace"`.
@@ -241,6 +250,7 @@ pub fn device_info(
             .collect(),
         gamepad: has_key(&keys, crate::gamepad::BTN_SOUTH)
             || has_key(&keys, crate::gamepad::BTN_TRIGGER),
+        own: crate::cursor::is_own_device(name.trim()),
     }
 }
 
@@ -302,6 +312,20 @@ pub enum DeviceMsg {
         event: crate::gamepad::PadEvent,
         time: f64,
     },
+    /// Mouse mode: a key of a held keyboard or remote, as it came
+    /// (`value` 1 down, 0 up, 2 repeat). Only sent while mouse mode is on.
+    Raw {
+        device: String,
+        code: u16,
+        value: i32,
+    },
+    /// Mouse mode: a controller stick (`ABS_X`, `ABS_Y`, `ABS_RX`,
+    /// `ABS_RY`) at -1..=1.
+    Axis {
+        device: String,
+        code: u16,
+        value: f64,
+    },
     /// The kernel dropped events (`SYN_DROPPED`): key state is unknown.
     Dropped {
         device: String,
@@ -335,6 +359,21 @@ pub struct Watcher {
     rx: Receiver<DeviceMsg>,
     active: HashSet<String>,
     open_failed: HashSet<String>,
+    /// Mouse mode: readers send raw keys and stick positions.
+    raw: Arc<AtomicBool>,
+    /// The open devices (shared with their reader threads), for holding
+    /// them in mouse mode, and whether each is a controller.
+    files: HashMap<String, (Arc<File>, bool)>,
+}
+
+/// `EVIOCGRAB`: _IOW('E', 0x90, int).
+const EVIOCGRAB: std::ffi::c_ulong = 0x4004_4590;
+/// `EVIOCGKEY(96)`: _IOC(_IOC_READ, 'E', 0x18, 96), the keys held now
+/// (KEY_MAX 0x2ff → 96 bytes).
+const EVIOCGKEY_96: std::ffi::c_ulong = 0x8060_4518;
+
+unsafe extern "C" {
+    fn ioctl(fd: i32, request: std::ffi::c_ulong, ...) -> i32;
 }
 
 impl Watcher {
@@ -348,7 +387,57 @@ impl Watcher {
             rx,
             active: HashSet::new(),
             open_failed: HashSet::new(),
+            raw: Arc::new(AtomicBool::new(false)),
+            files: HashMap::new(),
         }
+    }
+
+    /// Mouse mode on or off for the readers (see [`DeviceMsg::Raw`]).
+    pub fn set_raw(&self, on: bool) {
+        self.raw.store(on, Ordering::SeqCst);
+    }
+
+    /// The keyboards and remotes being read (not controllers).
+    pub fn keyboards(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .files
+            .iter()
+            .filter(|(_, (_, pad))| !pad)
+            .map(|(id, _)| id.clone())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Is any key of this device down right now? Holding a device with a
+    /// key down would leave that key stuck for everyone else.
+    pub fn keys_held(&self, id: &str) -> bool {
+        use std::os::fd::AsRawFd;
+        let Some((f, _)) = self.files.get(id) else {
+            return false;
+        };
+        let mut bits = [0u8; 96];
+        // SAFETY: EVIOCGKEY(96) writes at most 96 bytes into `bits`.
+        let r = unsafe { ioctl(f.as_raw_fd(), EVIOCGKEY_96, bits.as_mut_ptr()) };
+        r > 0 && bits.iter().any(|b| *b != 0)
+    }
+
+    /// Hold (`on`) or let go of a keyboard or remote: while held, only
+    /// this program gets its keys. Controllers are never held.
+    pub fn grab(&self, id: &str, on: bool) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let Some((f, pad)) = self.files.get(id) else {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+        };
+        if *pad {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+        }
+        // SAFETY: EVIOCGRAB takes an int argument by value.
+        let r = unsafe { ioctl(f.as_raw_fd(), EVIOCGRAB, on as std::ffi::c_int) };
+        if r < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     /// `/dev/input` + `/sys/class/input`.
@@ -406,16 +495,19 @@ impl Watcher {
         notices
     }
 
-    fn start(&self, dev: &DeviceInfo) -> std::io::Result<()> {
-        // Read-only, never grabbed: apps keep receiving every key.
-        let file = File::open(&dev.path)?;
+    fn start(&mut self, dev: &DeviceInfo) -> std::io::Result<()> {
+        // Read-only, not grabbed: apps keep receiving every key.
+        let file = Arc::new(File::open(&dev.path)?);
         let tx = self.tx.clone();
         let id = dev.id.clone();
         let epoch = self.epoch;
         let gamepad = dev.gamepad;
+        let raw = self.raw.clone();
+        let reader = file.clone();
         thread::Builder::new()
             .name(format!("inputd-{id}"))
-            .spawn(move || read_device(file, id, gamepad, epoch, tx))?;
+            .spawn(move || read_device(reader, id, gamepad, epoch, raw, tx))?;
+        self.files.insert(dev.id.clone(), (file, gamepad));
         Ok(())
     }
 
@@ -426,6 +518,7 @@ impl Watcher {
             Ok(msg) => {
                 if let DeviceMsg::Gone { device, .. } = &msg {
                     self.active.remove(device);
+                    self.files.remove(device);
                 }
                 Some(msg)
             }
@@ -454,8 +547,19 @@ fn abs_range(file: &File, abs: u16) -> Option<(i32, i32)> {
     (r >= 0 && info[2] > info[1]).then_some((info[1], info[2]))
 }
 
+/// Controller sticks reported in mouse mode: left X / Y, right X / Y.
+const ABS_RX: u16 = 0x03;
+const ABS_RY: u16 = 0x04;
+
 /// Reader thread body: blocking reads until error/EOF.
-fn read_device(mut file: File, id: String, gamepad: bool, epoch: Instant, tx: Sender<DeviceMsg>) {
+fn read_device(
+    file: Arc<File>,
+    id: String,
+    gamepad: bool,
+    epoch: Instant,
+    raw: Arc<AtomicBool>,
+    tx: Sender<DeviceMsg>,
+) {
     use crate::gamepad::{ABS_X, ABS_Y, EV_ABS, PadEvent, stick_dir};
     let mut buf = [0u8; EVENT_SIZE * 64];
     // Left stick (or a D-pad reported as one): its range, last direction.
@@ -464,15 +568,50 @@ fn read_device(mut file: File, id: String, gamepad: bool, epoch: Instant, tx: Se
     } else {
         [None, None]
     };
+    let right_ranges = if gamepad {
+        [abs_range(&file, ABS_RX), abs_range(&file, ABS_RY)]
+    } else {
+        [None, None]
+    };
     let mut stick = [0i32; 2];
     let reason = loop {
-        match file.read(&mut buf) {
+        match (&*file).read(&mut buf) {
             Ok(0) => break "end of file".to_string(),
             Ok(n) => {
                 let time = epoch.elapsed().as_secs_f64();
+                let mouse = raw.load(Ordering::Relaxed);
                 for ev in parse_events(&buf[..n]) {
+                    // Mouse mode: stick positions as they are.
+                    if mouse && gamepad && ev.ev_type == EV_ABS {
+                        let range = match ev.code {
+                            ABS_X | ABS_Y => ranges[ev.code as usize],
+                            ABS_RX => right_ranges[0],
+                            ABS_RY => right_ranges[1],
+                            _ => None,
+                        };
+                        if let Some((min, max)) = range {
+                            let msg = DeviceMsg::Axis {
+                                device: id.clone(),
+                                code: ev.code,
+                                value: crate::cursor::normalize(ev.value, min, max),
+                            };
+                            if tx.send(msg).is_err() {
+                                return;
+                            }
+                        }
+                    }
                     let msg = if ev.ev_type == EV_SYN && ev.code == SYN_DROPPED {
                         DeviceMsg::Dropped { device: id.clone() }
+                    } else if mouse && !gamepad {
+                        // Mouse mode: keys as they came, to be passed on.
+                        if ev.ev_type != EV_KEY || !(0..=2).contains(&ev.value) {
+                            continue;
+                        }
+                        DeviceMsg::Raw {
+                            device: id.clone(),
+                            code: ev.code,
+                            value: ev.value,
+                        }
                     } else if gamepad
                         && ev.ev_type == EV_ABS
                         && (ev.code == ABS_X || ev.code == ABS_Y)
@@ -820,6 +959,16 @@ mod tests {
                 DeviceMsg::Dropped { device } => format!("{device} dropped"),
                 DeviceMsg::Pad { device, event, .. } => format!("{device} {event:?}"),
                 DeviceMsg::Gone { device, reason } => format!("{device} gone: {reason}"),
+                DeviceMsg::Raw {
+                    device,
+                    code,
+                    value,
+                } => format!("{device} raw {code} {value}"),
+                DeviceMsg::Axis {
+                    device,
+                    code,
+                    value,
+                } => format!("{device} axis {code} {value}"),
             })
             .collect();
         assert_eq!(
@@ -835,6 +984,62 @@ mod tests {
         assert!(!w.is_active("event3"));
         assert_eq!(w.active_count(), 0);
         assert!(w.now() >= 0.0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mouse_mode_sends_keys_as_they_came_and_skips_its_own_devices() {
+        let (root, dev, sys) = fixture("raw");
+        let mut data = Vec::new();
+        for e in [
+            ev(EV_KEY, 103, 1), // Up
+            ev(4, 4, 0x70052),  // EV_MSC: dropped
+            ev(EV_KEY, 103, 2),
+            ev(EV_KEY, 30, 1), // 'a', as it is
+            ev(EV_KEY, 103, 0),
+        ] {
+            data.extend_from_slice(&encode_event(&e));
+        }
+        add_device(
+            &dev,
+            &sys,
+            "event3",
+            "Remote",
+            AT_KBD_EV,
+            AT_KBD_KEYS,
+            &data,
+        );
+        // Mouse mode's own keyboard is never read.
+        add_device(
+            &dev,
+            &sys,
+            "event4",
+            crate::cursor::KEYS_NAME,
+            AT_KBD_EV,
+            AT_KBD_KEYS,
+            b"",
+        );
+        let mut w = Watcher::new(&dev, &sys);
+        w.set_raw(true);
+        let started: Vec<String> = w
+            .rescan()
+            .into_iter()
+            .filter_map(|n| match n {
+                ScanNotice::Started(d) => Some(d.id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started, ["event3"]);
+        let mut got = Vec::new();
+        while let Some(m) = w.recv_timeout(Duration::from_secs(5)) {
+            match m {
+                DeviceMsg::Raw { code, value, .. } => got.push((code, value)),
+                DeviceMsg::Gone { .. } => break,
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(got, [(103, 1), (103, 2), (30, 1), (103, 0)]);
+        assert!(w.keyboards().is_empty(), "a device that is gone is let go");
         let _ = std::fs::remove_dir_all(root);
     }
 

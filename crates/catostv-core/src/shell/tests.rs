@@ -584,15 +584,25 @@ fn store_browse_install_and_search() {
     assert_eq!(s.current_store_cat(), StoreCat::Featured);
     let n = s.store_items(&f.ctx()).len();
     assert!(n >= 10, "curated catalogue is shown");
-    // Category chips run left to right; Down enters the grid.
-    press(&mut s, &f, &[Right]);
+    // The sections run down a list; Right enters the grid, Left from its
+    // first column comes back, Up from its first row goes to the top bar.
+    press(&mut s, &f, &[Down]);
     assert_eq!(s.current_store_cat(), STORE_CATS[1]);
-    press(&mut s, &f, &[Left, Down]);
+    press(&mut s, &f, &[Up, Right]);
     assert!(s.store_grid);
     assert_eq!(s.current_store_cat(), StoreCat::Featured);
-    press(&mut s, &f, &[Up]);
-    assert!(!s.store_grid, "Up from the first row returns to the chips");
-    press(&mut s, &f, &[Down, Right, Down]);
+    press(&mut s, &f, &[Left]);
+    assert!(
+        !s.store_grid,
+        "Left from the first column returns to the sections"
+    );
+    press(&mut s, &f, &[Right, Up]);
+    assert!(s.top_focus, "Up from the first row goes to the top bar");
+    press(&mut s, &f, &[Down]);
+    assert!(!s.top_focus);
+    s.store_grid = true;
+    s.store_index = 0;
+    press(&mut s, &f, &[Right, Down]);
     assert_eq!(s.store_index, 1 + STORE_COLS);
     let item = s.store_items(&f.ctx())[s.store_index].clone();
     // The full-screen page loads its details.
@@ -609,12 +619,12 @@ fn store_browse_install_and_search() {
             ..Default::default()
         }),
     );
-    // Down → first screenshot (after Install, Close), Right → second,
-    // Up → back to the buttons.
+    // Down → first screenshot (after Install), Right → second, and no
+    // further; Up → back to the button.
     press(&mut s, &f, &[Down, Right, Right]);
     assert!(matches!(
         s.overlay(),
-        Some(Overlay::StoreApp { index: 3, .. })
+        Some(Overlay::StoreApp { index: 2, .. })
     ));
     press(&mut s, &f, &[Up]);
     assert!(matches!(
@@ -626,9 +636,34 @@ fn store_browse_install_and_search() {
         vec![Effect::StoreInstall(item.id.clone())]
     );
     assert!(s.store_job(&item.id).is_some());
-    // While installing only "Close" is offered.
-    assert_eq!(press(&mut s, &f, &[Ok]), vec![]);
+    // While installing there are no buttons: OK, Up and Right do nothing
+    // (no crash with nothing to move to), Back leaves.
+    assert_eq!(press(&mut s, &f, &[Ok, Up, Right, Down, Left]), vec![]);
+    assert!(s.overlay().is_some());
+    press(&mut s, &f, &[Back]);
     assert!(s.overlay().is_none());
+    // The page stays open while it installs; when it is done, focus is
+    // on the button that came back.
+    press(&mut s, &f, &[Ok]);
+    s.on_store_details(
+        &item.id,
+        Result::Ok(crate::flatpak::AppDetails {
+            id: item.id.clone(),
+            screenshots: vec!["https://a/1.png".into(), "https://a/2.png".into()],
+            ..Default::default()
+        }),
+    );
+    press(&mut s, &f, &[Right]);
+    assert!(matches!(
+        s.overlay(),
+        Some(Overlay::StoreApp { index: 1, .. })
+    ));
+    s.on_store_done(&item.id, Result::Ok(()));
+    assert!(matches!(
+        s.overlay(),
+        Some(Overlay::StoreApp { index: 0, .. })
+    ));
+    press(&mut s, &f, &[Back]);
     s.on_store_job(&item.id, None);
     f.sys.flatpaks.push(crate::flatpak::InstalledApp {
         id: item.id.clone(),
@@ -1081,7 +1116,11 @@ fn quick_settings_over_an_app_return_to_it() {
     let f = Fixture::new();
     let mut s = Shell::new();
     s.open_quick(true);
-    s.quick_app = Some(("Jellyfin".into(), false));
+    s.quick_app = Some(QuickApp {
+        name: "Jellyfin".into(),
+        fullscreen: false,
+        mouse: None,
+    });
     assert!(matches!(s.overlay(), Some(Overlay::Quick { .. })));
     // App controls first: Back to app · Full screen · Close.
     assert_eq!(
@@ -1104,6 +1143,30 @@ fn quick_settings_over_an_app_return_to_it() {
     assert!(matches!(s.overlay(), Some(Overlay::Quick { index: 0 })));
     assert_eq!(press(&mut s, &f, &[Back]), vec![Effect::ReturnToApp]);
     assert!(!s.quick_over_app);
+    // A Linux app gets a Mouse button before Close; OK turns mouse mode
+    // on for it and goes back to it.
+    s.quick_app = Some(QuickApp {
+        name: "FreeTube".into(),
+        fullscreen: false,
+        mouse: Some(false),
+    });
+    s.open_quick(true);
+    assert_eq!(s.quick_offset(), 4);
+    assert_eq!(
+        press(&mut s, &f, &[Right, Right, Ok]),
+        vec![Effect::AppMouse(true), Effect::ReturnToApp]
+    );
+    s.quick_app.as_mut().unwrap().mouse = Some(true);
+    s.open_quick(true);
+    assert_eq!(
+        press(&mut s, &f, &[Right, Right, Ok]),
+        vec![Effect::AppMouse(false), Effect::ReturnToApp]
+    );
+    s.open_quick(true);
+    assert_eq!(
+        press(&mut s, &f, &[Right, Right, Right, Ok]),
+        vec![Effect::AppWindow(crate::toplevel::WindowAction::Close)]
+    );
     // Opened inside CatosTV: Back just closes it, the page stays.
     s.page = Page::Apps;
     s.open_quick(false);
@@ -1217,6 +1280,20 @@ fn settings_apps_search_filters_the_list() {
 }
 
 #[test]
+fn store_says_how_apps_work_with_the_remote() {
+    assert_eq!(remote_fit("tv.kodi.Kodi"), Some("Works with the remote"));
+    assert_eq!(
+        remote_fit("io.freetubeapp.FreeTube"),
+        Some("The remote works as a mouse")
+    );
+    assert_eq!(
+        remote_fit("com.valvesoftware.Steam"),
+        Some("Best with a game controller")
+    );
+    assert_eq!(remote_fit("org.example.Unknown"), None);
+}
+
+#[test]
 fn store_downloads_log_and_installed_override() {
     let f = Fixture::new();
     let mut s = Shell::new();
@@ -1240,7 +1317,7 @@ fn store_downloads_log_and_installed_override() {
     assert!(s.store_installed(&ctx, "org.example.App"));
     assert_eq!(
         s.actions_for(&item, &ctx),
-        vec![StoreAction::Open, StoreAction::Remove, StoreAction::Close]
+        vec![StoreAction::Open, StoreAction::Remove]
     );
     // Downloads lists it.
     s.store_cat = STORE_CATS

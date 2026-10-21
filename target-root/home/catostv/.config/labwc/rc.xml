@@ -215,4 +215,17 @@
     <!-- Nobody gets server-side decorations. -->
     <windowRule identifier="*" serverDecoration="no" />
   </windowRules>
+
+  <!-- Mouse mode's pointer and the phone's touchpad move exactly as far as
+       they are told (catostv_core::cursor sets its own speeds). -->
+  <libinput>
+    <device category="CatosTV mouse">
+      <accelProfile>flat</accelProfile>
+      <pointerSpeed>0</pointerSpeed>
+    </device>
+    <device category="CatosTV phone touchpad">
+      <accelProfile>flat</accelProfile>
+      <pointerSpeed>0</pointerSpeed>
+    </device>
+  </libinput>
 </labwc_config>

@@ -1,0 +1,14 @@
+# CatosTV: give game controllers to Android while an Android app is in
+# front and take them back when it is not, see
+# /usr/local/lib/catostv/android-pads (sync). Started by the TV shell as
+#   systemctl --no-ask-password start --no-block catostv-android-pads.service
+# which /etc/polkit-1/rules.d/50-catostv-android.rules allows for the active
+# local `catostv` session (verb "start" only). It never starts Android.
+
+[Unit]
+Description=CatosTV: controllers for Android only while it is in front
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /usr/local/lib/catostv/android-pads sync
+TimeoutStartSec=40

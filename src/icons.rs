@@ -470,6 +470,22 @@ pub fn draw<H: Copy>(c: &Canvas<H>, name: &str, cx: f32, cy: f32, size: f32, col
             w * 1.2,
             color,
         ),
+        // Mouse pointer: the arrow with its tail.
+        "pointer" => {
+            c.closed(
+                &[
+                    at(-0.45, -0.8),
+                    at(0.5, 0.15),
+                    at(0.02, 0.18),
+                    at(0.3, 0.75),
+                    at(0.08, 0.85),
+                    at(-0.2, 0.28),
+                    at(-0.45, 0.55),
+                ],
+                w,
+                color,
+            );
+        }
         // Full screen: two corner brackets pointing out / in.
         "expand" => {
             c.polyline(

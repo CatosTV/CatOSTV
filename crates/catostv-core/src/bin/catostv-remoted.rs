@@ -3,8 +3,8 @@
 //! Generates a 6-digit PIN at start and writes it to
 //! `$XDG_RUNTIME_DIR/catostv-remote.pin` (0600) for the TV to display. Phones
 //! open `http://<tv-ip>:8099`, enter the PIN once and get a D-pad, OK, Back,
-//! Home, Control Center, volume, play/pause and a keyboard. Keys are sent
-//! with `wtype`.
+//! Home, Control Center, volume, play/pause, a keyboard and a touchpad.
+//! Keys go to a virtual keyboard, the touchpad to a virtual mouse.
 //!
 //! Usage: catostv-remoted [--port N]
 
@@ -76,7 +76,11 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let state = Arc::new(remote::Remote::new(pin, Box::new(SystemRunner)).with_virtual_keyboard());
+    let state = Arc::new(
+        remote::Remote::new(pin, Box::new(SystemRunner))
+            .with_virtual_keyboard()
+            .with_virtual_mouse(),
+    );
     let handler: Arc<http::Handler> =
         Arc::new(move |req: &http::Request| remote::handle_http(req, &state));
     if let Err(e) = http::spawn_server(listener, http::Limits::default(), handler) {

@@ -1,5 +1,6 @@
 //! A virtual keyboard (`/dev/uinput`) for the TV remote (CEC) and the phone
-//! remote.
+//! remote, and a virtual mouse for mouse mode ([`crate::cursor`]) and the
+//! phone's touchpad.
 //!
 //! Why not `wtype`: wtype uploads its own keymap with made-up key codes.
 //! GTK/Qt apps translate those through the keymap and are fine, but
@@ -201,6 +202,15 @@ mod ffi {
 
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
+const EV_REL: u16 = 2;
+pub const REL_X: u16 = 0;
+pub const REL_Y: u16 = 1;
+pub const REL_HWHEEL: u16 = 6;
+pub const REL_WHEEL: u16 = 8;
+pub const BTN_LEFT: u16 = 0x110;
+pub const BTN_RIGHT: u16 = 0x111;
+pub const BTN_MIDDLE: u16 = 0x112;
+const INPUT_PROP_POINTER: u16 = 0;
 const BUS_VIRTUAL: u16 = 0x06;
 const UINPUT_MAX_NAME_SIZE: usize = 80;
 
@@ -213,6 +223,8 @@ const UI_DEV_DESTROY: std::ffi::c_ulong = 0x5502;
 const UI_DEV_SETUP: std::ffi::c_ulong = iow(3, 92);
 const UI_SET_EVBIT: std::ffi::c_ulong = iow(100, 4);
 const UI_SET_KEYBIT: std::ffi::c_ulong = iow(101, 4);
+const UI_SET_RELBIT: std::ffi::c_ulong = iow(102, 4);
+const UI_SET_PROPBIT: std::ffi::c_ulong = iow(110, 4);
 
 /// `struct uinput_setup` (linux/uinput.h): input_id + name + ff_effects_max.
 #[repr(C)]
@@ -235,6 +247,63 @@ pub fn event_bytes(kind: u16, code: u16, value: i32) -> [u8; 24] {
     b
 }
 
+/// Create a uinput device: `bits` are (ioctl, value) pairs set before
+/// the setup, e.g. (UI_SET_EVBIT, EV_KEY), (UI_SET_KEYBIT, KEY_UP).
+fn create_device(name: &str, product: u16, bits: &[(std::ffi::c_ulong, u16)]) -> io::Result<File> {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/uinput")?;
+    let fd = file.as_raw_fd();
+    let check = |r: i32, what: &str| -> io::Result<()> {
+        if r < 0 {
+            let e = io::Error::last_os_error();
+            Err(io::Error::new(e.kind(), format!("uinput {what}: {e}")))
+        } else {
+            Ok(())
+        }
+    };
+    // SAFETY: plain ioctls on a file we own, with integer arguments or a
+    // pointer to a correctly sized #[repr(C)] struct that outlives the call.
+    unsafe {
+        for &(req, v) in bits {
+            check(ffi::ioctl(fd, req, v as std::ffi::c_int), "bits")?;
+        }
+        let mut setup = UinputSetup {
+            bustype: BUS_VIRTUAL,
+            vendor: 0x7478, // "tx"
+            product,
+            version: 1,
+            name: [0; UINPUT_MAX_NAME_SIZE],
+            ff_effects_max: 0,
+        };
+        let n = name.len().min(UINPUT_MAX_NAME_SIZE - 1);
+        setup.name[..n].copy_from_slice(&name.as_bytes()[..n]);
+        check(
+            ffi::ioctl(fd, UI_DEV_SETUP, &setup as *const UinputSetup),
+            "setup",
+        )?;
+        check(ffi::ioctl(fd, UI_DEV_CREATE), "create")?;
+    }
+    // The compositor needs a moment to open the new device before the
+    // first event, or that event is lost.
+    std::thread::sleep(Duration::from_millis(300));
+    Ok(file)
+}
+
+fn destroy_device(file: &File) {
+    // SAFETY: ioctl without arguments on our own fd.
+    unsafe {
+        ffi::ioctl(file.as_raw_fd(), UI_DEV_DESTROY);
+    }
+}
+
+/// Every key a whole keyboard can send, for [`VirtualKeyboard::create_full`]:
+/// 1..=255 and the TV keys above the button range (0x160..=0x2bf). Never
+/// a mouse or gamepad button (0x100..=0x15f, 0x2c0..).
+pub fn full_keyboard_keys() -> impl Iterator<Item = u16> {
+    (1u16..=0xff).chain(0x160..=0x2bf)
+}
+
 /// A virtual keyboard. Dropping it removes the device.
 pub struct VirtualKeyboard {
     file: File,
@@ -243,51 +312,21 @@ pub struct VirtualKeyboard {
 impl VirtualKeyboard {
     /// Create "CatosTV <who>" (e.g. "CatosTV remote").
     pub fn create(name: &str) -> io::Result<Self> {
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/uinput")?;
-        let fd = file.as_raw_fd();
-        let check = |r: i32, what: &str| -> io::Result<()> {
-            if r < 0 {
-                let e = io::Error::last_os_error();
-                Err(io::Error::new(e.kind(), format!("uinput {what}: {e}")))
-            } else {
-                Ok(())
-            }
-        };
-        // SAFETY: plain ioctls on a file we own, with integer arguments or a
-        // pointer to a correctly sized #[repr(C)] struct that outlives the call.
-        unsafe {
-            check(
-                ffi::ioctl(fd, UI_SET_EVBIT, EV_KEY as std::ffi::c_int),
-                "EV_KEY",
-            )?;
-            for &k in ALL_KEYS {
-                check(
-                    ffi::ioctl(fd, UI_SET_KEYBIT, k as std::ffi::c_int),
-                    "key bits",
-                )?;
-            }
-            let mut setup = UinputSetup {
-                bustype: BUS_VIRTUAL,
-                vendor: 0x7478, // "tx"
-                product: 0x0001,
-                version: 1,
-                name: [0; UINPUT_MAX_NAME_SIZE],
-                ff_effects_max: 0,
-            };
-            let n = name.len().min(UINPUT_MAX_NAME_SIZE - 1);
-            setup.name[..n].copy_from_slice(&name.as_bytes()[..n]);
-            check(
-                ffi::ioctl(fd, UI_DEV_SETUP, &setup as *const UinputSetup),
-                "setup",
-            )?;
-            check(ffi::ioctl(fd, UI_DEV_CREATE), "create")?;
-        }
-        // The compositor needs a moment to open the new device before the
-        // first key, or that key is lost.
-        std::thread::sleep(Duration::from_millis(300));
-        Ok(Self { file })
+        Self::with_keys(name, 0x0001, ALL_KEYS.iter().copied())
+    }
+
+    /// A keyboard that can send any key: mouse mode passes the keys of the
+    /// remotes it holds on through it.
+    pub fn create_full(name: &str) -> io::Result<Self> {
+        Self::with_keys(name, 0x0003, full_keyboard_keys())
+    }
+
+    fn with_keys(name: &str, product: u16, keys: impl Iterator<Item = u16>) -> io::Result<Self> {
+        let mut bits = vec![(UI_SET_EVBIT, EV_KEY)];
+        bits.extend(keys.map(|k| (UI_SET_KEYBIT, k)));
+        Ok(Self {
+            file: create_device(name, product, &bits)?,
+        })
     }
 
     fn emit(&mut self, kind: u16, code: u16, value: i32) -> io::Result<()> {
@@ -299,6 +338,12 @@ impl VirtualKeyboard {
         self.emit(EV_SYN, 0, 0)
     }
 
+    /// A raw key event: 1 down, 0 up, 2 auto-repeat.
+    pub fn key_value(&mut self, code: u16, value: i32) -> io::Result<()> {
+        self.emit(EV_KEY, code, value)?;
+        self.emit(EV_SYN, 0, 0)
+    }
+
     /// Press and release.
     pub fn tap(&mut self, code: u16) -> io::Result<()> {
         self.key(code, true)?;
@@ -307,12 +352,91 @@ impl VirtualKeyboard {
     }
 }
 
+/// A virtual mouse: relative motion, wheel, left / right / middle button.
+/// Dropping it removes the device.
+pub struct VirtualMouse {
+    file: File,
+}
+
+impl VirtualMouse {
+    pub fn create(name: &str) -> io::Result<Self> {
+        let bits = [
+            (UI_SET_EVBIT, EV_KEY),
+            (UI_SET_EVBIT, EV_REL),
+            (UI_SET_KEYBIT, BTN_LEFT),
+            (UI_SET_KEYBIT, BTN_RIGHT),
+            (UI_SET_KEYBIT, BTN_MIDDLE),
+            (UI_SET_RELBIT, REL_X),
+            (UI_SET_RELBIT, REL_Y),
+            (UI_SET_RELBIT, REL_WHEEL),
+            (UI_SET_RELBIT, REL_HWHEEL),
+            (UI_SET_PROPBIT, INPUT_PROP_POINTER),
+        ];
+        Ok(Self {
+            file: create_device(name, 0x0002, &bits)?,
+        })
+    }
+
+    fn write(&mut self, events: &[(u16, u16, i32)]) -> io::Result<()> {
+        let mut buf = Vec::with_capacity((events.len() + 1) * 24);
+        for &(k, c, v) in events {
+            buf.extend_from_slice(&event_bytes(k, c, v));
+        }
+        buf.extend_from_slice(&event_bytes(EV_SYN, 0, 0));
+        self.file.write_all(&buf)
+    }
+
+    /// Move by whole pixels (nothing is sent for 0, 0).
+    pub fn move_by(&mut self, dx: i32, dy: i32) -> io::Result<()> {
+        let mut ev = Vec::with_capacity(2);
+        if dx != 0 {
+            ev.push((EV_REL, REL_X, dx));
+        }
+        if dy != 0 {
+            ev.push((EV_REL, REL_Y, dy));
+        }
+        if ev.is_empty() {
+            return Ok(());
+        }
+        self.write(&ev)
+    }
+
+    /// Wheel notches: positive `v` scrolls up, positive `h` right.
+    pub fn wheel(&mut self, v: i32, h: i32) -> io::Result<()> {
+        let mut ev = Vec::with_capacity(2);
+        if v != 0 {
+            ev.push((EV_REL, REL_WHEEL, v));
+        }
+        if h != 0 {
+            ev.push((EV_REL, REL_HWHEEL, h));
+        }
+        if ev.is_empty() {
+            return Ok(());
+        }
+        self.write(&ev)
+    }
+
+    pub fn button(&mut self, code: u16, down: bool) -> io::Result<()> {
+        self.write(&[(EV_KEY, code, down as i32)])
+    }
+
+    /// Press and release.
+    pub fn click(&mut self, code: u16) -> io::Result<()> {
+        self.button(code, true)?;
+        std::thread::sleep(Duration::from_millis(15));
+        self.button(code, false)
+    }
+}
+
+impl Drop for VirtualMouse {
+    fn drop(&mut self) {
+        destroy_device(&self.file);
+    }
+}
+
 impl Drop for VirtualKeyboard {
     fn drop(&mut self) {
-        // SAFETY: ioctl without arguments on our own fd.
-        unsafe {
-            ffi::ioctl(self.file.as_raw_fd(), UI_DEV_DESTROY);
-        }
+        destroy_device(&self.file);
     }
 }
 
@@ -392,7 +516,18 @@ mod tests {
     }
 
     #[test]
+    fn the_pass_through_keyboard_is_not_a_mouse_or_gamepad() {
+        // Mouse mode's keyboard must never look like a pointer or a pad
+        // (udev would tag it, and libinput would treat it so).
+        assert!(full_keyboard_keys().all(|k| !(0x100..=0x15f).contains(&k) && k < 0x2c0));
+        assert!(full_keyboard_keys().any(|k| k == KEY_SELECT));
+        assert!(full_keyboard_keys().any(|k| k == 0xff));
+    }
+
+    #[test]
     fn ioctl_numbers_match_linux_headers() {
+        assert_eq!(UI_SET_RELBIT, 0x4004_5566);
+        assert_eq!(UI_SET_PROPBIT, 0x4004_556e);
         assert_eq!(UI_SET_EVBIT, 0x4004_5564);
         assert_eq!(UI_SET_KEYBIT, 0x4004_5565);
         assert_eq!(UI_DEV_SETUP, 0x405c_5503);

@@ -1081,6 +1081,21 @@ pub fn home_cmd() -> Cmd {
         .timeout(SLOW)
 }
 
+/// Give game controllers to Android or take them back, by what is in
+/// front now (root unit, no input: it reads the front file the shell
+/// writes, see `/usr/local/lib/catostv/android-pads` sync). Android
+/// in the background never gets controller presses.
+pub fn pads_cmd() -> Cmd {
+    Cmd::new("systemctl")
+        .args([
+            "--no-ask-password",
+            "start",
+            "--no-block",
+            "catostv-android-pads.service",
+        ])
+        .timeout(SLOW)
+}
+
 pub fn stop_cmd(pkg: &str) -> Result<Cmd> {
     check_package(pkg)?;
     Ok(Cmd::new("systemctl")
@@ -2657,6 +2672,23 @@ NAME="sr0" KNAME="sr0" PATH="/dev/sr0" PKNAME="" TYPE="rom" SIZE="1073741312" RO
         let rules = include_str!("../../../target-root/etc/udev/rules.d/70-catostv-pads.rules");
         assert!(rules.contains("ACTION==\"remove\""));
         assert!(rules.contains("android-pads remove %k"));
+        // Controllers only while Android is in front: the shell's front
+        // file decides, a plug-in behind CatosTV is not handed over, and
+        // the shell may start the sync unit (it never starts Android).
+        assert!(pads.contains("catostv-front"));
+        assert!(pads.contains("== android"));
+        assert!(pads.contains("if [[ \"$(android_in_front)\" == no ]]; then"));
+        let unit =
+            include_str!("../../../target-root/etc/systemd/system/catostv-android-pads.service");
+        assert!(unit.contains("android-pads sync"));
+        assert!(!unit.contains("Requires="));
+        let polkit =
+            include_str!("../../../target-root/etc/polkit-1/rules.d/50-catostv-android.rules");
+        assert!(polkit.contains("\"catostv-android-pads.service\""));
+        assert_eq!(
+            pads_cmd().args.last().map(String::as_str),
+            Some("catostv-android-pads.service")
+        );
     }
 
     #[test]
