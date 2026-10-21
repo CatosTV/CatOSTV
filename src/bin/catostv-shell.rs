@@ -249,6 +249,8 @@ fn spawn_app_watcher(
         // again only when one of them changes, so Back (which turns it off
         // in catostv-inputd) holds until you leave the app.
         let mut mouse_for: Option<(uinput::Front, Option<String>, bool)> = None;
+        // Whether a controller presses keys in the app in front, as last set.
+        let mut pad_keys: Option<bool> = None;
         // The Android app on screen has been seen in front since it was
         // opened (so Android's home screen showing afterwards means the user
         // backed out of it, not that it is still starting).
@@ -375,6 +377,15 @@ fn spawn_app_watcher(
             }
             if appliance && now_front == uinput::Front::App {
                 lock(&watch).mouse_live = cursor::is_on();
+            }
+            // A controller works CatosTV's own remote apps like the remote.
+            let keys = now_front == uinput::Front::App
+                && fg
+                    .as_deref()
+                    .is_some_and(|f| catostv_core::gamepad::REMOTE_APPS.contains(&f));
+            if appliance && pad_keys != Some(keys) {
+                catostv_core::gamepad::set_keys(keys);
+                pad_keys = Some(keys);
             }
             let key = (now_front, fg.clone(), mouse);
             if appliance && mouse_for.as_ref() != Some(&key) {
@@ -1455,8 +1466,14 @@ impl ShellApp {
             // second when SmartTube was opened from Recents, and the other
             // way round). Stay on CatosTV until Android reports the app in
             // front, up to ANDROID_TOP_WAIT; then switch anyway.
-            if let Some(pkg) = package.as_deref().filter(|_| android) {
-                wait_for_android_top(pkg, ANDROID_TOP_WAIT);
+            // Reported in front is not drawn yet: Android's window still
+            // shows its home screen for a moment (CatosTV sends Android home
+            // when you leave an app), so the app gets a moment to draw its
+            // first picture before CatosTV steps aside.
+            if let Some(pkg) = package.as_deref().filter(|_| android)
+                && wait_for_android_top(pkg, ANDROID_TOP_WAIT)
+            {
+                std::thread::sleep(ANDROID_FIRST_FRAME);
             }
             // A blank frame first: what the window shows when it goes
             // behind the app is what flashes up when it next comes over it.
@@ -2946,10 +2963,11 @@ impl ShellApp {
             icon_path: None,
             source: AppSource::Configured,
         };
-        if self.mgr().is_running(&entry.id) {
-            self.mgr().close(&entry.id);
-            std::thread::sleep(Duration::from_millis(300));
-        }
+        // CatTube open already (another video, or its own list): it closes
+        // and opens again with what was picked. The new one starts at once,
+        // the old one finishes closing on its own (it was found "already
+        // running" while it closed, and nothing opened).
+        self.mgr().close(&entry.id);
         let launched = self.mgr().launch(&entry);
         match launched {
             Ok(_) => {
@@ -4359,8 +4377,11 @@ fn refit_full_screen(
     false
 }
 
-/// How long to wait for Android to report the opened app in front.
-const ANDROID_TOP_WAIT: Duration = Duration::from_secs(6);
+/// How long to wait for Android to report the opened app in front (a
+/// cold start of a big app such as YouTube takes several seconds).
+const ANDROID_TOP_WAIT: Duration = Duration::from_secs(12);
+/// Then how long the app gets to draw before CatosTV switches to it.
+const ANDROID_FIRST_FRAME: Duration = Duration::from_millis(500);
 
 /// Wait until `android-watch` reports `pkg` as Android's front app.
 fn wait_for_android_top(pkg: &str, budget: Duration) -> bool {

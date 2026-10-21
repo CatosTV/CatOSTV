@@ -177,6 +177,12 @@ fn over_android() -> bool {
     uinput::front() == Front::Android
 }
 
+/// One of CatosTV's own remote apps (CatTube, the players) is in front: a
+/// controller presses keys in it (`gamepad::REMOTE_APPS`).
+fn remote_app_in_front() -> bool {
+    uinput::front() == Front::App && gamepad::keys_on()
+}
+
 // ------------------------------------------------------------ mouse mode
 
 /// How often the mouse mode file is looked at.
@@ -368,6 +374,16 @@ impl Mouse {
                 "Mouse pointer off",
                 "Turn it on again in the Control Center.",
             );
+        }
+    }
+
+    /// Press a key for a controller in one of CatosTV's remote apps.
+    fn tap(&mut self, code: u16) {
+        if !self.devices() {
+            return;
+        }
+        if let Some(k) = self.keys.as_mut() {
+            let _ = k.tap(code);
         }
     }
 
@@ -718,8 +734,12 @@ fn run(watcher: &mut Watcher, dry_run: bool) -> ! {
                             pad(out, dry_run);
                         }
                     } else {
+                        let keys = remote_app_in_front();
                         for out in outs {
-                            pad(out, dry_run);
+                            match gamepad::key_for(out).filter(|_| keys && !dry_run) {
+                                Some(code) => mouse.tap(code),
+                                None => pad(out, dry_run),
+                            }
                         }
                     }
                 }
@@ -754,8 +774,12 @@ fn run(watcher: &mut Watcher, dry_run: bool) -> ! {
         // A held direction never acts over an Android app, nor in mouse
         // mode (it moves the pointer there).
         if !repeats.is_empty() && !over_android() && !mouse.on {
+            let keys = remote_app_in_front();
             for out in repeats {
-                pad(out, dry_run);
+                match gamepad::key_for(out).filter(|_| keys && !dry_run) {
+                    Some(code) => mouse.tap(code),
+                    None => pad(out, dry_run),
+                }
             }
         }
     }

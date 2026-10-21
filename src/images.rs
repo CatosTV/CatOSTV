@@ -39,6 +39,14 @@ impl Images {
         Self::default()
     }
 
+    /// Width and height of a picture already loaded.
+    pub fn size(&self, path: &str) -> Option<[usize; 2]> {
+        self.cache
+            .borrow()
+            .get(path)
+            .and_then(|t| t.as_ref().map(|t| t.size()))
+    }
+
     /// Texture for a PNG (or SVG) file, loading it on first use. An SVG
     /// returns `None` until its PNG has been rendered in the background.
     pub fn get(&self, ctx: &egui::Context, path: &str) -> Option<egui::TextureId> {

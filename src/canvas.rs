@@ -629,6 +629,20 @@ impl<H: Copy> Canvas<H> {
     /// Draw an image with rounded corners (thumbnails, artwork): a textured
     /// triangle fan over the rounded outline, UVs from position.
     pub fn image_rounded(&self, rect: Rect, radius: f32, tex: egui::TextureId, tint: Color32) {
+        let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        self.image_rounded_uv(rect, radius, tex, full, tint);
+    }
+
+    /// [`Canvas::image_rounded`] showing only the `crop` part of the
+    /// picture (0..1 on both axes).
+    pub fn image_rounded_uv(
+        &self,
+        rect: Rect,
+        radius: f32,
+        tex: egui::TextureId,
+        crop: Rect,
+        tint: Color32,
+    ) {
         use std::f32::consts::FRAC_PI_2;
         let r = (radius * self.s)
             .min(rect.width() / 2.0)
@@ -641,8 +655,8 @@ impl<H: Copy> Canvas<H> {
         ];
         let uv = |p: Pos2| {
             pos2(
-                (p.x - rect.min.x) / rect.width().max(1.0),
-                (p.y - rect.min.y) / rect.height().max(1.0),
+                crop.min.x + crop.width() * (p.x - rect.min.x) / rect.width().max(1.0),
+                crop.min.y + crop.height() * (p.y - rect.min.y) / rect.height().max(1.0),
             )
         };
         let mut mesh = Mesh::with_texture(tex);

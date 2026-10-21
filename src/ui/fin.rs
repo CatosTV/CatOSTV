@@ -33,7 +33,44 @@ pub struct FinPics<'a> {
     pub wanted: &'a RefCell<Vec<String>>,
 }
 
+/// The part of a picture that fills a card of `card_w` × `card_h`
+/// without squeezing it: the middle, cut to the card's shape (a 4:3
+/// YouTube picture in a 16:9 card loses its black bars). Pictures already
+/// close to the card's shape are shown whole.
+pub fn cover(size: Option<[usize; 2]>, card_w: f32, card_h: f32) -> eframe::egui::Rect {
+    use eframe::egui::{Rect, pos2};
+    let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    let Some([w, h]) = size.filter(|[w, h]| *w > 0 && *h > 0) else {
+        return full;
+    };
+    if card_w <= 0.0 || card_h <= 0.0 {
+        return full;
+    }
+    let pic = w as f32 / h as f32;
+    let card = card_w / card_h;
+    if (pic / card - 1.0).abs() < 0.03 {
+        full
+    } else if pic < card {
+        // Taller than the card: keep the middle band.
+        let keep = pic / card;
+        let m = (1.0 - keep) / 2.0;
+        Rect::from_min_max(pos2(0.0, m), pos2(1.0, 1.0 - m))
+    } else {
+        let keep = card / pic;
+        let m = (1.0 - keep) / 2.0;
+        Rect::from_min_max(pos2(m, 0.0), pos2(1.0 - m, 1.0))
+    }
+}
+
 impl FinPics<'_> {
+    /// How big a picture is, once loaded.
+    pub fn size(&self, url: &str) -> Option<[usize; 2]> {
+        match self.cache.get(url) {
+            Some(Some(path)) => self.images.size(path),
+            _ => None,
+        }
+    }
+
     pub fn get(&self, c: &C, url: &str) -> Option<TextureId> {
         match self.cache.get(url) {
             Some(Some(path)) => self.images.get(&c.ctx, path),
@@ -175,10 +212,11 @@ fn card(
     c.fill(rect, radius, theme::rgba(theme::BG_TOP, 210));
     if let Some(tex) = pics.get(c, url) {
         let k = c.appear(("fin-pic", url), 0.35);
-        c.image_rounded(
+        c.image_rounded_uv(
             rect,
             radius,
             tex,
+            cover(pics.size(url), w, h),
             Color32::from_white_alpha((255.0 * k) as u8),
         );
     } else {
@@ -1639,4 +1677,25 @@ pub fn home_backdrop(c: &C, pics: &FinPics, server: &str, it: &Item) {
 pub fn home_hero(c: &C, it: &Item) {
     let k = 1.0 - (1.0 - c.appear(("home-hero", &it.id), 0.3)).powi(3);
     hero_text(c, it, 64.0, 104.0, 700.0, k);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cover;
+
+    #[test]
+    fn pictures_fill_their_card_without_bars() {
+        // A 4:3 YouTube picture in a 16:9 card: the middle band.
+        let r = cover(Some([480, 360]), 208.0, 117.0);
+        assert!((r.min.y - 0.125).abs() < 0.01 && (r.max.y - 0.875).abs() < 0.01);
+        assert_eq!((r.min.x, r.max.x), (0.0, 1.0));
+        // A wide picture in a poster card: the middle, left to right.
+        let r = cover(Some([1920, 1080]), 160.0, 240.0);
+        assert!(r.min.x > 0.3 && r.max.x < 0.7);
+        // The right shape already, or unknown: whole.
+        for (s, w, h) in [(Some([1280, 720]), 208.0, 117.0), (None, 208.0, 117.0)] {
+            let r = cover(s, w, h);
+            assert_eq!((r.min.x, r.min.y, r.max.x, r.max.y), (0.0, 0.0, 1.0, 1.0));
+        }
+    }
 }

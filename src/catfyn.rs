@@ -318,7 +318,19 @@ fn plex_headers_for(url: &str) -> Option<std::path::PathBuf> {
 /// A softened copy of a picture: scaled down and blurred (YouTube's
 /// thumbnails behind a focused video; Jellyfin and Plex blur on the server).
 pub fn blur_into(src: &Path, out: &Path) -> Option<()> {
-    let img = image::load_from_memory(&std::fs::read(src).ok()?).ok()?;
+    blur_cropped(src, out, false)
+}
+
+/// [`blur_into`]; `letterboxed`: a YouTube picture, 4:3 with the video
+/// between black bars, whose middle 16:9 is kept (the bars would show as
+/// dark bands across the screen).
+fn blur_cropped(src: &Path, out: &Path, letterboxed: bool) -> Option<()> {
+    let mut img = image::load_from_memory(&std::fs::read(src).ok()?).ok()?;
+    let (w, h) = (img.width(), img.height());
+    if letterboxed && w > 0 && h * 16 > w * 9 + w / 10 {
+        let keep = w * 9 / 16;
+        img = img.crop_imm(0, (h - keep) / 2, w, keep);
+    }
     let small = img.resize(480, 270, image::imageops::FilterType::Triangle);
     let soft = image::imageops::blur(&small.to_rgba8(), 7.0);
     soft.save_with_format(out, image::ImageFormat::Png).ok()
@@ -333,7 +345,11 @@ pub fn fetch_image(home: &Path, url: &str) -> Option<String> {
             return Some(path.to_string_lossy().into_owned());
         }
         let src = fetch_image(home, base)?;
-        blur_into(Path::new(&src), &path)?;
+        blur_cropped(
+            Path::new(&src),
+            &path,
+            base.starts_with("https://i.ytimg.com/"),
+        )?;
         return Some(path.to_string_lossy().into_owned());
     }
     let path = jf::image_cache_path(home, url);

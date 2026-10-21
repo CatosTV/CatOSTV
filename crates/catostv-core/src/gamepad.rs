@@ -28,6 +28,46 @@
 //! The stick's range comes from the device (`catostv-inputd` asks the kernel)
 //! and is turned into -1 / 0 / 1 before it reaches this module.
 
+/// CatosTV's own apps made for a remote, which do not read controllers
+/// themselves: while one is in front, a controller presses its keys
+/// (arrows, OK = Enter, Back = Esc, Menu = F2), like the remote. Games and
+/// other apps get the controller as it is.
+pub const REMOTE_APPS: [&str; 3] = ["cattube", "catfyn-player", "catostv-files-player"];
+
+/// `$XDG_RUNTIME_DIR/catostv-pad-keys`: `on` while one of [`REMOTE_APPS`]
+/// is in front (written by the shell, read by `catostv-inputd`).
+pub fn keys_path() -> std::path::PathBuf {
+    crate::env::runtime_dir().join("catostv-pad-keys")
+}
+
+pub fn keys_on() -> bool {
+    std::fs::read_to_string(keys_path()).is_ok_and(|s| s.trim() == "on")
+}
+
+pub fn set_keys(on: bool) {
+    let path = keys_path();
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, if on { "on\n" } else { "off\n" }).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// The key a controller presses in one of [`REMOTE_APPS`]; `None` for
+/// what stays CatosTV's (Home, the Control Center).
+pub fn key_for(out: PadOut) -> Option<u16> {
+    use crate::uinput::{KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_F2, KEY_LEFT, KEY_RIGHT, KEY_UP};
+    Some(match out {
+        PadOut::Up => KEY_UP,
+        PadOut::Down => KEY_DOWN,
+        PadOut::Left => KEY_LEFT,
+        PadOut::Right => KEY_RIGHT,
+        PadOut::Ok => KEY_ENTER,
+        PadOut::Back => KEY_ESC,
+        PadOut::Menu => KEY_F2,
+        PadOut::Quick | PadOut::Home => return None,
+    })
+}
+
 /// `EV_KEY` / `EV_ABS` event types.
 pub const EV_KEY: u16 = 0x01;
 pub const EV_ABS: u16 = 0x03;
@@ -380,6 +420,19 @@ impl PadMapper {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_controller_presses_remote_keys_in_catostvs_own_apps() {
+        use crate::uinput::{KEY_ENTER, KEY_ESC, KEY_F2, KEY_UP};
+        assert_eq!(key_for(PadOut::Up), Some(KEY_UP));
+        assert_eq!(key_for(PadOut::Ok), Some(KEY_ENTER));
+        assert_eq!(key_for(PadOut::Back), Some(KEY_ESC));
+        assert_eq!(key_for(PadOut::Menu), Some(KEY_F2));
+        // Home and the Control Center stay CatosTV's.
+        assert_eq!(key_for(PadOut::Home), None);
+        assert_eq!(key_for(PadOut::Quick), None);
+        assert!(REMOTE_APPS.contains(&"cattube"));
+    }
 
     #[test]
     fn only_guide_acts_over_android() {

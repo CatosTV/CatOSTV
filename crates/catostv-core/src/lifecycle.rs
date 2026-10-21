@@ -100,6 +100,9 @@ struct Tracked {
     leader_status: Option<ExitStatus>,
     closing_since: Option<Instant>,
     killed: bool,
+    /// Replaced by a new instance while it was closing: its end is not
+    /// reported under the app's id (that is the new instance now).
+    superseded: bool,
 }
 
 /// Tracks running apps. Call [`AppManager::poll`] regularly (the shell does
@@ -206,8 +209,21 @@ impl AppManager {
     }
 
     pub fn launch(&mut self, app: &AppEntry) -> Result<LaunchResult> {
-        if app.singleton && self.tracked.contains_key(&app.id) {
+        // Still running: bring it forward. Still closing (asked to close a
+        // moment ago, to start it again with something else): start the new
+        // one now and let the old one finish closing on its own.
+        if app.singleton
+            && self
+                .tracked
+                .get(&app.id)
+                .is_some_and(|t| t.closing_since.is_none())
+        {
             return Ok(LaunchResult::AlreadyRunning);
+        }
+        if let Some(t) = self.tracked.get_mut(&app.id)
+            && t.closing_since.is_some()
+        {
+            t.superseded = true;
         }
         let argv = app.argv()?;
         if crate::process::find_executable(&argv[0]).is_none() {
@@ -238,6 +254,7 @@ impl AppManager {
                 leader_status: None,
                 closing_since: None,
                 killed: false,
+                superseded: false,
             },
         );
         self.write_record();
@@ -297,6 +314,10 @@ impl AppManager {
         }
         for key in finished {
             let t = self.tracked.remove(&key).expect("key collected above");
+            if t.superseded {
+                // The app's id belongs to the instance that replaced it.
+                continue;
+            }
             let id = key.split('#').next().unwrap_or(&key).to_string();
             let event = if t.closing_since.is_some() {
                 LifecycleEvent::Closed { id }
@@ -408,6 +429,28 @@ mod tests {
             }]
         );
         assert!(!m.close("sleeper"));
+    }
+
+    #[test]
+    fn a_closing_app_can_be_started_again_at_once() {
+        // CatosTV Home: a video picked while CatTube is open closes it and
+        // starts it again with that video, right away.
+        let mut m = AppManager::new(None);
+        let a = app("tube", "sleep 30");
+        m.launch(&a).unwrap();
+        assert!(m.close("tube"));
+        assert_eq!(m.launch(&a).unwrap(), LaunchResult::Started);
+        assert!(m.is_running("tube"), "the new one");
+        // The old one ends without a word about "tube" (the new one runs).
+        std::thread::sleep(Duration::from_millis(400));
+        let ev = poll_until(&mut m, 2);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert!(m.is_running("tube"));
+        assert!(m.close("tube"));
+        assert_eq!(
+            poll_until(&mut m, 5),
+            vec![LifecycleEvent::Closed { id: "tube".into() }]
+        );
     }
 
     #[test]
