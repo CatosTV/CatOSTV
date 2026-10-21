@@ -291,7 +291,13 @@ fn settings_sliders_choices_and_soon_rows() {
     let f = Fixture::new();
     let mut s = Shell::new();
     open_settings(&mut s, &f, Category::Sound);
-    assert_eq!(press(&mut s, &f, &[Left]), vec![Effect::VolumeStep(-5)]);
+    // Arriving on a slider changes nothing; Left there goes back out.
+    assert_eq!(press(&mut s, &f, &[Right]), vec![]);
+    press(&mut s, &f, &[Left]);
+    assert!(!s.settings_rows_focus);
+    press(&mut s, &f, &[Right]);
+    // OK starts changing it, Left/Right change it.
+    assert_eq!(press(&mut s, &f, &[Ok, Left]), vec![Effect::VolumeStep(-5)]);
     assert_eq!(press(&mut s, &f, &[Right]), vec![Effect::VolumeStep(5)]);
     assert_eq!(press(&mut s, &f, &[Down, Ok]), vec![Effect::ToggleMute]);
     press(&mut s, &f, &[Back]);
@@ -299,14 +305,14 @@ fn settings_sliders_choices_and_soon_rows() {
     press(&mut s, &f, &[Back]);
     assert_eq!(s.page, Page::Home);
 
-    // Accent: Left/Right move the ring, OK picks; nothing else moves.
+    // Accent: OK, then Left/Right move the ring, OK picks.
     open_settings(&mut s, &f, Category::Customization);
-    assert_eq!(press(&mut s, &f, &[Right]), vec![]);
+    assert_eq!(press(&mut s, &f, &[Ok, Right]), vec![]);
     assert_eq!(
         press(&mut s, &f, &[Ok]),
         vec![Effect::SetAccent("periwinkle".into())]
     );
-    // OK alone doesn't change the colour (see accent_colour_slides_then_ok_picks).
+    // OK alone only starts choosing (see accent_colour_slides_then_ok_picks).
     assert_eq!(press(&mut s, &f, &[Ok]), vec![]);
     assert!(s.settings_rows_focus);
 
@@ -314,15 +320,15 @@ fn settings_sliders_choices_and_soon_rows() {
     open_settings(&mut s, &f, Category::Updates);
     assert_eq!(press(&mut s, &f, &[Down, Ok]), vec![Effect::CheckUpdates]);
 
-    // Customization: clock format flips with Left/Right/OK, the Home
-    // background cycles.
+    // Customization: OK, then Left/Right change the clock format and the
+    // Home background.
     open_settings(&mut s, &f, Category::Customization);
     assert_eq!(
-        press(&mut s, &f, &[Down, Right]),
+        press(&mut s, &f, &[Down, Ok, Right]),
         vec![Effect::SetClock24(false)]
     );
     assert_eq!(
-        press(&mut s, &f, &[Down, Ok]),
+        press(&mut s, &f, &[Down, Ok, Right]),
         vec![Effect::SetHomeBackground("photos".into())]
     );
 }
@@ -757,7 +763,7 @@ fn display_scale_and_picture_fit() {
     open_settings(&mut s, &f, Category::Display);
     press(&mut s, &f, &[Down]); // Interface size
     assert_eq!(
-        press(&mut s, &f, &[Right]),
+        press(&mut s, &f, &[Ok, Right]),
         vec![Effect::SetScale {
             output: "HDMI-A-1".into(),
             percent: 125
@@ -776,7 +782,10 @@ fn display_scale_and_picture_fit() {
         }]
     );
     press(&mut s, &f, &[Down]); // Picture fit
-    assert_eq!(press(&mut s, &f, &[Right]), vec![Effect::SetSafeArea(1)]);
+    assert_eq!(
+        press(&mut s, &f, &[Ok, Right]),
+        vec![Effect::SetSafeArea(1)]
+    );
     f.display.safe_area_pct = crate::display::MAX_SAFE_AREA_PCT;
     assert_eq!(press(&mut s, &f, &[Right]), vec![]);
 }
@@ -1077,7 +1086,7 @@ fn controller_settings_effects() {
     open_settings(&mut s, &f, Category::Keys);
     // Pair (first) → the controller's layout → Use controllers.
     assert_eq!(
-        press(&mut s, &f, &[Down, Right]),
+        press(&mut s, &f, &[Down, Ok, Right]),
         vec![Effect::SetPadLayout {
             device: "8BitDo Pro 2".into(),
             nintendo: true
@@ -1503,8 +1512,8 @@ fn a_device_that_lost_its_pairing_is_paired_again() {
 
 #[test]
 fn accent_colour_slides_then_ok_picks() {
-    // On the accent row Left/Right move a ring over the swatches without
-    // changing anything; OK picks; moving off the row forgets the ring.
+    // On the accent row OK starts choosing, Left/Right move a ring over the
+    // swatches without changing anything, OK picks, Back forgets the ring.
     let f = Fixture::new();
     let mut s = Shell::new();
     open_settings(&mut s, &f, Category::Customization);
@@ -1514,12 +1523,19 @@ fn accent_colour_slides_then_ok_picks() {
         .unwrap();
     s.settings_row = at;
     let original = f.ctx().prefs.accent.clone();
-    assert_eq!(press(&mut s, &f, &[Right, Right]), vec![]);
+    assert_eq!(
+        press(&mut s, &f, &[Right]),
+        vec![],
+        "arriving changes nothing"
+    );
+    assert!(s.accent_pick.is_none());
+    assert_eq!(press(&mut s, &f, &[Ok, Right, Right]), vec![]);
     let two = crate::prefs::cycle_accent(&original, 2).to_string();
     assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::SetAccent(two)]);
     assert!(s.overlay().is_none());
-    // OK with no ring moved does nothing (it used to jump a colour).
-    assert_eq!(press(&mut s, &f, &[Ok]), vec![]);
+    // OK and OK again with no ring moved changes nothing.
+    assert_eq!(press(&mut s, &f, &[Ok, Ok]), vec![]);
+    press(&mut s, &f, &[Ok]);
     press(&mut s, &f, &[Left]);
     assert!(s.accent_pick.is_some());
     press(&mut s, &f, &[Back]);
@@ -1657,7 +1673,7 @@ fn screensaver_options_grey_out_while_it_is_off() {
     open_settings(&mut s, &f, Category::Customization);
     press(&mut s, &f, &[Down, Down, Down, Down]);
     assert_eq!(
-        press(&mut s, &f, &[Right]),
+        press(&mut s, &f, &[Ok, Right]),
         vec![Effect::SetSaverPictures("photos".into())]
     );
     f.prefs.screensaver = false;
@@ -1666,4 +1682,34 @@ fn screensaver_options_grey_out_while_it_is_off() {
     // Still passed over to the next row.
     press(&mut s, &f, &[Down]);
     assert_eq!(s.settings_row, 5);
+}
+
+#[test]
+fn settings_change_only_after_ok() {
+    let f = Fixture::new();
+    let mut s = Shell::new();
+    open_settings(&mut s, &f, Category::Customization);
+    let clock = crate::settings::rows(Category::Customization, &f.ctx())
+        .iter()
+        .position(|r| r.id == RowId::ClockFormat)
+        .unwrap();
+    s.settings_row = clock;
+    // Left/Right on a row you only arrived at move, never change it.
+    assert_eq!(press(&mut s, &f, &[Right]), vec![]);
+    press(&mut s, &f, &[Left]);
+    assert!(!s.settings_rows_focus);
+    press(&mut s, &f, &[Right]);
+    // OK starts, Back finishes without leaving the list.
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![]);
+    assert!(s.settings_editing.is_some());
+    assert_eq!(press(&mut s, &f, &[Right]), vec![Effect::SetClock24(false)]);
+    press(&mut s, &f, &[Back]);
+    assert!(s.settings_editing.is_none());
+    assert!(s.settings_rows_focus);
+    // A mouse click steps a choice straight on.
+    assert_eq!(
+        s.pointer(Target::SettingsRow(clock), true, &f.ctx()),
+        vec![Effect::SetClock24(false)]
+    );
+    assert!(s.settings_editing.is_none());
 }

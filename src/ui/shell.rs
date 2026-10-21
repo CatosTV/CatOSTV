@@ -1709,17 +1709,23 @@ fn category_status(cat: Category, ctx: &ShellContext) -> Option<(String, Option<
 }
 
 /// Settings' category list: row pitch and height (design units).
-const CAT_STEP: f32 = 49.0;
-const CAT_H: f32 = 43.0;
+const CAT_STEP: f32 = 47.0;
+const CAT_H: f32 = 42.0;
+/// Where the category list starts: under the "Settings" title, level with
+/// the first row on the right.
+const CAT_TOP: f32 = 114.0;
 
 fn draw_settings(c: &C, v: &ShellView) {
     let s = v.shell;
     let no_overlay = s.overlay().is_none();
-    widgets::title(c, 64.0, 40.0, "Settings", 30.0);
+    // Two panels of the same glass, side by side and the same height; the
+    // focus pill alone says which side you are on.
+    c.glass(c.r(32.0, 32.0, 300.0, 656.0), 32.0);
+    widgets::title(c, 60.0, 60.0, "Settings", 28.0);
     for (i, cat) in Category::ALL.iter().enumerate() {
-        // All 12 categories (Debug included) end at 678, inside the
-        // right panel's 688 edge: 49 px apart.
-        let rect = c.r(52.0, 96.0 + i as f32 * CAT_STEP, 268.0, CAT_H);
+        // All 12 categories (Debug included) end at 673, inside the
+        // panels' 688 edge.
+        let rect = c.r(44.0, CAT_TOP + i as f32 * CAT_STEP, 276.0, CAT_H);
         let selected = s.settings_cat == i;
         let t = focus_t(
             c,
@@ -1733,11 +1739,11 @@ fn draw_settings(c: &C, v: &ShellView) {
         }
         widgets::focus_pill(c, rect, CAT_H / 2.0, t);
         c.hit(rect, Target::SettingsCat(i));
-        let y = 96.0 + CAT_H / 2.0 + i as f32 * CAT_STEP;
+        let y = CAT_TOP + CAT_H / 2.0 + i as f32 * CAT_STEP;
         icons::draw(
             c,
             cat.icon(),
-            82.0,
+            72.0,
             y,
             18.0,
             if selected {
@@ -1747,7 +1753,7 @@ fn draw_settings(c: &C, v: &ShellView) {
             },
         );
         c.text(
-            108.0,
+            98.0,
             y,
             Align2::LEFT_CENTER,
             cat.title(),
@@ -1765,8 +1771,6 @@ fn draw_settings(c: &C, v: &ShellView) {
 
     let right = c.r(344.0, 32.0, 884.0, 656.0);
     c.glass(right, 32.0);
-    // Which side has the focus: that side gets a faint accent edge, the
-    // other one steps back (dimmed further down).
     let rows_on = c.anim(
         ("settings-rows-focus", s.current_category().title()),
         if no_overlay && s.settings_rows_focus {
@@ -1774,10 +1778,6 @@ fn draw_settings(c: &C, v: &ShellView) {
         } else {
             0.0
         },
-    );
-    let side = c.anim(
-        "settings-side",
-        if s.settings_rows_focus { 1.0 } else { 0.0 },
     );
     let cat = s.current_category();
     widgets::title(c, 384.0, 60.0, cat.title(), 28.0);
@@ -1824,6 +1824,29 @@ fn draw_settings(c: &C, v: &ShellView) {
         );
         let rect = list.r(368.0, y, 836.0, row_h);
         let accent_row = row.id == settings::RowId::Accent;
+        // Being changed with Left/Right (after OK): arrows round the value,
+        // an accent edge and a line saying how to finish.
+        let editing = no_overlay
+            && s.settings_rows_focus
+            && s.settings_row == k
+            && s.settings_editing == Some((s.settings_cat, k));
+        let kind = match row.kind {
+            _ if accent_row => RowKind::Info,
+            // A choice reads like any row you open until you do.
+            RowKind::Choice if !editing => RowKind::Action,
+            k => k,
+        };
+        let focused = no_overlay && s.settings_rows_focus && s.settings_row == k;
+        let slides = accent_row || matches!(row.kind, RowKind::Slider(_));
+        let subtitle = match () {
+            // Nothing on a slider or the colours says OK opens it.
+            _ if !editing && focused && slides && !row.disabled && row.subtitle.is_empty() => {
+                "OK to change"
+            }
+            _ if !editing => row.subtitle.as_str(),
+            _ if accent_row => "Left and Right to pick a colour, OK to use it",
+            _ => "Left and Right to change, OK when done",
+        };
         // Apps show their own icon.
         let app = match row.id {
             settings::RowId::App(i) => v.ctx.apps.get(i),
@@ -1834,9 +1857,9 @@ fn draw_settings(c: &C, v: &ShellView) {
             rect,
             &ListRow {
                 title: &row.title,
-                subtitle: &row.subtitle,
+                subtitle,
                 value: if accent_row { "" } else { &row.value },
-                kind: Some(if accent_row { RowKind::Info } else { row.kind }),
+                kind: Some(kind),
                 icon: if app.is_some() {
                     Some("")
                 } else {
@@ -1867,12 +1890,16 @@ fn draw_settings(c: &C, v: &ShellView) {
                 v.now,
             );
         }
+        if editing {
+            list.outline(
+                rect,
+                widgets::ROW_RADIUS,
+                1.5,
+                theme::rgba(theme::accent_rgb(), 200),
+            );
+        }
         if accent_row {
-            let pick = if s.settings_rows_focus && s.settings_row == k {
-                s.accent_pick
-            } else {
-                None
-            };
+            let pick = if editing { s.accent_pick } else { None };
             draw_accent_swatches(&list, v, 1180.0, y + row_h / 2.0, pick);
         }
         if y > top - row_h * 0.5 && y < top + visible as f32 * step - row_h * 0.5 {
@@ -1918,37 +1945,6 @@ fn draw_settings(c: &C, v: &ShellView) {
             }
         }
     }
-    // The side without the focus steps back. The same 8 px margin below
-    // the last category as above the first (686, inside the right panel's
-    // 688 edge).
-    let cats = c.r(
-        40.0,
-        88.0,
-        292.0,
-        (Category::ALL.len() - 1) as f32 * CAT_STEP + CAT_H + 16.0,
-    );
-    if side > 0.01 {
-        c.fill(cats, 24.0, theme::rgba(theme::BG_TOP, (120.0 * side) as u8));
-    }
-    if side < 0.99 {
-        c.fill(
-            right,
-            32.0,
-            theme::rgba(theme::BG_TOP, (120.0 * (1.0 - side)) as u8),
-        );
-    }
-    let edge = |r: Rect, radius: f32, k: f32| {
-        if k > 0.01 {
-            c.outline(
-                r,
-                radius,
-                1.5,
-                theme::rgba(theme::accent_rgb(), (110.0 * k) as u8),
-            );
-        }
-    };
-    edge(right, 32.0, side);
-    edge(cats, 24.0, 1.0 - side);
 }
 
 /// The accent swatches: the current colour has a check; `pick` (Left/Right

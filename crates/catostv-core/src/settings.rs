@@ -283,9 +283,10 @@ pub enum RowId {
 pub enum RowKind {
     /// On/off; OK toggles. `None` = state unknown.
     Toggle(Option<bool>),
-    /// 0–100; Left/Right adjust while the row is focused.
+    /// 0–100; OK, then Left/Right adjust (OK or Back to finish).
     Slider(u8),
-    /// A value picked with Left/Right (accent colour, interface size).
+    /// A value picked with Left/Right after OK (interface size, clock...);
+    /// a mouse click steps it on.
     Choice,
     /// OK does something (opens a panel, restarts, ...).
     Action,
