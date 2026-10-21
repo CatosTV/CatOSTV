@@ -238,8 +238,11 @@ fn spawn_app_watcher(
     // 60 ms after `Watch::blank` is set (leaving an app that was still
     // loading showed Android's home screen until the 1.5 s were over).
     const BEHIND_APP_AFTER: Duration = Duration::from_millis(200);
-    // How often the app in front is captured for Recents.
-    const THUMB_EVERY: Duration = Duration::from_secs(4);
+    // The app in front is captured for Recents a moment after it comes to
+    // the front, then now and then while it stays (each capture is a 4K
+    // screenshot: every 4 s kept a core busy and the fans going).
+    const THUMB_FIRST: Duration = Duration::from_secs(3);
+    const THUMB_EVERY: Duration = Duration::from_secs(30);
     let run = move || {
         let mut front = None;
         // The app in front, and the window of it that was in front last.
@@ -271,6 +274,8 @@ fn spawn_app_watcher(
         let mut apps_stamp: Option<String> = None;
         let mut last_top: Option<String> = None;
         let mut last_thumb: Option<Instant> = None;
+        // The app the captures are for, and since when it is in front.
+        let mut thumb_app: Option<(String, Instant)> = None;
         let mut generation: HashMap<String, u32> = HashMap::new();
         // A capture is under way (its own thread: at 4K it takes about a
         // second, and this loop must notice leaving an app meanwhile).
@@ -581,8 +586,19 @@ fn spawn_app_watcher(
                 fg
             };
             let Some(id) = id else { continue };
+            if !hidden {
+                thumb_app = None;
+            } else if thumb_app.as_ref().is_none_or(|(a, _)| *a != id) {
+                // A different app in front: its first capture comes soon.
+                thumb_app = Some((id.clone(), Instant::now()));
+                last_thumb = None;
+            }
+            let settled = thumb_app
+                .as_ref()
+                .is_some_and(|(_, since)| since.elapsed() >= THUMB_FIRST);
             if !appliance
                 || !hidden
+                || !settled
                 || last_thumb.is_some_and(|t| t.elapsed() < THUMB_EVERY)
                 || capturing.load(std::sync::atomic::Ordering::Acquire)
             {
