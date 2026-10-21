@@ -3998,8 +3998,16 @@ impl eframe::App for ShellApp {
             // Up/Down. Moving the mouse no longer moves the focus: resting
             // the pointer over a list made it scroll by itself.
             // Hit rects are from the previous frame.
+            // The pointer moving onto something focuses it (a tab shows its
+            // page), as in the rest of CatosTV a click is OK on it.
             if let Some(pos) = p.moved_to {
-                self.hover = view::hit_test(&self.hits, pos);
+                let over = view::hit_test(&self.hits, pos);
+                if over != self.hover
+                    && let Some(t) = over
+                {
+                    effects.extend(self.shell.pointer(t, false, &sctx));
+                }
+                self.hover = over;
             }
             if let Some(pos) = p.click
                 && let Some(t) = view::hit_test(&self.hits, pos)
