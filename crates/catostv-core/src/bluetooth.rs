@@ -381,16 +381,61 @@ pub fn trust(r: &mut dyn Runner, mac: &str) -> Result<()> {
     )
 }
 
+/// How long [`connect`] keeps watching a connection that is still being
+/// made after `bluetoothctl connect` gave up or said "InProgress".
+const CONNECT_WAIT_SECS: u32 = 25;
+
 /// `bluetoothctl connect MAC`.
+///
+/// Earbuds just out of their case can take longer than one try, and a try
+/// while another is still going (the device reconnecting by itself, or an
+/// earlier press) fails with "InProgress br-connection-busy". Both are
+/// waited out by watching the device, instead of failing while it is in
+/// fact connecting.
 pub fn connect(r: &mut dyn Runner, mac: &str) -> Result<()> {
-    device_cmd(
-        r,
-        "Connecting",
-        "connect",
-        mac,
-        CONNECT_TIMEOUT,
-        &["Connection successful", "AlreadyConnected"],
+    let mac = check_mac(mac)?;
+    let out = r.run(
+        &Cmd::new("bluetoothctl")
+            .args(["connect", &mac])
+            .timeout(CONNECT_TIMEOUT),
+    )?;
+    let text = strip_ansi(&format!("{}\n{}", out.stdout, out.stderr));
+    if text.contains("Connection successful")
+        || text.contains("AlreadyConnected")
+        || (out.success() && !text.contains("Failed") && !text.contains("not available"))
+    {
+        return Ok(());
+    }
+    let still_going =
+        out.timed_out || text.contains("InProgress") || text.contains("br-connection-busy");
+    if still_going && wait_connected(r, &mac) {
+        return Ok(());
+    }
+    if still_going
+        || text.contains("Host is down")
+        || text.contains("page-timeout")
+        || text.contains("Page Timeout")
+    {
+        return Err(Error::msg(
+            "The device didn't answer. Take it out of its case, or disconnect it from your phone, and try again.",
+        ));
+    }
+    Err(friendly_failure("Connecting", &text, &out))
+}
+
+/// Watch `mac` for up to [`CONNECT_WAIT_SECS`]; true once it is connected.
+fn wait_connected(r: &mut dyn Runner, mac: &str) -> bool {
+    // `mac` passed check_mac: only hex digits and colons.
+    let script = format!(
+        "for i in $(seq {CONNECT_WAIT_SECS}); do \
+         bluetoothctl info {mac} | grep -q 'Connected: yes' && exit 0; sleep 1; done; exit 1"
+    );
+    r.run(
+        &Cmd::new("sh")
+            .args(["-c", &script])
+            .timeout(Duration::from_secs(u64::from(CONNECT_WAIT_SECS) + 10)),
     )
+    .is_ok_and(|o| o.success())
 }
 
 /// `bluetoothctl disconnect MAC`.
@@ -821,16 +866,19 @@ mod tests {
         let e = pair(&mut r, "AA:BB:CC:DD:EE:FF").unwrap_err();
         assert!(e.message().contains("Scan again"));
 
+        // Ran out of time and never connected while watched: the reason
+        // says what usually holds earbuds back.
         let mut r = FakeRunner::new();
         r.push(Output {
             timed_out: true,
             ..Output::default()
         });
+        r.push(Output::failed(1, ""));
         assert!(
             connect(&mut r, "AA:BB:CC:DD:EE:FF")
                 .unwrap_err()
                 .message()
-                .contains("timed out")
+                .contains("case")
         );
 
         let mut r = FakeRunner::new();
@@ -842,6 +890,38 @@ mod tests {
             connect(&mut r, "AA:BB:CC:DD:EE:FF").unwrap_err().message(),
             "Connecting failed (Failed to connect: org.bluez.Error.Failed br-connection-unknown)"
         );
+    }
+
+    #[test]
+    fn connect_waits_for_one_still_going() {
+        // "InProgress": another connection is on its way; it is watched
+        // until the device shows as connected.
+        let mut r = FakeRunner::new();
+        r.push(Output::failed(
+            1,
+            "Failed to connect: org.bluez.Error.InProgress br-connection-busy",
+        ));
+        r.push(Output::ok(""));
+        connect(&mut r, "AA:BB:CC:DD:EE:FF").unwrap();
+        assert_eq!(r.seen.len(), 2);
+        assert_eq!(r.seen[1].program, "sh");
+        // The same after bluetoothctl gave up first.
+        let mut r = FakeRunner::new();
+        r.push(Output {
+            timed_out: true,
+            ..Output::default()
+        });
+        r.push(Output::ok(""));
+        connect(&mut r, "AA:BB:CC:DD:EE:FF").unwrap();
+        // A device that isn't listening fails at once, with a reason.
+        let mut r = FakeRunner::new();
+        r.push(Output::failed(
+            1,
+            "Failed to connect: org.bluez.Error.Failed br-connection-page-timeout",
+        ));
+        let e = connect(&mut r, "AA:BB:CC:DD:EE:FF").unwrap_err();
+        assert!(e.message().contains("phone"), "{e}");
+        assert_eq!(r.seen.len(), 1);
     }
 
     #[test]
