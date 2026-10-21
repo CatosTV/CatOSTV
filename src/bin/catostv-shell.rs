@@ -334,11 +334,12 @@ fn spawn_app_watcher(
                 front_app = fg.clone();
                 last_window = None;
             }
-            if let Some(t) = windows
-                .iter()
-                .flatten()
-                .find(|t| t.activated && !is_android_window(&t.app_id) && !t.app_id.is_empty())
-            {
+            // The app's newest window is the one to bring back: a player it
+            // opened is newer than its own list (bringing back the list hid
+            // CatTube's video).
+            if let Some(t) = windows.iter().flatten().rev().find(|t| {
+                !is_android_window(&t.app_id) && !t.app_id.is_empty() && t.app_id != SHELL_APP_ID
+            }) {
                 last_window = Some(t.app_id.clone());
             }
             if android_on_top
@@ -4324,7 +4325,7 @@ impl eframe::App for ShellApp {
 }
 
 fn main() -> eframe::Result {
-    catostv::run_app("catostv-shell", "CatosTV", ShellApp::new)
+    catostv::run_app(SHELL_APP_ID, "CatosTV", ShellApp::new)
 }
 
 /// How long a just-launched Android app gets to show its window before
@@ -4415,6 +4416,9 @@ fn wait_for_android_top(pkg: &str, budget: Duration) -> bool {
 
 /// Is the window pattern Android's (Waydroid's full-screen window, or any
 /// Waydroid window)? Case-insensitive, as window matching is.
+/// CatosTV's own window (its Wayland app id).
+const SHELL_APP_ID: &str = "catostv-shell";
+
 fn is_android_window(pattern: &str) -> bool {
     pattern.to_ascii_lowercase().starts_with("waydroid")
 }

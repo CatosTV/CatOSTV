@@ -15,6 +15,7 @@
 //! catostv-diag android                      Waydroid status and Android setup progress
 //! catostv-diag packages                     packages an install of this version contains
 //! catostv-diag windows                      app windows the compositor reports (run in the TV session)
+//! catostv-diag activate APP_ID               bring that window to the front (testing what follows)
 //! catostv-diag android-sync                 redo the Android icon sync (run as the TV account)
 //! catostv-diag version
 //! ```
@@ -25,7 +26,7 @@ use catostv_core::{android, audio, bluetooth, desktop, disk, env, flatpak, ipc, 
 use std::time::Duration;
 
 const USAGE: &str =
-    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|packages|install-prepare|windows|version> [options]
+    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|packages|install-prepare|windows|activate|version> [options]
   plan/dry-run options: --disk /dev/X  [--timezone Area/City]  [--keyboard us|de|…]  [--cpu intel|amd|other]";
 
 fn opt(args: &[String], name: &str) -> Option<String> {
@@ -112,6 +113,23 @@ fn main() {
             Err(e) => {
                 eprintln!("catostv-diag: {e}");
                 1
+            }
+        },
+        Some("activate") => match args.get(1) {
+            Some(want) => match catostv_core::toplevel::activate(want) {
+                Ok(true) => 0,
+                Ok(false) => {
+                    eprintln!("catostv-diag: no window {want}");
+                    1
+                }
+                Err(e) => {
+                    eprintln!("catostv-diag: {e}");
+                    1
+                }
+            },
+            None => {
+                eprintln!("{USAGE}");
+                2
             }
         },
         Some("install-prepare") => {
