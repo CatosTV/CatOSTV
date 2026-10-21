@@ -64,6 +64,11 @@ enum Msg {
     Thumb(String, String, String),
     /// The app in front closed its window (it is on its way out).
     AppWindowGone(String),
+    /// CatosTV switched to an app: its launch screen is done.
+    AppShown,
+    /// Left the app in front for CatosTV (Back gesture, or the app asked);
+    /// the switch is done already.
+    LeftApp,
     /// A command from catostv-ctl / catostv-inputd, with when it arrived.
     Ipc(ShellCommand, Instant),
     System(Box<SystemSnapshot>, Vec<AppEntry>),
@@ -183,6 +188,8 @@ struct Watch {
     /// and the picture it leaves there must not flash up when it next
     /// comes over the app. Ends when the window has the keys again.
     blank: Option<Instant>,
+    /// When a frame was last drawn while blank (see [`wait_for_blank`]).
+    blank_drawn: Option<Instant>,
 }
 
 /// How long an Android app may take to come to the front after CatosTV
@@ -251,6 +258,8 @@ fn spawn_app_watcher(
         let mut front = None;
         // The app in front, and the window of it that was in front last.
         let mut front_app: Option<String> = None;
+        // App windows (by app id, how many) as last seen.
+        let mut seen_windows: Option<HashMap<String, usize>> = None;
         let mut last_window: Option<String> = None;
         // What mouse mode was last set for: (front, app, chosen). It is set
         // again only when one of them changes, so Back (which turns it off
@@ -325,8 +334,48 @@ fn spawn_app_watcher(
             // last had in front is the one to bring back, which is not
             // always the app's main window (CatTube plays in its own
             // player window; raising CatTube's list hid the video).
-            let windows = if appliance && hidden && !android_front {
+            let all = if appliance {
                 catostv_core::toplevel::list().ok()
+            } else {
+                None
+            };
+            // A new app window while CatosTV is on screen (an app opened
+            // from here, a cast, a player): go to it. CatosTV does this, not
+            // the window manager, so it can clear its own screen first;
+            // what it shows when it goes behind an app is what flashes up
+            // when it comes back.
+            if let Some(list) = all.as_ref() {
+                let mut counts: HashMap<String, usize> = HashMap::new();
+                for t in list.iter().filter(|t| {
+                    !t.app_id.is_empty()
+                        && !is_android_window(&t.app_id)
+                        && t.app_id != SHELL_APP_ID
+                }) {
+                    *counts.entry(t.app_id.clone()).or_insert(0) += 1;
+                }
+                let new = seen_windows
+                    .as_ref()
+                    .and_then(|before: &HashMap<String, usize>| {
+                        counts
+                            .iter()
+                            .find(|(id, n)| **n > before.get(*id).copied().unwrap_or(0))
+                            .map(|(id, _)| id.clone())
+                    });
+                seen_windows = Some(counts);
+                if let Some(id) = new
+                    && !hidden
+                {
+                    wait_for_blank(&watch, &ctx);
+                    if compositor::show_app_workspace(&mut SystemRunner, true).is_err() {
+                        lock(&watch).blank = None;
+                    }
+                    let _ = catostv_core::toplevel::activate(&id);
+                    // The app is on screen: no launch screen to come back to.
+                    let _ = tx.send(Msg::AppShown);
+                }
+            }
+            let windows = if appliance && hidden && !android_front {
+                all
             } else {
                 None
             };
@@ -369,13 +418,13 @@ fn spawn_app_watcher(
                     eprintln!("catostv: Android came over {w}; back to {w}");
                 } else {
                     eprintln!("catostv: {w} closed its window; back to Home");
-                    let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
                     // Handled before CatosTV draws again: no launch screen left
                     // over from opening the app.
                     if let Some(id) = fg.clone() {
                         let _ = tx.send(Msg::AppWindowGone(id));
-                        ctx.request_repaint();
                     }
+                    ctx.request_repaint();
+                    let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
                 }
             } else if android_on_top && fg.is_none() {
                 // No app open: Android's window starting in the background
@@ -1117,8 +1166,13 @@ impl ShellApp {
                     )
                 };
                 if appliance && hidden {
+                    // The message goes first, so the very first frame after
+                    // the switch already draws Home, not the page left behind.
+                    let _ = tx.send(Msg::LeftApp);
+                    ctx.request_repaint();
                     let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
                     hide_android_window();
+                    return;
                 }
             }
             // Quick settings or a volume key while an app is in front:
@@ -1516,9 +1570,7 @@ impl ShellApp {
             }
             // A blank frame first: what the window shows when it goes
             // behind the app is what flashes up when it next comes over it.
-            lock(&watch).blank = Some(Instant::now());
-            ui.request_repaint();
-            std::thread::sleep(Duration::from_millis(60));
+            wait_for_blank(&watch, &ui);
             let switched = compositor::show_app_workspace(&mut SystemRunner, true);
             if switched.is_err() {
                 lock(&watch).blank = None;
@@ -1533,7 +1585,7 @@ impl ShellApp {
                 }
             }
             match switched {
-                Ok(()) => Msg::Nothing,
+                Ok(()) => Msg::AppShown,
                 Err(e) => Msg::Toast(e.to_string()),
             }
         });
@@ -3186,8 +3238,12 @@ impl ShellApp {
                 self.refresh_soon();
             }
             Msg::WindowSeen(id, window) => {
+                // The app is on screen: its launch screen is simply gone. No
+                // fade: CatosTV draws nothing while the app is in front, so a
+                // fade would only play when you come back.
                 if self.launching.as_ref().is_some_and(|(l, _)| *l == id) {
-                    self.end_launch();
+                    self.launching = None;
+                    self.launch_end = None;
                 }
                 self.windows.insert(id, window);
             }
@@ -3415,9 +3471,23 @@ impl ShellApp {
                 self.sys.updates.checking = false;
                 self.sys.updates.check = Some(r);
             }
+            Msg::LeftApp => {
+                if self.foreground_android().is_some() {
+                    self.send_android_home();
+                }
+                self.pause_catfyn_player();
+                self.shell.go_home();
+            }
+            Msg::AppShown => {
+                self.launching = None;
+                self.launch_end = None;
+            }
             Msg::AppWindowGone(id) => {
                 if self.launching.as_ref().is_some_and(|(l, _)| *l == id) {
                     self.launching = None;
+                }
+                if self.launch_end.as_ref().is_some_and(|(l, _)| *l == id) {
+                    self.launch_end = None;
                 }
                 if self.foreground.as_deref() == Some(id.as_str()) {
                     self.foreground = None;
@@ -3677,6 +3747,9 @@ impl ShellApp {
         // been noticed).
         if self.launching.as_ref().is_some_and(|(l, _)| *l == id) {
             self.launching = None;
+        }
+        if self.launch_end.as_ref().is_some_and(|(l, _)| *l == id) {
+            self.launch_end = None;
         }
         let name = self
             .apps
@@ -4239,6 +4312,8 @@ impl eframe::App for ShellApp {
             self.usage_at = Some(now);
             ctx.request_repaint_after(Duration::from_secs(2));
         }
+        // Drawn empty this frame (CatosTV is about to go behind an app).
+        let frame_blank = lock(&self.watch).blank.is_some();
         view::draw(
             &c,
             &ShellView {
@@ -4278,7 +4353,7 @@ impl eframe::App for ShellApp {
                 confirm_left,
                 now: keys::now(&ctx),
                 over_app: self.over_app.is_some(),
-                blank: lock(&self.watch).blank.is_some(),
+                blank: frame_blank,
                 volume_t: self.volume_since.elapsed().as_secs_f32() / 0.22,
                 home_bg: self.home_bg.as_ref().map(|(_, s)| s),
                 saver: self
@@ -4337,7 +4412,14 @@ impl eframe::App for ShellApp {
             || now.duration_since(self.page_since).as_secs_f32() < 0.3;
         self.hits = c.take_hits();
         self.fetch_fin_images();
-        lock(&self.watch).last_frame = Some(Instant::now());
+        {
+            let mut w = lock(&self.watch);
+            let now = Instant::now();
+            w.last_frame = Some(now);
+            if frame_blank {
+                w.blank_drawn = Some(now);
+            }
+        }
         self.sync_watch();
         // A couple of frames after leaving began (blank, or CatosTV drawn
         // in full again), the window moves.
@@ -4458,6 +4540,28 @@ fn wait_for_android_top(pkg: &str, budget: Duration) -> bool {
 
 /// Is the window pattern Android's (Waydroid's full-screen window, or any
 /// Waydroid window)? Case-insensitive, as window matching is.
+/// Before CatosTV goes behind an app: draw an empty frame and wait until it
+/// is on screen (up to 0.4 s). What the window shows when it goes is what
+/// shows again, for a moment, when it comes back; empty, coming back is a
+/// fade from dark into Home rather than an old page flashing up.
+fn wait_for_blank(watch: &Arc<Mutex<Watch>>, ui: &egui::Context) {
+    let since = Instant::now();
+    {
+        let mut w = lock(watch);
+        w.blank = Some(since);
+        w.blank_drawn = None;
+    }
+    ui.request_repaint();
+    while since.elapsed() < Duration::from_millis(400) {
+        if lock(watch).blank_drawn.is_some_and(|t| t > since) {
+            // One more frame's time for it to reach the screen.
+            std::thread::sleep(Duration::from_millis(20));
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+}
+
 /// CatosTV's own window (its Wayland app id).
 const SHELL_APP_ID: &str = "catostv-shell";
 

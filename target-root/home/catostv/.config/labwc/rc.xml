@@ -198,7 +198,10 @@
           <action name="SetDecorations" decorations="none" />
         </then>
         <else>
-          <action name="SendToDesktop" to="2" follow="yes" />
+          <!-- Not followed here either: CatosTV switches to the new window
+               itself, after clearing its own screen, so its last picture
+               never flashes up when you come back. -->
+          <action name="SendToDesktop" to="2" follow="no" />
           <action name="SetDecorations" decorations="none" />
           <action name="Maximize" />
         </else>
