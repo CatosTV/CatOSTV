@@ -62,6 +62,8 @@ enum Msg {
     /// A fresh Recents preview of an app: app id, the capture and
     /// its blurred copy.
     Thumb(String, String, String),
+    /// The app in front closed its window (it is on its way out).
+    AppWindowGone(String),
     /// A command from catostv-ctl / catostv-inputd, with when it arrived.
     Ipc(ShellCommand, Instant),
     System(Box<SystemSnapshot>, Vec<AppEntry>),
@@ -231,7 +233,9 @@ fn spawn_app_watcher(
     watch: Arc<Mutex<Watch>>,
     (tx, ctx): (std::sync::mpsc::Sender<Msg>, egui::Context),
 ) {
-    const TICK: Duration = Duration::from_millis(300);
+    // Short: when an app closes, Android's window underneath shows until
+    // this notices and CatosTV comes back.
+    const TICK: Duration = Duration::from_millis(120);
     // The shell repaints at least every 250 ms while visible.
     const HIDDEN_AFTER: Duration = Duration::from_millis(1500);
     // Hidden sooner right after opening an app: the switch to it comes
@@ -366,6 +370,12 @@ fn spawn_app_watcher(
                 } else {
                     eprintln!("catostv: {w} closed its window; back to Home");
                     let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
+                    // Handled before CatosTV draws again: no launch screen left
+                    // over from opening the app.
+                    if let Some(id) = fg.clone() {
+                        let _ = tx.send(Msg::AppWindowGone(id));
+                        ctx.request_repaint();
+                    }
                 }
             } else if android_on_top && fg.is_none() {
                 // No app open: Android's window starting in the background
@@ -1578,14 +1588,13 @@ impl ShellApp {
 
     /// After launching app `id`, note which new window appears (its
     /// Wayland app id), so Resume can bring exactly that window forward.
-    fn learn_window(&self, id: String) {
+    /// `before`: the windows there were before the app started (taken
+    /// then: a quick app's window may already be there by now).
+    fn learn_window(&self, id: String, before: HashSet<String>) {
         if !self.appliance {
             return;
         }
         self.jobs.spawn(move || {
-            let before: HashSet<String> = catostv_core::toplevel::list()
-                .map(|v| v.into_iter().map(|w| w.app_id).collect())
-                .unwrap_or_default();
             for _ in 0..60 {
                 std::thread::sleep(Duration::from_millis(500));
                 if let Ok(now) = catostv_core::toplevel::list()
@@ -1607,13 +1616,20 @@ impl ShellApp {
         if let AppSource::Android { package } = &app.source {
             return self.android(ctx, AndroidTask::Launch(package.clone()));
         }
+        let before: HashSet<String> = if self.appliance {
+            catostv_core::toplevel::list()
+                .map(|v| v.into_iter().map(|w| w.app_id).collect())
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
         let launched = self.mgr().launch(app);
         match launched {
             // No "Opening…" banner: the app simply appears.
             Ok(LaunchResult::Started) => {
                 self.foreground = Some(app.id.clone());
                 if !self.windows.contains_key(&app.id) {
-                    self.learn_window(app.id.clone());
+                    self.learn_window(app.id.clone(), before);
                 }
             }
             // Tracked but not Running means it is still closing; never
@@ -3399,6 +3415,15 @@ impl ShellApp {
                 self.sys.updates.checking = false;
                 self.sys.updates.check = Some(r);
             }
+            Msg::AppWindowGone(id) => {
+                if self.launching.as_ref().is_some_and(|(l, _)| *l == id) {
+                    self.launching = None;
+                }
+                if self.foreground.as_deref() == Some(id.as_str()) {
+                    self.foreground = None;
+                    self.shell.go_home();
+                }
+            }
             Msg::Thumb(id, shot, blur) => {
                 // Same file names alternate: drop the old pictures first.
                 if let Some((s, b)) = self.thumbs.insert(id, (shot.clone(), blur.clone())) {
@@ -3648,6 +3673,11 @@ impl ShellApp {
 
     fn handle_lifecycle(&mut self, ctx: &egui::Context, ev: LifecycleEvent) {
         let id = ev.id().to_string();
+        // The app ended: its launch screen too (its window may never have
+        // been noticed).
+        if self.launching.as_ref().is_some_and(|(l, _)| *l == id) {
+            self.launching = None;
+        }
         let name = self
             .apps
             .iter()
