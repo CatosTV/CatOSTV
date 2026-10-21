@@ -306,6 +306,20 @@ fn spawn_app_watcher(
             {
                 eprintln!("catostv: Android came over {w}; back to {w}");
                 let _ = catostv_core::toplevel::activate(w);
+            } else if appliance
+                && hidden
+                && !android_front
+                && fg.is_none()
+                && catostv_core::toplevel::list().is_ok_and(|list| {
+                    list.iter()
+                        .any(|t| t.activated && is_android_window(&t.app_id))
+                })
+            {
+                // No app open: Android's window starting in the background
+                // (it is kept running) came over Home and left its own home
+                // screen showing. CatosTV goes back on top.
+                eprintln!("catostv: Android came over Home; back to Home");
+                let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
             }
             // What the remotes are talking to (catostv_core::uinput): Android
             // gets Android TV keys (Back = KEY_BACK).
