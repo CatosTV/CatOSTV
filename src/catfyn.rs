@@ -326,7 +326,11 @@ pub fn fetch_image(home: &Path, url: &str) -> Option<String> {
     if let Some(d) = path.parent() {
         let _ = std::fs::create_dir_all(d);
     }
-    let tmp = path.with_extension("part");
+    // Each download its own partial file: a card and its blurred backdrop
+    // can ask for the same picture at once.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("{n}.part"));
     let cmd = jf::image_cmd(url, &tmp).ok().map(|mut c| {
         if let Some(h) = plex_headers_for(url) {
             c.args.insert(0, format!("@{}", h.display()));
