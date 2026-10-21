@@ -242,6 +242,9 @@ fn spawn_app_watcher(
     const THUMB_EVERY: Duration = Duration::from_secs(4);
     let run = move || {
         let mut front = None;
+        // The app in front, and the window of it that was in front last.
+        let mut front_app: Option<String> = None;
+        let mut last_window: Option<String> = None;
         // What mouse mode was last set for: (front, app, chosen). It is set
         // again only when one of them changes, so Back (which turns it off
         // in catostv-inputd) holds until you leave the app.
@@ -307,26 +310,44 @@ fn spawn_app_watcher(
             // that went on playing. The app goes back on top; Android's
             // window is only moved behind (resizing it re-plugs Android's
             // display).
-            if appliance
-                && hidden
-                && !android_front
-                && let Some(w) = fg_window.as_deref().filter(|w| !is_android_window(w))
-                && catostv_core::toplevel::list().is_ok_and(|list| {
-                    list.iter()
-                        .any(|t| t.activated && is_android_window(&t.app_id))
-                })
+            // The app's windows (with an app in front): the one the user
+            // last had in front is the one to bring back, which is not
+            // always the app's main window (CatTube plays in its own
+            // player window; raising CatTube's list hid the video).
+            let windows = if appliance && hidden && !android_front {
+                catostv_core::toplevel::list().ok()
+            } else {
+                None
+            };
+            let android_on_top = windows.as_ref().is_some_and(|list| {
+                list.iter()
+                    .any(|t| t.activated && is_android_window(&t.app_id))
+            });
+            if fg != front_app {
+                front_app = fg.clone();
+                last_window = None;
+            }
+            if let Some(t) = windows
+                .iter()
+                .flatten()
+                .find(|t| t.activated && !is_android_window(&t.app_id) && !t.app_id.is_empty())
+            {
+                last_window = Some(t.app_id.clone());
+            }
+            if android_on_top
+                && let Some(w) = last_window
+                    .clone()
+                    .or_else(|| fg_window.clone())
+                    .filter(|w| !is_android_window(w))
             {
                 eprintln!("catostv: Android came over {w}; back to {w}");
-                let _ = catostv_core::toplevel::activate(w);
-            } else if appliance
-                && hidden
-                && !android_front
-                && fg.is_none()
-                && catostv_core::toplevel::list().is_ok_and(|list| {
-                    list.iter()
-                        .any(|t| t.activated && is_android_window(&t.app_id))
-                })
-            {
+                // That window may be gone by now: the app's main one then.
+                if !catostv_core::toplevel::activate(&w).unwrap_or(false)
+                    && let Some(main) = fg_window.as_deref().filter(|m| *m != w)
+                {
+                    let _ = catostv_core::toplevel::activate(main);
+                }
+            } else if android_on_top && fg.is_none() {
                 // No app open: Android's window starting in the background
                 // (it is kept running) came over Home and left its own home
                 // screen showing. CatosTV goes back on top.
