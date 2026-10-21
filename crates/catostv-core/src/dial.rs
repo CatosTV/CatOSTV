@@ -430,6 +430,78 @@ impl AppControl for FirefoxYouTube {
     }
 }
 
+/// The pairing code in a launch URL (`pairingCode=…`).
+pub fn pairing_code(url: &str) -> Option<String> {
+    let q = url.split_once('?')?.1;
+    q.split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "pairingCode")
+        .map(|(_, v)| v.to_string())
+        .filter(|v| is_safe_value(v))
+}
+
+/// YouTube through CatTube (the native client based on SmartTube), when
+/// it is installed: a cast pairs the phone with CatTube's remote service
+/// (`cattube --pair CODE`); the phone then says what to play over
+/// YouTube's own connection, and CatTube plays it.
+pub struct CatTubeYouTube {
+    launched: bool,
+}
+
+impl CatTubeYouTube {
+    pub fn available() -> bool {
+        crate::process::find_executable("cattube").is_some()
+    }
+
+    pub fn new() -> Self {
+        Self { launched: false }
+    }
+}
+
+impl Default for CatTubeYouTube {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn cattube(args: &[&str]) -> Result<()> {
+    let out = Command::new("cattube")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| Error::msg(format!("could not start CatTube: {e}")))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(Error::msg(format!(
+            "CatTube: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )))
+    }
+}
+
+impl AppControl for CatTubeYouTube {
+    fn is_running(&mut self) -> bool {
+        self.launched
+    }
+
+    fn launch(&mut self, url: &str) -> Result<()> {
+        if let Some(code) = pairing_code(url) {
+            cattube(&["--pair", &code])?;
+        }
+        self.launched = true;
+        Ok(())
+    }
+
+    fn stop(&mut self) -> bool {
+        let was = std::mem::take(&mut self.launched);
+        let _ = cattube(&["--stop"]);
+        was
+    }
+}
+
 // ---------------------------------------------------------------------------
 // HTTP routing
 // ---------------------------------------------------------------------------
@@ -696,6 +768,16 @@ mod tests {
         assert!(s.contains("<state>stopped</state>"));
         assert!(!s.contains("<link"));
         assert!(s.contains("xmlns=\"urn:dial-multiscreen-org:schemas:dial\""));
+    }
+
+    #[test]
+    fn cast_pairing_code_for_cattube() {
+        let url = youtube_launch_url(
+            &launch_params("pairingCode=3f1c-ab_9&theme=cl&v=WhWc3b3KhnY"),
+            49494,
+        );
+        assert_eq!(pairing_code(&url).as_deref(), Some("3f1c-ab_9"));
+        assert_eq!(pairing_code("https://www.youtube.com/tv?v=x"), None);
     }
 
     #[test]

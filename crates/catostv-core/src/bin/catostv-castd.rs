@@ -125,12 +125,21 @@ fn main() {
         ))
     });
     let dial_ctx = if args.dial {
-        match dial::FirefoxYouTube::new(Some(state.join("cast-youtube.log"))) {
+        // CatTube (YouTube based on SmartTube) when installed, else the
+        // YouTube TV page in Firefox.
+        let app: std::result::Result<Box<dyn dial::AppControl>, _> =
+            if dial::CatTubeYouTube::available() {
+                Ok(Box::new(dial::CatTubeYouTube::new()))
+            } else {
+                dial::FirefoxYouTube::new(Some(state.join("cast-youtube.log")))
+                    .map(|a| Box::new(a) as Box<dyn dial::AppControl>)
+            };
+        match app {
             Ok(app) => Some(Arc::new(dial::Dial::new(
                 name.clone(),
                 dial::dial_uuid(&uuid),
                 args.port,
-                Box::new(app),
+                app,
             ))),
             Err(e) => {
                 eprintln!("catostv-castd: YouTube casting disabled: {e}");

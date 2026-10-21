@@ -42,6 +42,11 @@ supervise cec 5 /usr/local/bin/catostv-cecd
 supervise castd 5 /usr/local/bin/catostv-castd
 # Phone remote web page (PIN shown in Settings → Cast & remote).
 supervise remoted 5 /usr/local/bin/catostv-remoted
+# CatTube's phone remote: the YouTube app on a phone ("Link with TV code"
+# or casting) picks what CatTube plays. Only when CatTube is installed.
+if command -v cattube >/dev/null 2>&1; then
+  supervise cattube-remote 10 cattube --remote
+fi
 # On-screen notices over apps (volume bar), ~/.config/mako/config.
 if command -v mako >/dev/null 2>&1; then
   supervise mako 5 mako
