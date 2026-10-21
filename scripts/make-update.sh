@@ -49,6 +49,8 @@ for b in "${BINS[@]}"; do install -m755 "target/release/$b" "$STAGE/bin/$b"; don
 git ls-files -z target-root | while IFS= read -r -d '' f; do
   install -D -m "$( [[ -x $f ]] && echo 755 || echo 644 )" "$f" "$STAGE/root/${f#target-root/}"
 done
+# CatTube, the YouTube app, from its own release (cattube.lock).
+scripts/fetch-cattube.sh "$STAGE/root"
 # What this version needs installed (updater and installer add what's missing).
 target/release/catostv-diag packages > "$STAGE/root/usr/share/catostv/packages.txt"
 # The commit in the name: CDNs cache packages forever (publish-update.sh),

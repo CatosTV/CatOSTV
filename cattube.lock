@@ -1,0 +1,6 @@
+# The CatTube release CatosTV ships (github.com/coderastic/CatTube).
+# scripts/fetch-cattube.sh downloads it, checks the sha256 and puts the app
+# into a system tree. Move to a new release by changing all three lines.
+version = 1.0.0
+url = https://github.com/coderastic/CatTube/releases/download/v1.0.0/cattube-1.0.0-x86_64.tar.gz
+sha256 = 54fcfb2cbf40b8e510c8df8e427ceac63d4d3552ab1594a34bc230311215d29a

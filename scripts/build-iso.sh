@@ -159,6 +159,8 @@ install -Dm755 "$ROOT/iso-overlay/root/.config/labwc/autostart" "$A/root/.config
 install -Dm644 "$ROOT/iso-overlay/root/.config/labwc/environment" "$A/root/.config/labwc/environment"
 mkdir -p "$A/usr/share/catostv"
 cp -a "$ROOT/target-root" "$A/usr/share/catostv/install-root"
+# CatTube, the YouTube app, from its own release (cattube.lock).
+"$ROOT/scripts/fetch-cattube.sh" "$A/usr/share/catostv/install-root"
 # The installer's fallback pin when the update server can't be reached:
 # the Arch Linux Archive day this ISO's packages come from (UTC; the
 # snapshot of a day is complete once the day is over, so take yesterday).
@@ -185,6 +187,7 @@ rm -rf "$A/etc/systemd/system/getty@tty1.service.d"
     echo "  [\"/usr/local/bin/$b\"]=\"0:0:755\""
   done
   echo '  ["/root/.config/labwc/autostart"]="0:0:755"'
+  echo '  ["/usr/share/catostv/install-root/usr/local/bin/cattube"]="0:0:755"'
   git -C "$ROOT" ls-files -s target-root | awk '$1 == "100755" {print $4}' | while read -r f; do
     echo "  [\"/usr/share/catostv/install-root/${f#target-root/}\"]=\"0:0:755\""
   done

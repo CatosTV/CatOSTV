@@ -89,6 +89,11 @@ ssh "$USER_AT" "rm -rf $STAGE && mkdir -p $STAGE/bin"
 rsync -az --info=progress2 "${BINS[@]/#/target/release/}" "$USER_AT:$STAGE/bin/"
 if (( OVERLAY )); then
   rsync -az --delete target-root/ "$USER_AT:$STAGE/root/"
+  # CatTube, the YouTube app, from its own release (cattube.lock).
+  CT="$(mktemp -d)"
+  scripts/fetch-cattube.sh "$CT"
+  rsync -az "$CT/" "$USER_AT:$STAGE/root/"
+  rm -rf "$CT"
 fi
 ANDROID_ACTION=keep
 if [[ -n "$ANDROID_IMAGE" && "$ANDROID_IMAGE" != stock ]]; then
@@ -127,7 +132,7 @@ if [ "$OVERLAY" = 1 ]; then
   if sudo test -f "$ENV"; then sudo cp "$ENV" "$STAGE/environment.keep"; fi
   sudo cp -a --no-preserve=mode,ownership "$STAGE/root/." /
   if sudo test -f "$STAGE/environment.keep"; then sudo cp "$STAGE/environment.keep" "$ENV"; fi
-  sudo chmod 755 /usr/local/bin/catostv-session \
+  sudo chmod 755 /usr/local/bin/catostv-session /usr/local/bin/cattube \
     /home/catostv/.config/labwc/autostart /usr/local/lib/catostv/*
   # Only what the overlay ships: NEVER chown -R /home/catostv, Android's
   # data (~/.local/share/waydroid/data) lives there with Android's own uids,

@@ -134,6 +134,10 @@ pub const BASE_PACKAGES: &[&str] = &[
     // opens the YouTube TV page in it.
     "firefox",
     "mpv",
+    // CatTube (the YouTube app) runs its own yt-dlp with Python and talks to
+    // YouTube with curl.
+    "python",
+    "curl",
     "moonlight-qt",
     // Phone media controls (KDE Connect) for Catfyn's player: MPRIS in mpv
     "mpv-mpris",
@@ -1262,6 +1266,31 @@ impl<R: Runner> Host for DryRunHost<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cattube_release_catostv_ships_is_pinned() {
+        let lock = include_str!("../../../cattube.lock");
+        let value = |k: &str| {
+            lock.lines()
+                .find_map(|l| l.strip_prefix(k)?.trim_start().strip_prefix('='))
+                .map(str::trim)
+                .unwrap_or("")
+        };
+        let version = value("version");
+        assert!(!version.is_empty() && version.chars().all(|c| c.is_ascii_digit() || c == '.'));
+        assert_eq!(
+            value("url"),
+            format!(
+                "https://github.com/coderastic/CatTube/releases/download/v{version}/cattube-{version}-x86_64.tar.gz"
+            )
+        );
+        let sha = value("sha256");
+        assert!(
+            sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()) && sha != "0".repeat(64)
+        );
+        // CatTube's needs are installed.
+        assert!(BASE_PACKAGES.contains(&"mpv") && BASE_PACKAGES.contains(&"python"));
+    }
     use crate::process::fake::FakeRunner;
     use std::collections::{HashMap, HashSet};
 
