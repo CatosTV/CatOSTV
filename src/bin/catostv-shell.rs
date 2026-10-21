@@ -742,6 +742,8 @@ struct ShellApp {
     pointer: Pointer,
     hits: Vec<(Rect, Target)>,
     hover: Option<Target>,
+    /// Where the pointer was last seen.
+    pointer_at: Option<egui::Pos2>,
     configured: Vec<AppEntry>,
     discovered: Vec<AppEntry>,
     apps: Vec<AppEntry>,
@@ -1074,6 +1076,7 @@ impl ShellApp {
             pointer: Pointer::new(),
             hits: Vec::new(),
             hover: None,
+            pointer_at: None,
             configured: Vec::new(),
             discovered: Vec::new(),
             apps: Vec::new(),
@@ -4150,9 +4153,17 @@ impl eframe::App for ShellApp {
             // Hit rects are from the previous frame.
             // The pointer moving onto something focuses it (a tab shows its
             // page), as in the rest of CatosTV a click is OK on it.
+            // Only a pointer that really moves picks things: coming back
+            // from an app under a resting pointer reports a move too (it
+            // would open the tab it rests on).
             if let Some(pos) = p.moved_to {
+                let moved = self
+                    .pointer_at
+                    .map_or(ctx.input(|i| i.time) > 1.5, |at| (at - pos).length() > 2.0);
+                self.pointer_at = Some(pos);
                 let over = view::hit_test(&self.hits, pos);
-                if over != self.hover
+                if moved
+                    && over != self.hover
                     && let Some(t) = over
                 {
                     effects.extend(self.shell.pointer(t, false, &sctx));
