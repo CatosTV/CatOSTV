@@ -130,6 +130,11 @@ if [ "$OVERLAY" = 1 ]; then
   # The TV's keyboard layout lives in this file; keep it.
   # (/home/catostv is 0700, so every access goes through sudo.)
   if sudo test -f "$ENV"; then sudo cp "$ENV" "$STAGE/environment.keep"; fi
+  # Programs are replaced, not written over (a running one cannot be).
+  for f in "$STAGE"/root/usr/local/bin/*; do
+    [ -f "$f" ] || continue
+    sudo install -m755 "$f" "/usr/local/bin/$(basename "$f")" && rm -f "$f"
+  done
   sudo cp -a --no-preserve=mode,ownership "$STAGE/root/." /
   if sudo test -f "$STAGE/environment.keep"; then sudo cp "$STAGE/environment.keep" "$ENV"; fi
   sudo chmod 755 /usr/local/bin/catostv-session /usr/local/bin/cattube \
