@@ -352,12 +352,20 @@ fn spawn_app_watcher(
                     .or_else(|| fg_window.clone())
                     .filter(|w| !is_android_window(w))
             {
-                eprintln!("catostv: Android came over {w}; back to {w}");
                 // That window may be gone by now: the app's main one then.
-                if !catostv_core::toplevel::activate(&w).unwrap_or(false)
-                    && let Some(main) = fg_window.as_deref().filter(|m| *m != w)
-                {
-                    let _ = catostv_core::toplevel::activate(main);
+                // None of its windows left (the app is closing: its window
+                // goes a moment before the program ends): Home, not
+                // Android's home screen.
+                let back = catostv_core::toplevel::activate(&w).unwrap_or(false)
+                    || fg_window
+                        .as_deref()
+                        .filter(|m| *m != w)
+                        .is_some_and(|m| catostv_core::toplevel::activate(m).unwrap_or(false));
+                if back {
+                    eprintln!("catostv: Android came over {w}; back to {w}");
+                } else {
+                    eprintln!("catostv: {w} closed its window; back to Home");
+                    let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
                 }
             } else if android_on_top && fg.is_none() {
                 // No app open: Android's window starting in the background
