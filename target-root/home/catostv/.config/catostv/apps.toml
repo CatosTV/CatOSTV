@@ -23,6 +23,15 @@ icon = "catfyn"
 accent = "violet"
 command = "catostv:fin"
 
+# CatTube: YouTube, the native client based on SmartTube (shown once the
+# cattube program is installed).
+[[app]]
+name = "CatTube"
+subtitle = "YouTube"
+icon = "play"
+accent = "red"
+command = "cattube"
+
 [[app]]
 name = "Steam"
 subtitle = "Games"

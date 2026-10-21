@@ -278,6 +278,9 @@ pub fn default_specs() -> Vec<AppSpec> {
         // Catfyn: CatosTV's own Jellyfin client,
         // built into the shell; replaces the Jellyfin Media Player wrapper.
         spec("Catfyn", "Jellyfin", "catfyn", "violet", FIN_COMMAND),
+        // CatTube: YouTube, the native client based on SmartTube; shown
+        // once `cattube` is installed.
+        spec("CatTube", "YouTube", "play", "red", "cattube"),
         spec("Steam", "Games", "game", "blue", "steam -gamepadui"),
         // No Spotify by default (the Linux app is a web
         // wrapper); it stays available in the Store.
@@ -475,9 +478,9 @@ mod tests {
     fn defaults_are_valid_and_unique() {
         let (apps, warnings) = validate(default_specs());
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(apps.len(), 4);
+        assert_eq!(apps.len(), 5);
         let ids: std::collections::HashSet<_> = apps.iter().map(|a| a.id.clone()).collect();
-        assert_eq!(ids.len(), 4);
+        assert_eq!(ids.len(), 5);
         // A ready-made file manager.
         assert!(apps.iter().any(|a| a.command == FILES_COMMAND));
         // No browser apps in the drawer.

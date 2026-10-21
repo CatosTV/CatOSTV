@@ -406,6 +406,7 @@ fn hero_text_with(c: &C, it: &Item, x: f32, y: f32, w: f32, now_k: f32, action_c
     }
     // What OK does: an accent chip, with the progress line beside it.
     let action = match (it.progress(), it.kind()) {
+        _ if it.kind_raw == catostv_core::cattube::VIDEO => "Play",
         (Some(_), _) => "Resume",
         (None, Kind::Series | Kind::Library | Kind::Season | Kind::Other) => "Open",
         _ => "Play",
@@ -1525,13 +1526,10 @@ pub fn home_rows(
     y: f32,
 ) {
     let (frow, fcol) = focus.unwrap_or((0, 0));
-    let row_h = |r: &fin::Row| {
-        if r.title == "Continue watching" {
-            262.0
-        } else {
-            344.0
-        }
-    };
+    // Wide stills for Continue watching and YouTube's videos.
+    let is_wide_row =
+        |r: &fin::Row| r.title == "Continue watching" || r.title == catostv_core::cattube::ROW;
+    let row_h = |r: &fin::Row| if is_wide_row(r) { 262.0 } else { 344.0 };
     let mut offsets = Vec::with_capacity(rows.len());
     let mut acc = 0.0;
     for r in rows {
@@ -1547,7 +1545,7 @@ pub fn home_rows(
         if ry > 720.0 || ry + row_h(r) < y - 14.0 {
             continue;
         }
-        let wide = r.title == "Continue watching";
+        let wide = is_wide_row(r);
         widgets::section(&list, 64.0, ry, &r.title);
         let (w, h, gap) = if wide {
             (240.0, 135.0, 26.0)
@@ -1596,6 +1594,21 @@ pub fn home_rows(
             let (gx, gy) = list.to_design(grown.min);
             let (gw, gh) = list.dsize(grown);
             card_state(&list, it, gx, gy, gw, gh);
+            // CatTube's "Recommended for you": its red play mark.
+            if it.kind_raw == catostv_core::cattube::BUTTON {
+                list.fill(
+                    grown,
+                    RADIUS,
+                    theme::rgba((205, 32, 31), (150.0 + 60.0 * t) as u8),
+                );
+                let (cx, cy) = (gx + gw / 2.0, gy + gh / 2.0);
+                list.fill(
+                    list.r(cx - 30.0, cy - 21.0, 60.0, 42.0),
+                    12.0,
+                    theme::rgba(theme::WHITE, 235),
+                );
+                icons::draw(&list, "play", cx, cy, 20.0, theme::rgb((205, 32, 31)));
+            }
             // Posters carry their own title: theirs shows only under the
             // focused one. Episode stills need theirs, dimmer unless focused.
             let alpha = if wide { 150.0 + 105.0 * t } else { 255.0 * t };

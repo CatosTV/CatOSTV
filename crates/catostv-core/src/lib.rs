@@ -56,6 +56,7 @@ pub mod apps;
 pub mod lifecycle;
 
 pub mod android;
+pub mod cattube;
 pub mod debug;
 pub mod desktop;
 pub mod files;

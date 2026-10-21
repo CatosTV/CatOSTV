@@ -619,6 +619,9 @@ pub fn image_url(server: &str, item_id: &str, kind: &str, max_width: u32) -> Str
 /// An item's poster (an episode's series poster on Plex), from whichever
 /// server it came from.
 pub fn poster_url(it: &Item) -> String {
+    if crate::cattube::is_cattube(it) {
+        return it.thumb.clone();
+    }
     match it.backend {
         Backend::Plex => {
             let path = if it.kind() == Kind::Episode && !it.series_thumb.is_empty() {
@@ -634,6 +637,9 @@ pub fn poster_url(it: &Item) -> String {
 
 /// A landscape picture: the episode still, else the backdrop.
 pub fn wide_url(it: &Item) -> String {
+    if crate::cattube::is_cattube(it) {
+        return it.thumb.clone();
+    }
     match it.backend {
         Backend::Plex => {
             let path = if it.kind() == Kind::Episode || it.art.is_empty() {
@@ -653,6 +659,11 @@ pub fn wide_url(it: &Item) -> String {
 
 /// The softened backdrop behind a page, when the item has one.
 pub fn backdrop_url(it: &Item, blur: u32) -> Option<String> {
+    // YouTube pictures get a local blur (`#blur`: the image fetcher
+    // softens its copy).
+    if crate::cattube::is_cattube(it) {
+        return (!it.thumb.is_empty()).then(|| format!("{}#blur", it.thumb));
+    }
     match it.backend {
         // No backdrop art: the item's own picture, softened a little more.
         Backend::Plex => match (it.art.is_empty(), it.thumb.is_empty()) {

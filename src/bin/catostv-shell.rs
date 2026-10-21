@@ -2342,6 +2342,9 @@ impl ShellApp {
             }
             Effect::Files(e) => self.files_effect(ctx, e),
             Effect::OpenFin => self.open_fin(ctx, None),
+            Effect::FinDetails(item) if catostv_core::cattube::is_cattube(&item) => {
+                self.open_cattube(ctx, &item)
+            }
             Effect::FinDetails(item) => {
                 // An item on Home belongs to one of the home accounts: open
                 // Catfyn on that one.
@@ -2355,6 +2358,9 @@ impl ShellApp {
                     self.save_accounts(ctx);
                 }
                 self.open_fin(ctx, Some(item))
+            }
+            Effect::FinPlayHome(item) if catostv_core::cattube::is_cattube(&item) => {
+                self.open_cattube(ctx, &item)
             }
             Effect::FinPlayHome(item) => match self.media.accounts.for_item(&item).cloned() {
                 Some(a) => self.fin_play(ctx, a, item, false),
@@ -2795,11 +2801,69 @@ impl ShellApp {
             .into_iter()
             .cloned()
             .collect();
-        if accounts.is_empty() {
+        // CatTube (YouTube): the newest from the subscriptions, when it is
+        // installed and signed in.
+        let cattube = find_executable(catostv_core::cattube::BINARY).is_some();
+        if accounts.is_empty() && !cattube {
             self.media.home.clear();
-        } else {
-            self.jobs
-                .spawn(move || Msg::FinHomeMedia(catfyn::home_rows(&device, &accounts)));
+            return;
+        }
+        self.jobs.spawn(move || {
+            let mut rows = if accounts.is_empty() {
+                Vec::new()
+            } else {
+                catfyn::home_rows(&device, &accounts)
+            };
+            if cattube
+                && let Ok(o) = SystemRunner.run(&catostv_core::cattube::feed_cmd())
+                && o.success()
+            {
+                let items = catostv_core::cattube::parse_feed(&o.stdout);
+                if !items.is_empty() {
+                    // After Continue watching, before the libraries.
+                    let at =
+                        usize::from(rows.first().is_some_and(|r| r.title == "Continue watching"));
+                    rows.insert(
+                        at,
+                        fin::Row {
+                            title: catostv_core::cattube::ROW.into(),
+                            items,
+                            libraries: false,
+                        },
+                    );
+                }
+            }
+            Msg::FinHomeMedia(rows)
+        });
+    }
+
+    /// Open CatTube for a YouTube item on Home: a video plays (CatTube
+    /// closes when it ends), the button opens YouTube's recommendations.
+    fn open_cattube(&mut self, ctx: &egui::Context, item: &Item) {
+        let mut argv = vec![catostv_core::cattube::BINARY.to_string()];
+        argv.extend(catostv_core::cattube::open_args(item));
+        let entry = AppEntry {
+            id: "cattube".into(),
+            name: "CatTube".into(),
+            subtitle: "YouTube".into(),
+            icon: "play".into(),
+            accent: "red".into(),
+            command: catostv_core::desktop::join_command(&argv),
+            singleton: true,
+            icon_path: None,
+            source: AppSource::Configured,
+        };
+        if self.mgr().is_running(&entry.id) {
+            self.mgr().close(&entry.id);
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        let launched = self.mgr().launch(&entry);
+        match launched {
+            Ok(_) => {
+                self.foreground = Some(entry.id.clone());
+                self.launching = Some((entry.id, Instant::now()));
+            }
+            Err(e) => self.show_toast(ctx, e.message()),
         }
     }
 

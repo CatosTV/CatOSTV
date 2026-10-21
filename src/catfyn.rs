@@ -298,8 +298,27 @@ fn plex_headers_for(url: &str) -> Option<std::path::PathBuf> {
     plex::header_file(device, Some(token)).ok()
 }
 
-/// Download an image into the cache; returns the PNG path.
+/// A softened copy of a picture: scaled down and blurred (YouTube's
+/// thumbnails behind a focused video; Jellyfin and Plex blur on the server).
+fn blur_into(src: &Path, out: &Path) -> Option<()> {
+    let img = image::load_from_memory(&std::fs::read(src).ok()?).ok()?;
+    let small = img.resize(480, 270, image::imageops::FilterType::Triangle);
+    let soft = image::imageops::blur(&small.to_rgba8(), 7.0);
+    soft.save_with_format(out, image::ImageFormat::Png).ok()
+}
+
+/// Download an image into the cache; returns the PNG path. An address
+/// ending in `#blur` gives the blurred copy.
 pub fn fetch_image(home: &Path, url: &str) -> Option<String> {
+    if let Some(base) = url.strip_suffix("#blur") {
+        let path = jf::image_cache_path(home, url);
+        if path.is_file() {
+            return Some(path.to_string_lossy().into_owned());
+        }
+        let src = fetch_image(home, base)?;
+        blur_into(Path::new(&src), &path)?;
+        return Some(path.to_string_lossy().into_owned());
+    }
     let path = jf::image_cache_path(home, url);
     if path.is_file() {
         return Some(path.to_string_lossy().into_owned());
