@@ -317,21 +317,22 @@ fn header(
         52.0,
         &labels,
         Some(selected.map_or(0, |i| i + 1)),
-        focus.filter(|i| *i < libs.len()).map(|i| i + 1),
-        focus.is_some_and(|i| i >= libs.len()),
+        // Focus stops: 0 is the Home tab, then the libraries, as drawn.
+        focus.filter(|i| *i <= libs.len()),
+        focus.is_some_and(|i| i > libs.len()),
     );
-    for (i, rect) in rects.iter().enumerate().skip(1) {
-        c.hit(*rect, Target::Fin(usize::MAX, i - 1));
+    for (i, rect) in rects.iter().enumerate() {
+        c.hit(*rect, Target::Fin(usize::MAX, i));
     }
     // Account button, top right, and the Jellyfin | Plex switch left of it
     // when both have an account.
     let Some(a) = acct else { return };
-    let acct_index = libs.len() + usize::from(switch);
+    let acct_index = libs.len() + 1 + usize::from(switch);
     let w = acct_w;
     // The button opens Catfyn's settings: a gear says so.
     let rect = c.r(1216.0 - w, y + 2.0, w, 48.0);
     if switch {
-        let st = focus_t(c, "fin-hdr-switch", focus == Some(libs.len()));
+        let st = focus_t(c, "fin-hdr-switch", focus == Some(libs.len() + 1));
         let halves = backend_switch(
             c,
             "fin-hdr",
@@ -343,7 +344,7 @@ fn header(
             st,
         );
         for h in halves {
-            c.hit(h, Target::Fin(usize::MAX, libs.len()));
+            c.hit(h, Target::Fin(usize::MAX, libs.len() + 1));
         }
     }
     // Focused: the same accent pill as the tabs.

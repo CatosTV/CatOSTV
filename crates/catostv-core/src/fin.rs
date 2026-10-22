@@ -891,20 +891,28 @@ impl Fin {
         if self.header {
             let libs = self.header_libraries();
             let n = libs.len();
-            // The Jellyfin | Plex switch, when both have an account, sits
-            // between the library tabs and the account button.
+            // Stops, left to right: the Home tab (0), the library tabs
+            // (1..=n), the Jellyfin | Plex switch when both have an
+            // account, then the account button.
             let switch = header_switch(accounts);
-            let last = n + usize::from(switch);
+            let last = n + 1 + usize::from(switch);
             self.header_index = self.header_index.min(last);
             match action {
                 Action::Down if !rows.is_empty() => self.header = false,
                 Action::Left => self.header_index = self.header_index.saturating_sub(1),
                 Action::Right => self.header_index = (self.header_index + 1).min(last),
                 Action::Ok | Action::OkLong => {
-                    if self.header_index < n {
-                        return self.open_item(libs[self.header_index].clone());
+                    // Home is this page: OK goes down to its rows.
+                    if self.header_index == 0 {
+                        if !rows.is_empty() {
+                            self.header = false;
+                        }
+                        return vec![];
                     }
-                    if switch && self.header_index == n {
+                    if self.header_index <= n {
+                        return self.open_item(libs[self.header_index - 1].clone());
+                    }
+                    if switch && self.header_index == n + 1 {
                         return self.switch_backend(accounts);
                     }
                     self.stack.push(Screen::Settings {
@@ -971,8 +979,9 @@ impl Fin {
             Some(Screen::Browse) => {
                 if row == usize::MAX {
                     self.header = true;
-                    self.header_index = col
-                        .min(self.header_libraries().len() + usize::from(header_switch(accounts)));
+                    self.header_index = col.min(
+                        self.header_libraries().len() + 1 + usize::from(header_switch(accounts)),
+                    );
                     return true;
                 }
                 if rows.get(row).is_some_and(|r| col < r.items.len()) {
@@ -1173,6 +1182,11 @@ impl Fin {
                 let n = self.rows().len();
                 self.row = self.row.min(n.saturating_sub(1));
                 self.header = n == 0;
+                if n == 0 {
+                    // Nothing to show: focus the first stop past the tabs
+                    // (the Jellyfin | Plex switch, else the account button).
+                    self.header_index = self.header_libraries().len() + 1;
+                }
                 self.error = None;
             }
             Err(e) => {
@@ -1514,10 +1528,10 @@ mod tests {
         assert!(header_switch(&a));
         let (mut f, _) = Fin::open(&a);
         f.on_home(Result::Ok(HomeData::default()));
-        // No rows: the header has focus; past the (no) library tabs is
-        // the switch, then the account button.
+        // No rows: the header has focus, on the switch (past Home and the
+        // no library tabs); the account button is after it.
         assert!(f.header);
-        assert_eq!(f.header_index, 0);
+        assert_eq!(f.header_index, 1);
         assert_eq!(
             f.handle(Ok, &a),
             vec![FinEffect::SwitchAccount(1), FinEffect::LoadHome]
@@ -1608,6 +1622,33 @@ mod tests {
         let mut e = item("e", "Episode");
         e.series_id = "s".into();
         assert_eq!(detail_actions(&e), vec!["Play", "Go to series"]);
+    }
+
+    #[test]
+    fn home_tab_is_a_stop_in_the_header() {
+        let a = signed_in();
+        let (mut f, _) = Fin::open(&a);
+        let movies = Item {
+            id: "lib-m".into(),
+            name: "Movies".into(),
+            ..Item::default()
+        };
+        f.on_home(Result::Ok(HomeData {
+            libraries: vec![movies],
+            ..HomeData::default()
+        }));
+        f.header = true;
+        f.header_index = 1; // Movies
+        f.handle(Left, &a);
+        assert_eq!(
+            f.header_index, 0,
+            "Left from the first library reaches Home"
+        );
+        f.handle(Left, &a);
+        assert_eq!(f.header_index, 0);
+        f.handle(Right, &a);
+        f.handle(Right, &a);
+        assert_eq!(f.header_index, 2, "then the account button");
     }
 
     #[test]
