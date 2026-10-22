@@ -31,6 +31,28 @@ pub const CAT_LIST_URL: &str =
 pub const PHOTO_URL: &str = "https://picsum.photos/3840/2160.jpg";
 pub const WEATHER_URL: &str = "https://wttr.in/?format=j1";
 
+/// Cat pictures come only from TheCatAPI's own servers.
+const CAT_HOST_SUFFIX: &str = ".thecatapi.com";
+
+/// The host of an `https://` URL, when it is a plain name (no user name,
+/// port or odd characters).
+fn https_host(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("https://")?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    let plain = !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    plain.then_some(host)
+}
+
+/// A TheCatAPI picture address: https, one of its own servers, a `.jpg`.
+fn is_cat_url(url: &str) -> bool {
+    url.ends_with(".jpg")
+        && https_host(url)
+            .is_some_and(|h| h.len() > CAT_HOST_SUFFIX.len() && h.ends_with(CAT_HOST_SUFFIX))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pictures {
     Cats,
@@ -113,7 +135,7 @@ pub fn parse_cats(text: &str) -> Vec<String> {
             w >= MIN_WIDTH && w >= h
         })
         .filter_map(|i| i.get("url")?.as_str())
-        .filter(|u| u.starts_with("https://") && u.ends_with(".jpg"))
+        .filter(|u| is_cat_url(u))
         .map(str::to_string)
         .collect()
 }
@@ -242,6 +264,29 @@ mod tests {
             ]
         );
         assert!(parse_cats("oops").is_empty());
+    }
+
+    #[test]
+    fn cat_pictures_only_from_the_cat_servers() {
+        let item = |u: &str| format!(r#"[{{"url":"{u}","width":4000,"height":3000}}]"#);
+        for good in [
+            "https://cdn2.thecatapi.com/images/a.jpg",
+            "https://cdn.thecatapi.com/images/a.jpg",
+        ] {
+            assert_eq!(parse_cats(&item(good)), [good]);
+        }
+        for bad in [
+            "https://evilthecatapi.com/a.jpg",
+            "https://thecatapi.com.evil.example/a.jpg",
+            "https://cdn2.thecatapi.com@evil.example/a.jpg",
+            "https://cdn2.thecatapi.com:8443/a.jpg",
+            "https://192.168.1.1/a.jpg",
+            "https://thecatapi.com/a.jpg",
+            "https://cdn2.thecatapi.com/a.png",
+            "http://cdn2.thecatapi.com/a.jpg",
+        ] {
+            assert!(parse_cats(&item(bad)).is_empty(), "{bad}");
+        }
     }
 
     #[test]
