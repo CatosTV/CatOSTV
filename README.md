@@ -1,13 +1,20 @@
+<p align="center">
+  <img src="assets/logo.svg" width="96" alt="CatosTV">
+</p>
+
 # CatosTV
 
 **A no-nonsense Linux distro made for TV screens.**
 
-I built CatosTV for my own living room. Smart TV software had turned into
-an ad billboard: rows of "recommended" things I never asked for, sponsored
-tiles, and a home screen that cared more about selling me something than
-letting me watch what I wanted. I wanted my TV back.
+![CatosTV Home](assets/screenshots/home.webp)
 
-CatosTV turns an ordinary PC (a mini PC, an old desktop) into a calm, fast
+I built CatosTV for my own living room. Google TV turned the screen I paid
+for with my hard-earned money into an ad billboard, so they can keep making
+money off me: rows of "recommended" things I never asked for, sponsored
+tiles, and a home screen that cares more about selling me something than
+letting me watch what I want. I wanted my TV back.
+
+CatosTV turns an ordinary PC (a mini PC, an old desktop or laptop) into a calm, fast
 TV box. You turn it on, you see your apps, you pick one, you watch. No ads,
 no account, no tracking, nothing you didn't install yourself. (The screensaver
 fetches pictures and local weather from public services; you can turn it off in
@@ -20,6 +27,13 @@ settings, installer, media player front end) is written from scratch in
 Rust.
 
 ## What you get
+
+| | |
+|---|---|
+| ![CatTube](assets/screenshots/cattube.webp) | ![Catfyn](assets/screenshots/catfyn.webp) |
+| CatTube, for YouTube | Catfyn, for Jellyfin and Plex |
+| ![Store](assets/screenshots/store.webp) | ![Quick settings](assets/screenshots/quick-settings.webp) |
+| The Store, apps from Flathub | Quick settings, over any app |
 
 - A home screen you drive with a remote. Your apps in one row, big
   readable text, and everything reachable with arrows, OK and Back.
@@ -37,7 +51,7 @@ Rust.
   one was showing.
 - Use whatever you have to control it: a keyboard, a game controller, a
   Bluetooth remote, your phone (a remote page in the browser, or KDE
-  Connect), or your TV's own remote over HDMI-CEC with a USB-CEC adapter.
+  Connect), or your TV's own remote over HDMI-CEC.
   One press on a keyboard, remote or controller wakes the TV from sleep.
 - Cast to it from phone apps that support DLNA, and use "link with TV" in
   the YouTube app.

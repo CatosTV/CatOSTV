@@ -1,373 +1,144 @@
 # The CatosTV manual
 
-Everything you need to install CatosTV and live with it. If something
-here doesn't match what you see on your TV, that's a bug, so please open an
-issue.
+The things you can't tell just by looking at the screen. If something here
+doesn't match your TV, please open an issue.
 
 - [Installing](#installing)
-- [Getting around](#getting-around)
-- [Apps and the Store](#apps-and-the-store)
+- [Keys and buttons](#keys-and-buttons)
+- [CatTube (YouTube)](#cattube-youtube)
 - [Catfyn (Jellyfin and Plex)](#catfyn-jellyfin-and-plex)
+- [Apps that need a mouse](#apps-that-need-a-mouse)
 - [Android apps](#android-apps)
-- [Your phone: remote, casting, KDE Connect](#your-phone-remote-casting-kde-connect)
-- [Controllers and remotes](#controllers-and-remotes)
-- [Quick settings](#quick-settings)
-- [Volume](#volume)
-- [Screensaver](#screensaver)
-- [Settings, page by page](#settings-page-by-page)
+- [Your phone](#your-phone)
+- [Your TV's remote (HDMI-CEC)](#your-tvs-remote-hdmi-cec)
 - [Updates](#updates)
-- [For tinkerers: Debug SSH](#for-tinkerers-debug-ssh)
+- [Debug SSH](#debug-ssh)
 - [When something goes wrong](#when-something-goes-wrong)
 
 ---
 
 ## Installing
 
-### The boot menu
-
-Boot the PC from the CatosTV USB stick. A menu appears for ten seconds:
+Boot the PC from the CatosTV USB stick in **UEFI mode**. The menu starts the
+first entry after ten seconds.
 
 | Entry | When to use it |
 |---|---|
-| **Install CatosTV** | Almost always. The installer looks at your graphics card and picks the drivers. |
-| **…with NVIDIA graphics** | Force NVIDIA's own driver (GeForce GTX 16 / RTX 20 or newer). |
-| **…with open graphics drivers** | Use the open-source drivers even on an NVIDIA card. |
-| **…with safe graphics** | The screen stays black or garbled with the others. Everything is drawn without acceleration: fine for installing, too slow for films. |
-| **Start from this computer's disk** | Leave the stick in but boot what's already installed. |
-| **Firmware settings** | Opens your PC's UEFI setup (to change boot order, for example). |
+| **Install CatosTV** | Almost always. The installer picks the graphics drivers. |
+| **…with NVIDIA graphics** | NVIDIA's own driver, for GeForce GTX 16 / RTX 20 or newer. |
+| **…with open graphics drivers** | The open-source driver, even on an NVIDIA card. |
+| **…with safe graphics** | The screen stays black or garbled with the others. Fine for installing, too slow for films. |
 
-After choosing, the CatosTV start-up screen shows while it loads; the
-installer follows.
-
-### The installer
-
-You can use a keyboard, a mouse or a game controller.
-
-1. **Welcome**: *Let's go*.
-2. **Keyboard**: pick your layout. There's a field to try it out.
-3. **Network**: with a cable plugged in you're already online; otherwise
-   choose your Wi-Fi and type its password. CatosTV downloads its system
-   during installation, so this step is required.
-4. **Disk**: choose where CatosTV goes. **The whole disk is erased.** The
-   installer refuses the USB stick it runs from and warns you about
-   removable drives and disks that already have files on them.
-5. **Time zone.**
-6. **Ready to install?**: the disk, your choices and the graphics drivers
-   it will set up. *Erase and install* starts; *Cancel* goes back.
-7. It works through about a dozen steps (10 to 30 minutes, mostly
-   downloading). Keep the TV on and the stick in.
-8. **You're all set**: remove the stick and choose *Restart now*.
-
-The installed CatosTV starts straight into its home screen. There's no
-login and no account.
+The installer needs **internet**, because it downloads the newest
+version, and it takes 10 to 30 minutes. **The disk you pick is erased.**
+After the restart CatosTV opens on Home. There's nothing to sign in to.
 
 ---
 
-## Getting around
+## Keys and buttons
 
-Everything works with **arrows, OK and Back**. Hold **OK** on something for
-its options.
+Hold **OK** on anything for its options. On Home that includes *Move*, to
+put your apps in the order you like.
 
-| Keyboard | What it does |
-|---|---|
-| Arrow keys | Move |
-| Enter | OK · hold for options |
-| Esc | Back |
-| Esc three times, or hold Esc | Leave the app you're in |
-| Home | CatosTV Home, from anywhere |
-| F10 | Quick settings |
-| Just start typing | Search |
+| Keyboard | Controller | Does |
+|---|---|---|
+| Enter | A | OK |
+| Esc | B | Back |
+| Esc three times, or hold Esc | | Leave the app you're in |
+| Home | Guide (Xbox / PS button) | Home, from anywhere, also inside games |
+| F10 | X or Select | Quick settings |
+| | Y or Start | Options |
+| Start typing | | Search |
 
-The key guide is in **Settings → Navigation & controllers → Key guide** if
-you forget.
+While an **Android app** is in front, only the Guide button belongs to
+CatosTV; the other controller buttons go to the app.
 
-### The tabs
-
-The bar at the top has **Home · Recents · Apps · Store · Search**. Press Up
-from the page to reach it; the tab you're on lights up.
-
-- **Home**: your apps in a row, and *Continue watching* from Catfyn.
-- **Recents**: the apps that are open, each with a picture of what it was
-  showing and how much CPU and memory it uses. OK goes back to it; Up
-  reaches its **×** to close it; *Close all* is underneath. When nothing is
-  open it says *No background apps*.
-- **Apps**: every app, in a grid.
-- **Store**: apps to install (see below).
-- **Search**: apps, settings and your Jellyfin and Plex libraries.
-
-### App options
-
-Press the Options/Menu button on an app (or hold **OK** in Apps and
-Recents) for *Open* or *Resume*, *Restart*, *Close*, and *Uninstall* for
-apps from the Store or Android.
-
-### Arranging apps on Home
-
-Hold **OK** on an app on Home to pick it up. Move it with Left and Right,
-then press **OK** (or Back) to put it down. Down puts it down and opens its
-options. *Move* in an app's options picks it up too. New apps go at the
-end.
-
-### Leaving an app
-
-Press **Home** (or the Home/Guide button on your remote or controller).
-The app keeps running in **Recents**; to really close it, close it there or
-from its options.
+Each controller can switch to the **Nintendo layout** (A and B swapped) or
+use other buttons in **Settings → Navigation & controllers**. Turn off
+*Use controllers in CatosTV* if you only want them in games.
 
 ---
 
-## Apps and the Store
+## CatTube (YouTube)
 
-The **Store** tab lists apps from [Flathub](https://flathub.org): Steam,
-Kodi, VLC, Spotify, emulators and lots more. Pick one and choose
-*Install*; it appears on Home when it's done. *Remove* is in the same
-place, or *Uninstall* in the app's options.
+To sign in, open the account button in CatTube. It shows a code: type it at
+**google.com/device** on your phone. More than one account works.
 
-**Settings → Apps** lists everything installed (with a search field) and
-has *Update apps* to update them all.
-
-Steam has a tile on Home from the start, marked *Not installed*. Install
-it from the Store first, then it opens in its TV mode (Big Picture).
+To use the YouTube app on your phone as a remote, go to *Settings → Watch
+on TV → Link with TV code* in the phone app and type the code from
+CatTube's Settings.
 
 ---
 
 ## Catfyn (Jellyfin and Plex)
 
-Catfyn plays films and series from your own
-[Jellyfin](https://jellyfin.org) or [Plex](https://www.plex.tv) server.
-You can add both.
+- **Jellyfin**: Catfyn finds servers on your network. If yours isn't
+  listed, type its address, for example `192.168.1.20:8096`.
+- **Plex**: choose *Sign in with Plex* and type the code it shows at
+  **plex.tv/link**.
 
-1. Open **Catfyn** from Home. *Add a server* has a **Jellyfin | Plex**
-   switch at the top.
-2. **Jellyfin**: Catfyn looks for Jellyfin servers on your network; pick
-   yours, or enter the address (e.g. `192.168.1.20:8096`). Then sign in
-   with your Jellyfin user name and password.
-3. **Plex**: choose *Sign in with Plex*. Catfyn shows a code; on your
-   phone or computer go to **plex.tv/link** and enter it. If your account
-   has more than one server, pick one. A Plex server on your network that
-   lets you in without signing in is listed too, or enter its address
-   (e.g. `192.168.1.20`).
+You can add both. *Incognito* on an account, in Catfyn's settings (the
+button with your name), keeps what you watch off CatosTV's Home.
 
-Then:
+---
 
-- **Home** in Catfyn shows *Continue watching*, *Next up* and the newest
-  items in each library; the tabs at the top open your libraries.
-- OK on a film or episode plays it (or resumes it); hold OK for its
-  details: *Resume*, *Play from start*, *Go to series*, *Episodes*.
-- *Continue watching*, *Movies* and *TV shows* also appear on CatosTV's
-  own Home. With both a Jellyfin and a Plex server they are shown
-  together.
-- With both, the **Jellyfin | Plex** switch next to the account button
-  moves Catfyn between them.
-- When an episode's end credits start, a card offers the **next episode**
-  with a countdown. *Play now*, or *Cancel* to stay. After three episodes
-  in a row it asks whether you're still watching.
+## Apps that need a mouse
 
-**Catfyn's settings** are behind the account button at the top right (the
-one with your name and a gear): your accounts (switch, add, sign out, or
-*Incognito*: kept off CatosTV's Home), whether the next
-episode plays automatically, and how long the countdown is.
-
-If loading fails (server off, network down), Catfyn says so. Press OK to
-try again.
+Desktop apps made for a mouse get a pointer: the arrows move it, OK clicks,
+and holding OK is a right click. **Back** puts the remote back to normal.
+It comes on by itself for apps that need it; **Mouse** in Quick settings,
+while the app is open, turns it on or off for that app for good.
 
 ---
 
 ## Android apps
 
-CatosTV can run Android TV apps natively, right next to everything else.
-Setting it up takes one trip to Settings. Everything about it (setup,
-Google Play or Aurora Store, installing apps, controllers, fixing problems)
-is in **[ANDROID.md](ANDROID.md)**.
+Everything about Android (setup, Google Play or Aurora Store, installing
+APKs, fixing problems) is in **[the Android guide](ANDROID.md)**.
 
 ---
 
-## Your phone: remote, casting, KDE Connect
+## Your phone
 
-**Settings → Cast & remote** shows what's available.
+**Settings → Cast & remote** shows the phone remote's address and PIN.
+Open the address in your phone's browser on the same Wi-Fi. It has a
+touchpad and a keyboard.
 
-### Phone remote
-
-Open the address shown there in your phone's browser (same Wi-Fi) and
-enter the PIN. You get the arrows and OK, Back, Home, Quick settings,
-volume, mute, play/pause, and a text box to type into the TV.
-
-### Casting
-
-- **DLNA**: apps on your phone that can "play to" a DLNA/UPnP renderer
-  (many video and music apps, file managers) see the TV as **CatosTV**.
-- **YouTube**: in the YouTube app choose *Cast → Link with TV code*; the
-  TV opens YouTube's TV page so you can link it.
-
-### KDE Connect
-
-Install [KDE Connect](https://kdeconnect.kde.org) on your phone (Android,
-iPhone) or laptop. The TV appears as **CatosTV**; pair it from the phone
-(the TV asks you to accept) or from the TV.
-
-Then you can control what's playing (play, pause, seek, volume) from the
-phone's notification, share links and files to the TV, and use the
-phone's clipboard. In **Settings → Cast & remote**, OK on your phone gives
-*Ring phone* (find it in the sofa) and *Unpair*.
-
-KDE Connect's own mouse/keyboard remote doesn't work on CatosTV. Use the
-phone remote above for that.
+- **Casting**: apps that "play to" a DLNA device see the TV as
+  **CatosTV**. Casting from the YouTube app plays in CatTube.
+- **KDE Connect**: the TV shows up as **CatosTV**. Pair it from the phone
+  and accept on the TV. KDE Connect's own mouse and keyboard remote doesn't
+  work; use the phone remote instead.
 
 ---
 
-## Controllers and remotes
+## Your TV's remote (HDMI-CEC)
 
-### Game controllers
-
-Xbox, PlayStation, Switch and most USB/Bluetooth pads work:
-
-| Button | Does |
-|---|---|
-| D-pad / left stick | Move |
-| A | OK |
-| B | Back |
-| Y or Start | Options |
-| X or Select | Quick settings |
-| Guide (Xbox / PS button) | Home, also from inside apps and games |
-
-While an **Android app** is in front, only the Guide button is CatosTV's;
-every other button goes to the app or game.
-
-**Settings → Navigation & controllers**:
-
-- *Pair a controller or remote* (Bluetooth: put it in pairing mode first).
-- Each connected controller: switch to the **Nintendo layout** (A and B
-  swapped).
-- *Use controllers in CatosTV*: turn off if you only want them in games.
-- *Controller: …*: choose a different button for OK, Back, Options, Home
-  or Quick settings.
-
-### Your TV's remote (HDMI-CEC)
-
-Most PCs can't receive the TV remote over HDMI by themselves. With a
-**USB-CEC adapter** (for example Pulse-Eight's) plugged in between, the
-TV's remote works: arrows, OK (hold for options), Back/Exit, Home (the
-*Home*/*Menu* key), the *Settings* key for Quick settings, numbers, volume
-and play/pause. The power button deliberately does nothing to the PC.
-
-### Bluetooth remotes and keyboards
-
-Pair them in **Settings → Navigation & controllers** or **Settings →
-Bluetooth**.
-
----
-
-## Quick settings
-
-Press **F10** (keyboard), **X / Select** (controller) or the **Settings**
-key (TV remote). It works over apps too: it opens on top of whatever is
-playing, and then it also has *Back to app*, *Full screen* and *Close* for
-the app.
-
-- **Network**: shows *Ethernet* or your Wi-Fi network. OK opens it: Wi-Fi
-  on/off, nearby networks (OK to join), and **Ethernet** with its details
-  and IP settings.
-- **Bluetooth**: shows the connected device. OK opens it: on/off, your
-  paired devices (OK connects or disconnects) and *Pair a new device*.
-- **Mute**, **Settings**, **Sleep**, **Power**. Sleep shows the
-  screensaver. With the screensaver turned off, it puts the TV to sleep
-  instead, and one press on the keyboard, remote or controller wakes it
-  (with a USB-CEC adapter, the TV's own remote too).
-- The volume bar underneath: Left/Right to change, OK to mute.
-
----
-
-## Volume
-
-The volume keys bring up a slider on the right edge of the screen, over
-apps too, with the sound output it plays on beside it. While it's there:
-
-- **Up/Down** or the volume keys change the volume. Turning it up also
-  unmutes.
-- **OK** mutes and unmutes.
-- **Left** lists your sound outputs (TV, Bluetooth headphones and so on).
-  Pick one with OK.
-- **Back** closes it. It also goes away by itself after a few seconds.
-
----
-
-## Screensaver
-
-After 3 minutes without a key press on CatosTV's own screens, the
-screensaver comes on: a slideshow with the time, the date and the
-weather. Any button takes you back to Home. It never starts over an app
-or a film.
-
-In **Settings → Customization** you can turn it off, set the
-**Screensaver image type** to **GOOOD CATS!** or **Random photos**, and
-change when it starts. Cat pictures come from TheCatAPI,
-photos from Lorem Picsum and the weather from wttr.in, which works out
-roughly where you are from your internet address. Pictures are kept on
-the TV, so the slideshow still runs when the internet is down.
-
----
-
-## Settings, page by page
-
-- **Network**: Wi-Fi on/off, the connection, the Wi-Fi networks nearby
-  (OK joins one, *Search again* at the end), and
-  **Ethernet**: status, gateway, DNS, MAC, and IP settings, either
-  *Automatic* or *Manual* (address like `192.168.1.50/24`, gateway, DNS
-  servers), then *Save*. The TV reconnects with the new settings.
-- **Bluetooth**: on/off, paired devices, pair new ones.
-- **Display**: resolution (it asks whether to keep a new one and goes back
-  by itself if you don't answer), *Interface size*, *Picture fit* (shrink
-  the picture if the edges are cut off), adaptive sync, HDR.
-- **Sound**: volume, mute, output device, and *Use TV speakers (HDMI)*
-  for when the TV stays silent.
-- **Customization**: accent colour, 12/24-hour clock, *Home background*
-  (*NOICE CATS*, *Random photos* or *Glow*), and the screensaver.
-- **Apps**: installed apps, search, *Update apps*.
-- **Android**: set up and manage Android ([ANDROID.md](ANDROID.md)).
-- **Cast & remote**: casting, phone remote, KDE Connect devices.
-- **Navigation & controllers**: pairing, controller layouts and buttons,
-  the key guide.
-- **System**: version, IP address, storage, restart, power off.
-- **Updates**: see below.
-- **Debug**: for tinkerers, see below.
+The remote that came with your TV works over the HDMI cable. Its *Home* or
+*Menu* key goes Home and the *Settings* key opens Quick settings. The power button does nothing to the
+PC, on purpose.
 
 ---
 
 ## Updates
 
-**Settings → Updates** checks for a new CatosTV version when you open it
-and shows what's new. *Install* downloads it, checks it was really made by
-CatosTV (it's signed), updates the system and CatosTV, and restarts the
-interface. It refuses while something is playing, so close it first.
-
-CatosTV is a rolling release. Each update brings the Arch Linux packages
-it was tested with, so the system underneath only changes together with
-CatosTV, never on its own. You never need a new ISO either: the installer
-looks for updates before it starts and installs the newest version.
-
-If it says *Updates aren't set up yet*, the TV was installed from 1.0.0,
-which shipped without the update settings. Reinstalling from a newer
-ISO fixes that (your apps and Android are on the disk that gets erased, so
-note what you had).
+New versions show up in **Settings → Updates**. They don't install while
+something is playing. Each update brings the Arch Linux packages it was
+tested with, so the system underneath only changes together with CatosTV.
 
 ---
 
-## For tinkerers: Debug SSH
+## Debug SSH
 
-**Settings → Debug** has *Debug SSH*, off by default and **off again after
-every restart**. Switched on, you can log in from another computer:
+**Settings → Debug → Debug SSH** lets you log in from another computer. It
+switches itself off at every restart.
 
 ```bash
 ssh catostv@<the TV's IP address>      # Settings → System shows it
 ```
 
-The password is `catostv` until you change it with *Change password* on
-the same page. Do that first: anyone on your network who knows the
-default could otherwise log in and become administrator. `sudo` works with
-the same password while Debug SSH is on.
-
-The page also shows the graphics driver in use, the exact build, and has
-*Restart the interface* if the screen ever gets stuck.
+The password is `catostv` until you change it on the same page. Change it
+first: otherwise anyone on your network can log in as administrator.
 
 ---
 
@@ -378,9 +149,7 @@ The page also shows the graphics driver in use, the exact build, and has
 | Black screen after choosing *Install* | Wait for the CatosTV start-up screen; if it never comes, use *…with safe graphics*. |
 | No picture after installing on an NVIDIA card | Reinstall with *…with open graphics drivers*. |
 | The edges of the picture are cut off | Settings → Display → *Picture fit*. |
-| No sound over HDMI | Settings → Sound → choose the HDMI output, or *Use TV speakers (HDMI)*. |
-| An app froze | Press Home, then close it in Recents. Android apps that stop responding are closed for you, with a message. |
-| The interface itself is stuck | Settings → Debug → *Restart the interface*, or Quick settings → Power → Restart. |
-| Android won't start or keeps crashing | Settings → Android → *Reset Android* ([ANDROID.md](ANDROID.md)). |
-| Wi-Fi password rejected | Wi-Fi passwords have at least 8 characters; check upper/lower case. |
-| Lost? | Press Home. |
+| No sound over HDMI | Settings → Sound → choose the HDMI output, or turn on *Use TV speakers (HDMI)*. |
+| An app froze | Press Home, then close it in Recents. |
+| CatosTV itself is stuck | Settings → Debug → *Restart the interface*, or Quick settings → Power → Restart. |
+| Android won't start or keeps crashing | Settings → Android → *Reset Android* (see [the Android guide](ANDROID.md)). |

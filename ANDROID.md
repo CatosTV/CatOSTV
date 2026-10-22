@@ -95,6 +95,6 @@ pleasant on a TV. Phone-only apps open but may expect a touch screen.
   refuse to play, keep loading or drop to low quality.
 - **Casting to Android apps**: Android's built-in Chromecast receiver isn't
   available. CatosTV's own casting (DLNA, YouTube "link with TV") still
-  works. See the [manual](MANUAL.md#your-phone-remote-casting-kde-connect).
+  works. See the [manual](MANUAL.md#your-phone).
 - **Storage**: Android apps and their data live on CatosTV's disk; Settings
   → System shows how much space is left.
