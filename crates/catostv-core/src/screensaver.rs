@@ -31,6 +31,12 @@ pub const CAT_LIST_URL: &str =
 pub const PHOTO_URL: &str = "https://picsum.photos/3840/2160.jpg";
 pub const WEATHER_URL: &str = "https://wttr.in/?format=j1";
 
+/// A different picture every time: Lorem Picsum caches by URL, so four
+/// identical requests could return the same photo four times.
+pub fn photo_url(seed: u64) -> String {
+    format!("{PHOTO_URL}?random={seed}")
+}
+
 /// Cat pictures come only from TheCatAPI's own servers.
 const CAT_HOST_SUFFIX: &str = ".thecatapi.com";
 
@@ -287,6 +293,12 @@ mod tests {
         ] {
             assert!(parse_cats(&item(bad)).is_empty(), "{bad}");
         }
+    }
+
+    #[test]
+    fn every_photo_is_its_own_request() {
+        assert_ne!(photo_url(1), photo_url(2));
+        assert!(photo_url(7).starts_with("https://picsum.photos/3840/2160.jpg?"));
     }
 
     #[test]
