@@ -1617,4 +1617,38 @@ mod tests {
         assert_eq!(detect_cpu("vendor_id\t: GenuineIntel"), CpuVendor::Intel);
         assert_eq!(detect_cpu(""), CpuVendor::Other);
     }
+
+    #[test]
+    fn catostv_sysctl_files_are_well_formed() {
+        // `key = value`, optionally with a leading "-" (ignore failures).
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target-root/etc/sysctl.d");
+        let mut seen = 0;
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !name.contains("catostv") || !name.ends_with(".conf") {
+                continue;
+            }
+            for line in std::fs::read_to_string(e.path()).unwrap().lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let (k, v) = line.split_once(" = ").unwrap_or_else(|| panic!("{name}: {line}"));
+                let k = k.strip_prefix('-').unwrap_or(k);
+                assert!(
+                    !k.is_empty()
+                        && k.bytes().all(|b| {
+                            b.is_ascii_lowercase()
+                                || b.is_ascii_digit()
+                                || matches!(b, b'.' | b'_' | b'-')
+                        }),
+                    "{name}: {line}"
+                );
+                assert!(v.bytes().all(|b| b.is_ascii_digit()), "{name}: {line}");
+                seen += 1;
+            }
+        }
+        assert!(seen >= 3, "sysctl files found");
+    }
+
 }
