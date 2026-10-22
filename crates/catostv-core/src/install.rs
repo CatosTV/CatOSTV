@@ -81,6 +81,8 @@ pub const BASE_PACKAGES: &[&str] = &[
     "linux",
     "linux-firmware",
     "mkinitcpio",
+    // In-memory compressed swap (zram)
+    "zram-generator",
     // fsck.vfat for the EFI partition at boot; fatlabel.
     "dosfstools",
     "dbus-broker-units",
@@ -1744,5 +1746,29 @@ mod tests {
         ] {
             assert!(p.contains(&param), "{param}");
         }
+    }
+
+    #[test]
+    fn zswap_is_off_while_zram_is_the_swap() {
+        assert!(tuning_params().contains(&"zswap.enabled=0"));
+        let rule = include_str!("../../../target-root/etc/udev/rules.d/30-catostv-zram.rules");
+        assert!(!rule.contains("zswap/parameters"), "zswap is switched off on the command line");
+    }
+
+    #[test]
+    fn zram_swap_is_installed_and_capped() {
+        assert!(BASE_PACKAGES.contains(&"zram-generator"));
+        let conf = include_str!("../../../target-root/etc/systemd/zram-generator.conf");
+        let get = |key: &str| {
+            conf.lines()
+                .filter(|l| !l.trim_start().starts_with('#'))
+                .find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == key))
+                .map(|(_, v)| v.trim().to_string())
+        };
+        assert_eq!(get("compression-algorithm").as_deref(), Some("zstd"));
+        // Capped, with a limit on what the compressed data may take.
+        assert_eq!(get("zram-size").as_deref(), Some("min(ram, 8192)"));
+        assert_eq!(get("zram-resident-limit").as_deref(), Some("ram * 3 / 4"));
+        assert!(conf.contains("[zram0]"));
     }
 }

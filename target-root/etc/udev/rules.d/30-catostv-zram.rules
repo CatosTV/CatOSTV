@@ -1,0 +1,8 @@
+# CatosTV: prefer paging out to compressed ZRAM over discarding file cache (from CachyOS).
+#
+# Higher swappiness (150) keeps executable code and disk cache in RAM, as
+# decompressing anonymous pages from ZRAM is faster than re-reading files from disk.
+# It is set when zram0 comes up, so it only applies while that swap exists.
+# (zswap, which would compress the pages a second time, is switched off with
+# zswap.enabled=0 on the kernel command line: see kernel-params.)
+ACTION=="change", KERNEL=="zram0", ATTR{initstate}=="1", SYSCTL{vm.swappiness}="150"

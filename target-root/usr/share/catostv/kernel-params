@@ -28,3 +28,8 @@ amdgpu.si_support=1
 amdgpu.cik_support=1
 radeon.si_support=0
 radeon.cik_support=0
+
+# zswap would compress pages a second time on their way into ZRAM. Off here,
+# not from a udev rule, so it is off from the first boot second and does not
+# depend on when zram0 appears.
+zswap.enabled=0
