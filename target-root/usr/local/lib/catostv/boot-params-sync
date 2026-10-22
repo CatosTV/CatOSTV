@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# CatosTV: add the kernel parameters this version wants to the systemd-boot
+# entry of a TV that was installed earlier. New installs get them from the
+# installer (install::loader_entry); post-install runs this on every update.
+#
+#   boot-params-sync [ENTRY [PARAMS]]
+#
+# ENTRY is /boot/loader/entries/catostv.conf, PARAMS is
+# /usr/share/catostv/kernel-params (one parameter per line, "#" comments).
+# Only adds what is missing: never removes or reorders anything, leaves
+# alone an entry without an `options` line, and can run any number of times.
+# The change takes effect at the next boot.
+set -uo pipefail
+ENTRY=${1:-/boot/loader/entries/catostv.conf}
+PARAMS=${2:-/usr/share/catostv/kernel-params}
+[[ -f $ENTRY && -f $PARAMS ]] || exit 0
+opts=$(sed -n 's/^options[[:space:]]\+//p' "$ENTRY" | head -n 1)
+[[ -n $opts ]] || exit 0
+add=
+while IFS= read -r line; do
+  p=${line%%#*}
+  p=${p//[[:space:]]/}
+  [[ -n $p ]] || continue
+  # Plain words only: it ends up in a sed replacement.
+  if [[ ! $p =~ ^[A-Za-z0-9_.:=,-]+$ ]]; then
+    echo "boot-params-sync: ignoring odd parameter '$p'" >&2
+    continue
+  fi
+  case " $opts $add " in
+    *" $p "*) ;;
+    *) add+=" $p" ;;
+  esac
+done < "$PARAMS"
+[[ -n $add ]] || exit 0
+sed -i -E "/^options[[:space:]]/ s/\$/$add/" "$ENTRY" || exit 0
+echo "boot entry: added$add (applies at the next boot)"

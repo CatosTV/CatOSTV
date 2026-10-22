@@ -81,6 +81,8 @@ pub const BASE_PACKAGES: &[&str] = &[
     "linux",
     "linux-firmware",
     "mkinitcpio",
+    // In-memory compressed swap (zram)
+    "zram-generator",
     // fsck.vfat for the EFI partition at boot; fatlabel.
     "dosfstools",
     "dbus-broker-units",
@@ -95,6 +97,10 @@ pub const BASE_PACKAGES: &[&str] = &[
     "pipewire-pulse",
     "pipewire-alsa",
     "wireplumber",
+    // Real-time scheduling for PipeWire's audio threads: polkit grants it to the
+    // active session, no group or limits.d file needed (PipeWire only lists rtkit
+    // as an optional dependency)
+    "rtkit",
     // Session / compositor
     "greetd",
     "greetd-agreety",
@@ -393,15 +399,30 @@ pub fn loader_conf() -> String {
     "default catostv.conf\ntimeout 0\nconsole-mode keep\neditor no\n".to_string()
 }
 
+/// Kernel parameters CatosTV adds to the boot entry of an installed system,
+/// one per line (`#` starts a comment). `boot-params-sync` adds the missing
+/// ones to TVs that were installed earlier.
+const KERNEL_PARAMS: &str = include_str!("../../../target-root/usr/share/catostv/kernel-params");
+
+/// The parameters in [`KERNEL_PARAMS`].
+pub fn tuning_params() -> Vec<&'static str> {
+    KERNEL_PARAMS
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
 /// systemd-boot entry. Microcode is embedded in the initramfs by
 /// mkinitcpio's default `microcode` hook, so no separate initrd line is
 /// needed for intel-ucode/amd-ucode.
 pub fn loader_entry(root_uuid: &str, extra: &[&str]) -> String {
+    let tuning: String = tuning_params().iter().map(|p| format!(" {p}")).collect();
     let extra: String = extra.iter().map(|p| format!(" {p}")).collect();
     format!(
         "title   CatosTV\nlinux   /vmlinuz-linux\ninitrd  /initramfs-linux.img\n\
          options root=UUID={root_uuid} rw quiet splash loglevel=3 rd.udev.log_level=3 \
-         systemd.show_status=auto vt.global_cursor_default=0{extra}\n"
+         systemd.show_status=auto{tuning} vt.global_cursor_default=0{extra}\n"
     )
 }
 
@@ -1529,6 +1550,9 @@ mod tests {
         assert!(plan(&bad).is_err());
         assert!(!text.contains("libva-mesa-driver"));
         assert!(loader_entry(UUID, &[]).contains(&format!("root=UUID={UUID} rw")));
+        assert!(loader_entry(UUID, &[]).contains("nowatchdog preempt=full"));
+        // A sysctl, not a boot parameter (see 70-catostv-performance.conf).
+        assert!(!loader_entry(UUID, &[]).contains("split_lock_mitigate"));
         assert!(
             loader_entry(UUID, &["nvidia_drm.modeset=1"])
                 .contains("vt.global_cursor_default=0 nvidia_drm.modeset=1\n")
@@ -1645,5 +1669,182 @@ mod tests {
         assert_eq!(detect_cpu("vendor_id : AuthenticAMD"), CpuVendor::Amd);
         assert_eq!(detect_cpu("vendor_id\t: GenuineIntel"), CpuVendor::Intel);
         assert_eq!(detect_cpu(""), CpuVendor::Other);
+    }
+
+    #[test]
+    fn catostv_sysctl_files_are_well_formed() {
+        // `key = value`, optionally with a leading "-" (ignore failures).
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target-root/etc/sysctl.d");
+        let mut seen = 0;
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !name.contains("catostv") || !name.ends_with(".conf") {
+                continue;
+            }
+            for line in std::fs::read_to_string(e.path()).unwrap().lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let (k, v) = line.split_once(" = ").unwrap_or_else(|| panic!("{name}: {line}"));
+                let k = k.strip_prefix('-').unwrap_or(k);
+                assert!(
+                    !k.is_empty()
+                        && k.bytes().all(|b| {
+                            b.is_ascii_lowercase()
+                                || b.is_ascii_digit()
+                                || matches!(b, b'.' | b'_' | b'-')
+                        }),
+                    "{name}: {line}"
+                );
+                assert!(v.bytes().all(|b| b.is_ascii_digit()), "{name}: {line}");
+                seen += 1;
+            }
+        }
+        assert!(seen >= 3, "sysctl files found");
+    }
+
+    #[test]
+    fn tuning_params_come_from_one_file() {
+        let p = tuning_params();
+        assert!(p.contains(&"nowatchdog") && p.contains(&"preempt=full"));
+        assert!(p.iter().all(|p| !p.contains(char::is_whitespace) && !p.contains('#')));
+        let entry = loader_entry(UUID, &["nomodeset"]);
+        for param in &p {
+            assert!(entry.contains(&format!(" {param} ")), "{param}: {entry}");
+        }
+        assert!(entry.ends_with(" vt.global_cursor_default=0 nomodeset\n"), "{entry}");
+        // What the live ISO's menu passes is a subset of the installed list.
+        let grub = include_str!("../../../iso-overlay/grub/grub.cfg");
+        let line = grub.lines().find(|l| l.starts_with("set catostv_params=")).unwrap();
+        for param in ["nowatchdog", "preempt=full", "amd_pstate=active"] {
+            assert!(line.split_whitespace().any(|w| w == param), "grub.cfg lacks {param}");
+            assert!(p.contains(&param), "kernel-params lacks {param}");
+        }
+    }
+
+    #[test]
+    fn boot_params_sync_adds_only_what_is_missing() {
+        let script = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target-root/usr/local/lib/catostv/boot-params-sync"
+        );
+        let t = crate::testutil::TempDir::new("bootparams");
+        let entry = t.write(
+            "catostv.conf",
+            "title   CatosTV\nlinux   /vmlinuz-linux\noptions root=UUID=x rw quiet nowatchdog nomodeset\n",
+        );
+        let params = t.write(
+            "kernel-params",
+            "# why\nnowatchdog\npreempt=full   # latency\n\namd_pstate=active\nbad param/x\n",
+        );
+        let run = || {
+            let out = std::process::Command::new("bash")
+                .arg(script)
+                .arg(&entry)
+                .arg(&params)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+        };
+        run();
+        let want = "title   CatosTV\nlinux   /vmlinuz-linux\n\
+                    options root=UUID=x rw quiet nowatchdog nomodeset preempt=full amd_pstate=active\n";
+        assert_eq!(std::fs::read_to_string(&entry).unwrap(), want);
+        // Running it again changes nothing.
+        run();
+        assert_eq!(std::fs::read_to_string(&entry).unwrap(), want);
+        // No entry (the installer's chroot), no options line: left alone.
+        let none = t.path().join("missing.conf");
+        let status = std::process::Command::new("bash")
+            .arg(script)
+            .arg(&none)
+            .arg(&params)
+            .status()
+            .unwrap();
+        assert!(status.success() && !none.exists());
+        let odd = t.write("odd.conf", "title x\n");
+        std::process::Command::new("bash").arg(script).arg(&odd).arg(&params).status().unwrap();
+        assert_eq!(std::fs::read_to_string(&odd).unwrap(), "title x\n");
+    }
+
+    #[test]
+    fn old_amd_cards_use_amdgpu() {
+        let p = tuning_params();
+        for param in [
+            "amdgpu.si_support=1",
+            "amdgpu.cik_support=1",
+            "radeon.si_support=0",
+            "radeon.cik_support=0",
+        ] {
+            assert!(p.contains(&param), "{param}");
+        }
+    }
+
+    #[test]
+    fn zswap_is_off_while_zram_is_the_swap() {
+        assert!(tuning_params().contains(&"zswap.enabled=0"));
+        let rule = include_str!("../../../target-root/etc/udev/rules.d/30-catostv-zram.rules");
+        assert!(!rule.contains("zswap/parameters"), "zswap is switched off on the command line");
+    }
+
+    #[test]
+    fn zram_swap_is_installed_and_capped() {
+        assert!(BASE_PACKAGES.contains(&"zram-generator"));
+        let conf = include_str!("../../../target-root/etc/systemd/zram-generator.conf");
+        let get = |key: &str| {
+            conf.lines()
+                .filter(|l| !l.trim_start().starts_with('#'))
+                .find_map(|l| l.split_once('=').filter(|(k, _)| k.trim() == key))
+                .map(|(_, v)| v.trim().to_string())
+        };
+        assert_eq!(get("compression-algorithm").as_deref(), Some("zstd"));
+        // Capped, with a limit on what the compressed data may take.
+        assert_eq!(get("zram-size").as_deref(), Some("min(ram, 8192)"));
+        assert_eq!(get("zram-resident-limit").as_deref(), Some("ram * 3 / 4"));
+        assert!(conf.contains("[zram0]"));
+    }
+
+    #[test]
+    fn io_scheduler_rules_only_match_whole_disks() {
+        let text = include_str!("../../../target-root/etc/udev/rules.d/60-catostv-ioschedulers.rules");
+        // Join continuation lines, drop comments.
+        let rules: Vec<String> = text
+            .replace("\\\n", " ")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        assert!(rules.len() >= 2);
+        for r in &rules {
+            assert!(r.contains("queue/scheduler"), "{r}");
+            assert!(r.contains("SUBSYSTEM==\"block\""), "{r}");
+            assert!(r.contains("ENV{DEVTYPE}==\"disk\""), "partitions have no queue: {r}");
+        }
+    }
+
+    #[test]
+    fn nvme_keeps_the_kernel_default_scheduler() {
+        let text = include_str!("../../../target-root/etc/udev/rules.d/60-catostv-ioschedulers.rules");
+        assert!(!text.contains("kyber") && !text.lines().any(|l| l.contains("KERNEL==\"nvme")));
+    }
+
+    #[test]
+    fn real_time_audio_comes_from_rtkit() {
+        assert!(BASE_PACKAGES.contains(&"rtkit"));
+    }
+
+    #[test]
+    fn no_audio_group_device_access() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target-root");
+        let rules = format!("{root}/etc/udev/rules.d/99-catostv-audio-latency.rules");
+        assert!(!std::path::Path::new(&rules).exists());
+    }
+
+    #[test]
+    fn no_group_wide_real_time_limits() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target-root");
+        let limits = format!("{root}/etc/security/limits.d/20-audio.conf");
+        assert!(!std::path::Path::new(&limits).exists());
     }
 }

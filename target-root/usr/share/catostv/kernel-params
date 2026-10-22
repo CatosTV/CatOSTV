@@ -1,0 +1,35 @@
+# Kernel command line parameters CatosTV adds to the boot entry of an
+# installed system: one per line, "#" starts a comment.
+#
+# The installer reads this file when it writes the boot entry, and
+# boot-params-sync adds missing ones to TVs that were installed earlier
+# (post-install runs it on every update). Parameters are only ever added.
+# The live ISO's grub.cfg keeps its own short list of the same ones.
+
+# No lockup detectors (NMI watchdog and soft lockup): fewer timer
+# interrupts. This does not touch hardware watchdog chips.
+nowatchdog
+
+# Full kernel preemption for lower scheduling latency of the compositor,
+# remote input and audio. A no-op where the kernel is already built with it.
+preempt=full
+
+# AMD CPPC frequency scaling for Zen 2 and newer. Ignored on other CPUs.
+amd_pstate=active
+
+# Cards of the GCN 1.0 (Southern Islands) and GCN 2.0 (Sea Islands) families,
+# common in older HTPCs: use the amdgpu driver (Vulkan, modern VA-API decoding
+# and Wayland presentation) instead of the legacy radeon driver. Arch's kernel
+# is built with this support, it only has to be switched on. These are on the
+# command line, not in /etc/modprobe.d, because the driver is loaded from the
+# initramfs, which a changed .conf file alone does not rebuild. Harmless for
+# every other card.
+amdgpu.si_support=1
+amdgpu.cik_support=1
+radeon.si_support=0
+radeon.cik_support=0
+
+# zswap would compress pages a second time on their way into ZRAM. Off here,
+# not from a udev rule, so it is off from the first boot second and does not
+# depend on when zram0 appears.
+zswap.enabled=0
