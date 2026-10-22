@@ -389,15 +389,30 @@ pub fn loader_conf() -> String {
     "default catostv.conf\ntimeout 0\nconsole-mode keep\neditor no\n".to_string()
 }
 
+/// Kernel parameters CatosTV adds to the boot entry of an installed system,
+/// one per line (`#` starts a comment). `boot-params-sync` adds the missing
+/// ones to TVs that were installed earlier.
+const KERNEL_PARAMS: &str = include_str!("../../../target-root/usr/share/catostv/kernel-params");
+
+/// The parameters in [`KERNEL_PARAMS`].
+pub fn tuning_params() -> Vec<&'static str> {
+    KERNEL_PARAMS
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
 /// systemd-boot entry. Microcode is embedded in the initramfs by
 /// mkinitcpio's default `microcode` hook, so no separate initrd line is
 /// needed for intel-ucode/amd-ucode.
 pub fn loader_entry(root_uuid: &str, extra: &[&str]) -> String {
+    let tuning: String = tuning_params().iter().map(|p| format!(" {p}")).collect();
     let extra: String = extra.iter().map(|p| format!(" {p}")).collect();
     format!(
         "title   CatosTV\nlinux   /vmlinuz-linux\ninitrd  /initramfs-linux.img\n\
          options root=UUID={root_uuid} rw quiet splash loglevel=3 rd.udev.log_level=3 \
-         systemd.show_status=auto vt.global_cursor_default=0{extra}\n"
+         systemd.show_status=auto{tuning} vt.global_cursor_default=0{extra}\n"
     )
 }
 
@@ -1500,6 +1515,9 @@ mod tests {
         assert!(plan(&bad).is_err());
         assert!(!text.contains("libva-mesa-driver"));
         assert!(loader_entry(UUID, &[]).contains(&format!("root=UUID={UUID} rw")));
+        assert!(loader_entry(UUID, &[]).contains("nowatchdog preempt=full"));
+        // A sysctl, not a boot parameter (see 70-catostv-performance.conf).
+        assert!(!loader_entry(UUID, &[]).contains("split_lock_mitigate"));
         assert!(
             loader_entry(UUID, &["nvidia_drm.modeset=1"])
                 .contains("vt.global_cursor_default=0 nvidia_drm.modeset=1\n")
@@ -1651,4 +1669,15 @@ mod tests {
         assert!(seen >= 3, "sysctl files found");
     }
 
+    #[test]
+    fn tuning_params_come_from_one_file() {
+        let p = tuning_params();
+        assert!(p.contains(&"nowatchdog") && p.contains(&"preempt=full"));
+        assert!(p.iter().all(|p| !p.contains(char::is_whitespace) && !p.contains('#')));
+        let entry = loader_entry(UUID, &["nomodeset"]);
+        for param in &p {
+            assert!(entry.contains(&format!(" {param} ")), "{param}: {entry}");
+        }
+        assert!(entry.ends_with(" vt.global_cursor_default=0 nomodeset\n"), "{entry}");
+    }
 }
