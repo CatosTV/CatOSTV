@@ -1,0 +1,17 @@
+# CatosTV: assign block I/O schedulers by storage type (from CachyOS).
+#
+# Whole disks only: a disk's queue, and so its scheduler, belongs to the disk
+# and not to its partitions (or to the NVMe controller device).
+#
+# Rotational HDD: BFQ (Budget Fair Queueing) guarantees interactive fairness
+# and prevents starvation on mechanical disks.
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", KERNEL=="sd*", \
+    ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
+
+# SATA SSD, USB flash and eMMC: mq-deadline prevents queue starvation with
+# minimal CPU overhead.
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", KERNEL=="sd*|mmcblk[0-9]*", \
+    ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
+
+# NVMe SSDs are left on the kernel default, `none`: the drive has deep
+# hardware queues of its own and a software scheduler would only add overhead.

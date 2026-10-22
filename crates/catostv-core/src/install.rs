@@ -1771,4 +1771,28 @@ mod tests {
         assert_eq!(get("zram-resident-limit").as_deref(), Some("ram * 3 / 4"));
         assert!(conf.contains("[zram0]"));
     }
+
+    #[test]
+    fn io_scheduler_rules_only_match_whole_disks() {
+        let text = include_str!("../../../target-root/etc/udev/rules.d/60-catostv-ioschedulers.rules");
+        // Join continuation lines, drop comments.
+        let rules: Vec<String> = text
+            .replace("\\\n", " ")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        assert!(rules.len() >= 2);
+        for r in &rules {
+            assert!(r.contains("queue/scheduler"), "{r}");
+            assert!(r.contains("SUBSYSTEM==\"block\""), "{r}");
+            assert!(r.contains("ENV{DEVTYPE}==\"disk\""), "partitions have no queue: {r}");
+        }
+    }
+
+    #[test]
+    fn nvme_keeps_the_kernel_default_scheduler() {
+        let text = include_str!("../../../target-root/etc/udev/rules.d/60-catostv-ioschedulers.rules");
+        assert!(!text.contains("kyber") && !text.lines().any(|l| l.contains("KERNEL==\"nvme")));
+    }
 }
