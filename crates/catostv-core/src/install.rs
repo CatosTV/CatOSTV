@@ -1674,7 +1674,10 @@ mod tests {
     #[test]
     fn catostv_sysctl_files_are_well_formed() {
         // `key = value`, optionally with a leading "-" (ignore failures).
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target-root/etc/sysctl.d");
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target-root/etc/sysctl.d"
+        );
         let mut seen = 0;
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -1686,7 +1689,9 @@ mod tests {
                 if line.is_empty() || line.starts_with('#') {
                     continue;
                 }
-                let (k, v) = line.split_once(" = ").unwrap_or_else(|| panic!("{name}: {line}"));
+                let (k, v) = line
+                    .split_once(" = ")
+                    .unwrap_or_else(|| panic!("{name}: {line}"));
                 let k = k.strip_prefix('-').unwrap_or(k);
                 assert!(
                     !k.is_empty()
@@ -1708,17 +1713,29 @@ mod tests {
     fn tuning_params_come_from_one_file() {
         let p = tuning_params();
         assert!(p.contains(&"nowatchdog") && p.contains(&"preempt=full"));
-        assert!(p.iter().all(|p| !p.contains(char::is_whitespace) && !p.contains('#')));
+        assert!(
+            p.iter()
+                .all(|p| !p.contains(char::is_whitespace) && !p.contains('#'))
+        );
         let entry = loader_entry(UUID, &["nomodeset"]);
         for param in &p {
             assert!(entry.contains(&format!(" {param} ")), "{param}: {entry}");
         }
-        assert!(entry.ends_with(" vt.global_cursor_default=0 nomodeset\n"), "{entry}");
+        assert!(
+            entry.ends_with(" vt.global_cursor_default=0 nomodeset\n"),
+            "{entry}"
+        );
         // What the live ISO's menu passes is a subset of the installed list.
         let grub = include_str!("../../../iso-overlay/grub/grub.cfg");
-        let line = grub.lines().find(|l| l.starts_with("set catostv_params=")).unwrap();
+        let line = grub
+            .lines()
+            .find(|l| l.starts_with("set catostv_params="))
+            .unwrap();
         for param in ["nowatchdog", "preempt=full", "amd_pstate=active"] {
-            assert!(line.split_whitespace().any(|w| w == param), "grub.cfg lacks {param}");
+            assert!(
+                line.split_whitespace().any(|w| w == param),
+                "grub.cfg lacks {param}"
+            );
             assert!(p.contains(&param), "kernel-params lacks {param}");
         }
     }
@@ -1764,7 +1781,12 @@ mod tests {
             .unwrap();
         assert!(status.success() && !none.exists());
         let odd = t.write("odd.conf", "title x\n");
-        std::process::Command::new("bash").arg(script).arg(&odd).arg(&params).status().unwrap();
+        std::process::Command::new("bash")
+            .arg(script)
+            .arg(&odd)
+            .arg(&params)
+            .status()
+            .unwrap();
         assert_eq!(std::fs::read_to_string(&odd).unwrap(), "title x\n");
     }
 
@@ -1785,7 +1807,10 @@ mod tests {
     fn zswap_is_off_while_zram_is_the_swap() {
         assert!(tuning_params().contains(&"zswap.enabled=0"));
         let rule = include_str!("../../../target-root/etc/udev/rules.d/30-catostv-zram.rules");
-        assert!(!rule.contains("zswap/parameters"), "zswap is switched off on the command line");
+        assert!(
+            !rule.contains("zswap/parameters"),
+            "zswap is switched off on the command line"
+        );
     }
 
     #[test]
@@ -1807,7 +1832,8 @@ mod tests {
 
     #[test]
     fn io_scheduler_rules_only_match_whole_disks() {
-        let text = include_str!("../../../target-root/etc/udev/rules.d/60-catostv-ioschedulers.rules");
+        let text =
+            include_str!("../../../target-root/etc/udev/rules.d/60-catostv-ioschedulers.rules");
         // Join continuation lines, drop comments.
         let rules: Vec<String> = text
             .replace("\\\n", " ")
@@ -1819,13 +1845,17 @@ mod tests {
         for r in &rules {
             assert!(r.contains("queue/scheduler"), "{r}");
             assert!(r.contains("SUBSYSTEM==\"block\""), "{r}");
-            assert!(r.contains("ENV{DEVTYPE}==\"disk\""), "partitions have no queue: {r}");
+            assert!(
+                r.contains("ENV{DEVTYPE}==\"disk\""),
+                "partitions have no queue: {r}"
+            );
         }
     }
 
     #[test]
     fn nvme_keeps_the_kernel_default_scheduler() {
-        let text = include_str!("../../../target-root/etc/udev/rules.d/60-catostv-ioschedulers.rules");
+        let text =
+            include_str!("../../../target-root/etc/udev/rules.d/60-catostv-ioschedulers.rules");
         assert!(!text.contains("kyber") && !text.lines().any(|l| l.contains("KERNEL==\"nvme")));
     }
 
