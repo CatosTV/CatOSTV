@@ -97,6 +97,10 @@ pub const BASE_PACKAGES: &[&str] = &[
     "pipewire-pulse",
     "pipewire-alsa",
     "wireplumber",
+    // Real-time scheduling for PipeWire's audio threads: polkit grants it to the
+    // active session, no group or limits.d file needed (PipeWire only lists rtkit
+    // as an optional dependency)
+    "rtkit",
     // Session / compositor
     "greetd",
     "greetd-agreety",
@@ -1794,5 +1798,24 @@ mod tests {
     fn nvme_keeps_the_kernel_default_scheduler() {
         let text = include_str!("../../../target-root/etc/udev/rules.d/60-catostv-ioschedulers.rules");
         assert!(!text.contains("kyber") && !text.lines().any(|l| l.contains("KERNEL==\"nvme")));
+    }
+
+    #[test]
+    fn real_time_audio_comes_from_rtkit() {
+        assert!(BASE_PACKAGES.contains(&"rtkit"));
+    }
+
+    #[test]
+    fn no_audio_group_device_access() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target-root");
+        let rules = format!("{root}/etc/udev/rules.d/99-catostv-audio-latency.rules");
+        assert!(!std::path::Path::new(&rules).exists());
+    }
+
+    #[test]
+    fn no_group_wide_real_time_limits() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target-root");
+        let limits = format!("{root}/etc/security/limits.d/20-audio.conf");
+        assert!(!std::path::Path::new(&limits).exists());
     }
 }
