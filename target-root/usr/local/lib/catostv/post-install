@@ -18,6 +18,7 @@ systemd-hwdb update 2>/dev/null || true
 # inside the installer's chroot the new system's first boot applies it.
 if ! systemd-detect-virt --chroot >/dev/null 2>&1; then
   sysctl -q -p /etc/sysctl.d/60-catostv-android.conf || true
+  sysctl -q -p /etc/sysctl.d/70-catostv-performance.conf || true
   # The name Bluetooth devices see. BlueZ keeps the name from the first
   # start, so TVs set up before the rename kept their old name.
   timeout 5 bluetoothctl system-alias CatosTV >/dev/null 2>&1 || true
