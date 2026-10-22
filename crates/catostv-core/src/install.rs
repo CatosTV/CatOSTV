@@ -1679,5 +1679,12 @@ mod tests {
             assert!(entry.contains(&format!(" {param} ")), "{param}: {entry}");
         }
         assert!(entry.ends_with(" vt.global_cursor_default=0 nomodeset\n"), "{entry}");
+        // What the live ISO's menu passes is a subset of the installed list.
+        let grub = include_str!("../../../iso-overlay/grub/grub.cfg");
+        let line = grub.lines().find(|l| l.starts_with("set catostv_params=")).unwrap();
+        for param in ["nowatchdog", "preempt=full", "amd_pstate=active"] {
+            assert!(line.split_whitespace().any(|w| w == param), "grub.cfg lacks {param}");
+            assert!(p.contains(&param), "kernel-params lacks {param}");
+        }
     }
 }
