@@ -1732,4 +1732,17 @@ mod tests {
         std::process::Command::new("bash").arg(script).arg(&odd).arg(&params).status().unwrap();
         assert_eq!(std::fs::read_to_string(&odd).unwrap(), "title x\n");
     }
+
+    #[test]
+    fn old_amd_cards_use_amdgpu() {
+        let p = tuning_params();
+        for param in [
+            "amdgpu.si_support=1",
+            "amdgpu.cik_support=1",
+            "radeon.si_support=0",
+            "radeon.cik_support=0",
+        ] {
+            assert!(p.contains(&param), "{param}");
+        }
+    }
 }
