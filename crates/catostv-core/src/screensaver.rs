@@ -118,12 +118,16 @@ pub fn parse_cats(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// `curl` fetching `url` (following redirects) into `out`.
+/// `curl` fetching `url` (following redirects, but only to https) into `out`.
 pub fn download_cmd(url: &str, out: &Path) -> Cmd {
     Cmd::new("curl")
         .args([
             "-sS".to_string(),
             "--fail".to_string(),
+            "--proto".to_string(),
+            "=https".to_string(),
+            "--proto-redir".to_string(),
+            "=https".to_string(),
             "-L".to_string(),
             "-m".to_string(),
             "40".to_string(),
@@ -143,6 +147,8 @@ pub fn get_cmd(url: &str) -> Cmd {
         .args([
             "-sS",
             "--fail",
+            "--proto",
+            "=https",
             "-m",
             "15",
             "--max-filesize",
@@ -236,6 +242,21 @@ mod tests {
             ]
         );
         assert!(parse_cats("oops").is_empty());
+    }
+
+    #[test]
+    fn downloads_never_leave_https() {
+        let args = download_cmd("https://x/a.jpg", Path::new("/tmp/a")).args;
+        let at = args.iter().position(|a| a == "--proto").unwrap();
+        assert_eq!(args[at + 1], "=https");
+        let at = args.iter().position(|a| a == "--proto-redir").unwrap();
+        assert_eq!(args[at + 1], "=https");
+        assert!(
+            get_cmd(WEATHER_URL)
+                .args
+                .windows(2)
+                .any(|w| w == ["--proto", "=https"])
+        );
     }
 
     #[test]
