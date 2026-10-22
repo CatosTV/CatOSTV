@@ -108,6 +108,10 @@ pub const BASE_PACKAGES: &[&str] = &[
     "xorg-xwayland",
     "wtype",
     "wlr-randr",
+    // Screen off on an idle TV (display::PowerSwitch): wlopm switches the
+    // outputs, swayidle wakes them on any input.
+    "wlopm",
+    "swayidle",
     "xdg-desktop-portal-gtk",
     "udisks2",
     // Graphics (Intel + AMD; VA-API for AMD now ships inside `mesa`)
