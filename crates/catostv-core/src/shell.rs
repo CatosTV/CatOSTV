@@ -1035,6 +1035,11 @@ pub struct Shell {
     /// slider, a choice or the accent colours starts it, OK or Back ends it.
     /// Until then Left/Right only move, so arriving on a row never changes it.
     pub settings_editing: Option<(usize, usize)>,
+    /// The Settings row the focus is on (category, row, where it was): when
+    /// the rows change under it (a Bluetooth device missing from one
+    /// refresh while it connects) the focus goes back to it once it is
+    /// there again, instead of staying wherever the shorter list put it.
+    settings_kept: Option<(usize, RowId, usize)>,
     pub search_osk: Osk,
     pub search_focus: SearchFocus,
     pub search_index: usize,
@@ -1152,6 +1157,7 @@ impl Shell {
             settings_rows_focus: false,
             accent_pick: None,
             settings_editing: None,
+            settings_kept: None,
             search_osk: Osk::new(false, "Search"),
             search_focus: SearchFocus::Keyboard,
             search_index: 0,
@@ -1422,6 +1428,17 @@ impl Shell {
         }
         self.grid_index = self.grid_index.min(n_apps.saturating_sub(1));
         let rows = self.settings_rows(ctx);
+        // Back to the row the focus was on, if the rows moved under it and
+        // nothing else moved the focus since.
+        let kept = self
+            .settings_kept
+            .filter(|(cat, _, at)| *cat == self.settings_cat && *at == self.settings_row);
+        if let Some((_, id, _)) = kept
+            && rows.get(self.settings_row).is_none_or(|r| r.id != id)
+            && let Some(p) = rows.iter().position(|r| r.id == id)
+        {
+            self.settings_row = p;
+        }
         self.settings_row = self.settings_row.min(rows.len().saturating_sub(1));
         // Never resting on a heading: the row after it, else before it.
         if rows
@@ -1437,6 +1454,14 @@ impl Shell {
                 .rposition(|r| r.kind != RowKind::Heading);
             self.settings_row = after.or(before).unwrap_or(0);
         }
+        // Remember it; while the row is missing, keep waiting for it.
+        self.settings_kept = match (kept, rows.get(self.settings_row)) {
+            (Some((cat, id, _)), _) if !rows.iter().any(|r| r.id == id) => {
+                Some((cat, id, self.settings_row))
+            }
+            (_, Some(r)) => Some((self.settings_cat, r.id, self.settings_row)),
+            (_, None) => None,
+        };
         let n_hits = self.search_results(ctx).len();
         if n_hits == 0 {
             self.search_focus = SearchFocus::Keyboard;

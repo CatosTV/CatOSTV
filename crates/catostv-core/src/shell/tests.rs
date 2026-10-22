@@ -1713,3 +1713,33 @@ fn settings_change_only_after_ok() {
     );
     assert!(s.settings_editing.is_none());
 }
+
+#[test]
+fn settings_focus_comes_back_to_a_row_that_was_missing_for_a_moment() {
+    // Connecting headphones: one refresh lists no paired devices (Bluetooth
+    // busy), the next lists them again. The focus goes back to the device,
+    // not "Pair a new device" where the shorter list put it.
+    let mut f = Fixture::new();
+    f.sys.bluetooth.available = true;
+    f.sys.bluetooth.powered = true;
+    let buds = crate::bluetooth::Device {
+        address: "AA:BB:CC:DD:EE:02".into(),
+        name: "Buds".into(),
+    };
+    f.sys.bt_devices = vec![buds.clone()];
+    let mut s = Shell::new();
+    open_settings(&mut s, &f, Category::Bluetooth);
+    press(&mut s, &f, &[Down, Down]);
+    assert_eq!(s.settings_row, 2, "on the buds");
+    f.sys.bt_devices.clear();
+    s.clamp(&f.ctx());
+    assert_eq!(s.settings_row, 1, "the buds' row is gone for now");
+    s.clamp(&f.ctx());
+    f.sys.bt_devices = vec![buds];
+    s.clamp(&f.ctx());
+    assert_eq!(s.settings_row, 2, "back on the buds");
+    // Moving away yourself is not undone.
+    press(&mut s, &f, &[Up]);
+    s.clamp(&f.ctx());
+    assert_eq!(s.settings_row, 1);
+}
