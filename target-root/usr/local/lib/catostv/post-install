@@ -13,6 +13,10 @@ systemctl enable catostv-android-watch.service catostv-debug-boot.service 2>/dev
 dconf update 2>/dev/null || true
 # Remote OK and Settings buttons (/etc/udev/hwdb.d/70-catostv-remotes.hwdb).
 systemd-hwdb update 2>/dev/null || true
+# Kernel parameters this version wants on the boot entry of a TV installed
+# earlier (/usr/share/catostv/kernel-params). New installs get them from the
+# installer, so inside its chroot there is no entry yet and this does nothing.
+/usr/local/lib/catostv/boot-params-sync || true
 # Process IDs below 65536 for Android's 32-bit programs
 # (/etc/sysctl.d/60-catostv-android.conf). Applied now on a running TV;
 # inside the installer's chroot the new system's first boot applies it.

@@ -1687,4 +1687,49 @@ mod tests {
             assert!(p.contains(&param), "kernel-params lacks {param}");
         }
     }
+
+    #[test]
+    fn boot_params_sync_adds_only_what_is_missing() {
+        let script = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target-root/usr/local/lib/catostv/boot-params-sync"
+        );
+        let t = crate::testutil::TempDir::new("bootparams");
+        let entry = t.write(
+            "catostv.conf",
+            "title   CatosTV\nlinux   /vmlinuz-linux\noptions root=UUID=x rw quiet nowatchdog nomodeset\n",
+        );
+        let params = t.write(
+            "kernel-params",
+            "# why\nnowatchdog\npreempt=full   # latency\n\namd_pstate=active\nbad param/x\n",
+        );
+        let run = || {
+            let out = std::process::Command::new("bash")
+                .arg(script)
+                .arg(&entry)
+                .arg(&params)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+        };
+        run();
+        let want = "title   CatosTV\nlinux   /vmlinuz-linux\n\
+                    options root=UUID=x rw quiet nowatchdog nomodeset preempt=full amd_pstate=active\n";
+        assert_eq!(std::fs::read_to_string(&entry).unwrap(), want);
+        // Running it again changes nothing.
+        run();
+        assert_eq!(std::fs::read_to_string(&entry).unwrap(), want);
+        // No entry (the installer's chroot), no options line: left alone.
+        let none = t.path().join("missing.conf");
+        let status = std::process::Command::new("bash")
+            .arg(script)
+            .arg(&none)
+            .arg(&params)
+            .status()
+            .unwrap();
+        assert!(status.success() && !none.exists());
+        let odd = t.write("odd.conf", "title x\n");
+        std::process::Command::new("bash").arg(script).arg(&odd).arg(&params).status().unwrap();
+        assert_eq!(std::fs::read_to_string(&odd).unwrap(), "title x\n");
+    }
 }
