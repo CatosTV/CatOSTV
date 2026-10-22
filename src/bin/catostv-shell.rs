@@ -2987,11 +2987,15 @@ impl ShellApp {
         }
     }
 
-    /// Refresh CatosTV Home's "Continue watching" row now and then.
+    /// Refresh CatosTV Home's "Continue watching" row now and then, and
+    /// soon again while the media server isn't answering.
     fn refresh_home_media(&mut self) {
-        let due = self
-            .last_media_refresh
-            .is_none_or(|t| t.elapsed() > Duration::from_secs(120));
+        let every = if self.media.home_note.is_some() {
+            Duration::from_secs(15)
+        } else {
+            Duration::from_secs(120)
+        };
+        let due = self.last_media_refresh.is_none_or(|t| t.elapsed() > every);
         if !due {
             return;
         }
@@ -3724,6 +3728,12 @@ impl ShellApp {
                 let _ = audio::set_default_sink(&mut SystemRunner, id);
                 Msg::Nothing
             });
+        }
+        // The network just came up (Ethernet takes a while at boot): ask the
+        // media servers again now, not at the next regular refresh.
+        let online = |s: &SystemSnapshot| s.net.as_ref().is_some_and(|n| n.online);
+        if online(&s) && !online(&self.sys) {
+            self.last_media_refresh = None;
         }
         self.sys = s;
         self.autostart_android(ctx);
