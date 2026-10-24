@@ -80,6 +80,10 @@ pub const NEEDS_MOUSE: &[&str] = &[
     "org.gnome.Podcasts",
     "net.lutris.Lutris",
     "com.github.tchx84.Flatseal",
+    "com.protonvpn.www",
+    "org.mozilla.vpn",
+    "com.surfshark.Surfshark",
+    "net.nymtech.NymVPN",
 ];
 
 /// TV-focused front page of the store.
@@ -210,6 +214,30 @@ pub const CURATED: &[CuratedApp] = &[
         "Stream",
     ),
     // Tools
+    c(
+        "com.protonvpn.www",
+        "Proton VPN",
+        "VPN from the makers of Proton Mail",
+        "Tools",
+    ),
+    c(
+        "org.mozilla.vpn",
+        "Mozilla VPN",
+        "VPN from the makers of Firefox",
+        "Tools",
+    ),
+    c(
+        "com.surfshark.Surfshark",
+        "Surfshark",
+        "VPN for every device",
+        "Tools",
+    ),
+    c(
+        "net.nymtech.NymVPN",
+        "NymVPN",
+        "Private VPN on a decentralized network",
+        "Tools",
+    ),
     c(
         "com.github.tchx84.Flatseal",
         "Flatseal",
