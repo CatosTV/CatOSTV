@@ -246,6 +246,21 @@ mod repo_consistency {
     }
 
     #[test]
+    fn screen_off_always_has_its_wake_net() {
+        // The shell only switches the screen off when both tools exist, and
+        // swayidle is what turns it back on at the first input.
+        for t in crate::display::POWER_TOOLS {
+            assert!(crate::install::BASE_PACKAGES.contains(&t), "{t} is not installed");
+        }
+        let autostart = repo_file("target-root/home/catostv/.config/labwc/autostart");
+        let line = autostart
+            .lines()
+            .find(|l| l.trim_start().starts_with("supervise swayidle "))
+            .expect("autostart supervises swayidle");
+        assert!(line.contains("wlopm --on"), "{line}");
+    }
+
+    #[test]
     fn home_key_is_global_in_the_installed_session() {
         let rc = repo_file("target-root/home/catostv/.config/labwc/rc.xml");
         for key in ["XF86HomePage", "W-Home", "Home"] {

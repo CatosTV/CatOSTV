@@ -16,6 +16,9 @@ pub struct Slide {
     pub n: usize,
 }
 
+/// Largest picture side that is decoded at all.
+const MAX_SIDE: u32 = 8192;
+
 type Decoded = Arc<Mutex<Option<Option<ColorImage>>>>;
 
 pub struct Slideshow {
@@ -111,7 +114,10 @@ impl Slideshow {
             let ctx = ctx.clone();
             let blur = self.blur;
             std::thread::spawn(move || {
-                let img = decode(&path, px, blur);
+                // A decoder panic must not leave the slot empty for good:
+                // the slideshow would wait for this picture forever.
+                let guarded = std::panic::AssertUnwindSafe(|| decode(&path, px, blur));
+                let img = std::panic::catch_unwind(guarded).unwrap_or(None);
                 if img.is_none() {
                     // A broken download: gone, so it is not tried again.
                     let _ = std::fs::remove_file(&path);
@@ -144,7 +150,14 @@ fn decode(path: &Path, px: [u32; 2], blur: bool) -> Option<ColorImage> {
         px
     };
     use image::imageops::{self, FilterType};
-    let img = image::open(path).ok()?.to_rgba8();
+    // Pictures come from the internet: nothing bigger than 8192 px a side
+    // (and the decoder's default memory limit) is decoded.
+    let mut reader = image::ImageReader::open(path).ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    reader.limits(limits);
+    let img = reader.decode().ok()?.to_rgba8();
     let (w, h) = img.dimensions();
     let (sw, sh) = (px[0].max(1), px[1].max(1));
     if w < 16 || h < 16 {
@@ -202,7 +215,7 @@ pub fn fetch(home: &Path, kind: Pictures) -> Vec<PathBuf> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
             (0..4)
-                .map(|i| (ss::PHOTO_URL.to_string(), format!("photo-{stamp}-{i}.jpg")))
+                .map(|i| (ss::photo_url(stamp * 10 + i), format!("photo-{stamp}-{i}.jpg")))
                 .collect()
         }
     };

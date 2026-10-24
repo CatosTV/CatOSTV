@@ -859,6 +859,10 @@ struct ShellApp {
     weather: Option<(catostv_core::screensaver::Weather, Instant)>,
     saver_fetching: bool,
     last_input: Instant,
+    /// Since when the screen is black (the display itself goes off two
+    /// seconds later, see `display::PowerSwitch`), and the switch.
+    blank_since: Option<Instant>,
+    power: display::PowerSwitch,
     appliance: bool,
     home: PathBuf,
 }
@@ -1167,6 +1171,8 @@ impl ShellApp {
             home_bg: None,
             home_bg_fetching: false,
             last_input: Instant::now(),
+            blank_since: None,
+            power: display::PowerSwitch::start(appliance),
             appliance,
             home: home_dir(),
         };
@@ -1364,6 +1370,10 @@ impl ShellApp {
     /// TV yet (the screensaver's collection), and move it along.
     fn tick_home_bg(&mut self, ctx: &egui::Context) {
         use catostv_core::screensaver::{self as ss, Pictures};
+        if self.blank_since.is_some() {
+            // Black screen: nothing behind it needs frames.
+            return;
+        }
         let want = self.prefs.home_background.clone();
         if want == "glow" {
             self.home_bg = None;
@@ -1413,9 +1423,28 @@ impl ShellApp {
         }
     }
 
+    /// The screen is black: nothing to show, and a moment later the display
+    /// itself goes off (it needs wlopm and swayidle, which wakes it again).
+    fn start_blank(&mut self) {
+        eprintln!("catostv: idle, screen off");
+        self.saver = Some(catostv::saver::Slideshow::new(Vec::new()));
+        self.blank_since = Some(Instant::now());
+    }
+
+    /// The screen comes back: forget the black phase, switch the display on.
+    fn wake_display(&mut self) {
+        self.blank_since = None;
+        self.power.on();
+    }
+
     /// A volume key: change the level and show the panel (or keep it).
     fn volume_key(&mut self, ctx: &egui::Context, cmd: ShellCommand) {
         use catostv_core::volume_panel::{STEP, VolumePanel};
+        if self.blank_since.is_some() || self.power.is_off() {
+            // Adjusting the volume of a dark TV: Home and the panel on it.
+            self.saver = None;
+            self.wake_display();
+        }
         let e = match cmd {
             ShellCommand::VolumeUp => Some(Effect::VolumeStep(STEP)),
             ShellCommand::VolumeDown => Some(Effect::VolumeStep(-STEP)),
@@ -1445,11 +1474,21 @@ impl ShellApp {
         }
     }
 
-    /// Time for the screensaver: it is on, CatosTV is in front with nothing
-    /// going on, and nobody has pressed anything for a while.
+    /// Time for the screensaver: it is on and the TV has been idle.
     fn saver_due(&self) -> bool {
+        self.prefs.screensaver && self.idle_due()
+    }
+
+    /// The screensaver is off: an idle TV goes black, and its display off,
+    /// after the same time.
+    fn blank_due(&self) -> bool {
+        !self.prefs.screensaver && self.idle_due()
+    }
+
+    /// CatosTV is in front with nothing going on, and nobody has pressed
+    /// anything for the idle time.
+    fn idle_due(&self) -> bool {
         self.saver.is_none()
-            && self.prefs.screensaver
             && self.last_input.elapsed()
                 >= Duration::from_secs(u64::from(self.prefs.saver_minutes) * 60)
             && self.over_app.is_none()
@@ -3168,6 +3207,7 @@ impl ShellApp {
                 self.leaving = None;
                 lock(&self.watch).blank = None;
                 self.saver = None;
+                self.wake_display();
                 self.last_input = Instant::now();
                 // Home (key, remote, controller Guide) from an Android app:
                 // tell Android too, or the app keeps playing unseen.
@@ -4150,8 +4190,16 @@ impl eframe::App for ShellApp {
         if touched || !focused || self.over_app.is_some() {
             self.last_input = Instant::now();
         }
+        if (!focused || self.over_app.is_some())
+            && (self.blank_since.is_some() || self.power.is_off())
+        {
+            // An app or a cast took the screen: the display has to be on.
+            self.saver = None;
+            self.wake_display();
+        }
         // Any key on the screensaver: back to Home, and that is all it does.
         if touched && self.saver.take().is_some() {
+            self.wake_display();
             actions.clear();
             self.pending_nav.clear();
             p = Default::default();
@@ -4159,6 +4207,30 @@ impl eframe::App for ShellApp {
         }
         if self.saver_due() {
             self.start_saver();
+        }
+        if self.blank_due() {
+            self.start_blank();
+        }
+        // The slideshow has run its time: black, and then the display off.
+        if self.blank_since.is_none()
+            && self.saver.as_ref().is_some_and(|s| {
+                s.started.elapsed()
+                    >= Duration::from_secs(
+                        catostv_core::screensaver::SCREEN_OFF_AFTER_SAVER_MINUTES * 60,
+                    )
+            })
+        {
+            self.blank_since = Some(Instant::now());
+        }
+        // Black first; two seconds later the display itself goes off.
+        if let Some(t) = self.blank_since
+            && !self.power.is_off()
+        {
+            if t.elapsed() >= Duration::from_secs(2) {
+                self.power.off();
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(2100) - t.elapsed());
+            }
         }
         let mut effects = Vec::new();
         {
@@ -4404,10 +4476,11 @@ impl eframe::App for ShellApp {
                         date: &saver_clock.date,
                         night: !(6..19).contains(&saver_clock.hour),
                         now: keys::now(&ctx),
+                        blank: self.blank_since.is_some(),
                     }),
             },
         );
-        if self.saver.is_some() {
+        if self.saver.is_some() && self.blank_since.is_none() {
             // The slow zoom and the cross-fades.
             ctx.request_repaint_after(Duration::from_millis(33));
         }
@@ -4415,6 +4488,7 @@ impl eframe::App for ShellApp {
         // Home is on screen; ~30 fps is plenty for slow light.
         if self.prefs.home_background == "glow"
             && self.shell.page == catostv_core::shell::Page::Home
+            && self.blank_since.is_none()
         {
             ctx.request_repaint_after(Duration::from_millis(33));
         }

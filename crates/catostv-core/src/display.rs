@@ -45,6 +45,8 @@
 use crate::error::{Error, Result};
 use crate::process::{Cmd, Runner};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// One display mode as advertised by the compositor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -629,6 +631,119 @@ pub fn apply_prefs(r: &mut dyn Runner, prefs: &DisplayPrefs, outputs: &[Output])
     Ok(())
 }
 
+// ------------------------------------------------------------ screen power
+
+/// The two tools turning the screen off needs (Arch `extra/wlopm` and
+/// `extra/swayidle`). `wlopm` switches the outputs off and on
+/// (zwlr-output-power-management-v1, which labwc implements); `swayidle`
+/// runs `wlopm --on` on the first input after a pause, so the screen
+/// comes back on a key press, a remote button or a click even if the shell
+/// itself is stuck (`autostart` supervises it).
+pub const POWER_TOOLS: [&str; 2] = ["wlopm", "swayidle"];
+
+/// `wlopm --on '*'` / `wlopm --off '*'`: all outputs.
+pub fn power_cmd(on: bool) -> Cmd {
+    Cmd::new("wlopm")
+        .args([if on { "--on" } else { "--off" }, "*"])
+        .timeout(Duration::from_secs(5))
+}
+
+/// Switch every output's power on or off. Call off the UI thread.
+pub fn set_power(r: &mut dyn Runner, on: bool) -> Result<()> {
+    r.run_ok(&power_cmd(on))?;
+    Ok(())
+}
+
+/// Both [`POWER_TOOLS`] are installed. The screen is never switched off
+/// without them: `swayidle` is what makes sure it can come back.
+pub fn power_tools_present() -> bool {
+    POWER_TOOLS
+        .iter()
+        .all(|t| crate::process::find_executable(t).is_some())
+}
+
+/// Switches the screen off and on from a worker thread, in order, so the
+/// UI never waits for `wlopm`. Without the tools (or on a developer
+/// machine) it does nothing.
+pub struct PowerSwitch {
+    tx: Option<mpsc::Sender<bool>>,
+    off: bool,
+}
+
+impl PowerSwitch {
+    /// A switch that does nothing.
+    pub fn disabled() -> Self {
+        Self {
+            tx: None,
+            off: false,
+        }
+    }
+
+    /// On an appliance with the tools installed: a worker running `wlopm`,
+    /// and the screen switched on once, in case an earlier run left it off.
+    pub fn start(appliance: bool) -> Self {
+        if !appliance || !power_tools_present() {
+            return Self::disabled();
+        }
+        let mut s = Self::with_worker(|on| {
+            let _ = set_power(&mut crate::process::SystemRunner, on);
+        });
+        s.force_on();
+        s
+    }
+
+    /// A switch handing every change to `f` on its own thread (tests).
+    pub fn with_worker(mut f: impl FnMut(bool) + Send + 'static) -> Self {
+        let (tx, rx) = mpsc::channel::<bool>();
+        let spawned = std::thread::Builder::new()
+            .name("catostv-power".into())
+            .spawn(move || {
+                for on in rx {
+                    f(on);
+                }
+            });
+        match spawned {
+            Ok(_) => Self {
+                tx: Some(tx),
+                off: false,
+            },
+            Err(_) => Self::disabled(),
+        }
+    }
+
+    fn send(&self, on: bool) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(on);
+        }
+    }
+
+    /// Switch the screen off (once).
+    pub fn off(&mut self) {
+        if self.tx.is_some() && !self.off {
+            self.off = true;
+            self.send(false);
+        }
+    }
+
+    /// Switch the screen on, if this switch turned it off.
+    pub fn on(&mut self) {
+        if self.off {
+            self.off = false;
+            self.send(true);
+        }
+    }
+
+    /// Switch the screen on whatever this switch believes.
+    pub fn force_on(&mut self) {
+        self.off = false;
+        self.send(true);
+    }
+
+    pub fn is_off(&self) -> bool {
+        self.off
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -984,5 +1099,47 @@ DP-1 \"SAC DP 0000000100000 (DP-1)\"
     #[test]
     fn hdr_is_never_claimed() {
         assert!(!hdr_supported(&parse_wlr_randr(TV)[0]));
+    }
+
+    #[test]
+    fn screen_power_commands() {
+        assert_eq!(power_cmd(false).display(), "wlopm --off '*'");
+        assert_eq!(power_cmd(true).display(), "wlopm --on '*'");
+        let mut r = FakeRunner::new();
+        set_power(&mut r, false).unwrap();
+        assert_eq!(r.seen[0].display(), "wlopm --off '*'");
+    }
+
+    #[test]
+    fn power_switch_keeps_order_and_skips_repeats() {
+        let (tx, rx) = mpsc::channel();
+        let mut s = PowerSwitch::with_worker(move |on| {
+            let _ = tx.send(on);
+        });
+        let got = |rx: &mpsc::Receiver<bool>| rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        s.on(); // nothing to undo
+        s.off();
+        s.off(); // already off
+        assert!(s.is_off());
+        s.on();
+        s.on(); // already on
+        s.force_on(); // always sent
+        s.off();
+        assert_eq!(
+            [got(&rx), got(&rx), got(&rx), got(&rx)],
+            [false, true, true, false]
+        );
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+    }
+
+    #[test]
+    fn disabled_power_switch_never_turns_the_screen_off() {
+        let mut s = PowerSwitch::disabled();
+        s.off();
+        assert!(!s.is_off());
+        s.on();
+        s.force_on();
+        // Not an appliance (a developer's PC): never touched.
+        assert!(!PowerSwitch::start(false).is_off());
     }
 }
