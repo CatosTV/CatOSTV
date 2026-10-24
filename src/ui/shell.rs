@@ -338,7 +338,10 @@ fn draw_top_bar(c: &C, v: &ShellView) {
     let clock = clock(v.ctx.prefs.clock_24h);
     let time_w = c.text_width(&clock.time, 17.0, Weight::Semibold);
     let (pad, gap, icon_step) = (22.0, 22.0, 30.0);
-    let w = pad + time_w + gap + 3.0 * icon_step - 6.0 + pad;
+    // A lock first while a VPN is on.
+    let vpn_on = v.ctx.sys.vpns.iter().any(|x| x.on());
+    let n_icons = if vpn_on { 4.0 } else { 3.0 };
+    let w = pad + time_w + gap + n_icons * icon_step - 6.0 + pad;
     let rect = c.r(1228.0 - w, y, w, h);
     let t = focus_t(
         c,
@@ -370,7 +373,18 @@ fn draw_top_bar(c: &C, v: &ShellView) {
         widgets::mix(base, theme::on_accent(), t)
     };
     let wired = sys.net.as_ref().is_some_and(|n| n.wired());
-    let ix = x0 + time_w + gap + 12.0;
+    let mut ix = x0 + time_w + gap + 12.0;
+    if vpn_on {
+        icons::draw(
+            c,
+            "lock",
+            ix,
+            cy,
+            15.0,
+            widgets::mix(theme::accent(), theme::on_accent(), t),
+        );
+        ix += icon_step;
+    }
     icons::draw(
         c,
         if wired { "ethernet" } else { "wifi" },
@@ -1645,6 +1659,8 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::Ethernet => "ethernet",
         R::WifiHeading => "wifi",
         R::WifiNet(_) => "wifi",
+        R::VpnHeading | R::Vpn(_) => "lock",
+        R::VpnAdd => "plus",
         R::BtRadio | R::BtDevice(_) => "bluetooth",
         R::BtPair => "plus",
         R::Controller(_) => "game",
@@ -1981,11 +1997,6 @@ fn draw_accent_swatches(c: &C, v: &ShellView, right: f32, cy: f32, pick: Option<
 
 fn quick_tile(item: QuickItem, ctx: &ShellContext) -> (&'static str, &'static str, String, bool) {
     let sys = ctx.sys;
-    let on_off = |v: Option<bool>| match v {
-        Some(true) => "On".to_string(),
-        Some(false) => "Off".to_string(),
-        None => "-".to_string(),
-    };
     match item {
         // what it is connected to, like Android's tiles.
         QuickItem::Network => {
@@ -1995,7 +2006,10 @@ fn quick_tile(item: QuickItem, ctx: &ShellContext) -> (&'static str, &'static st
                 .as_ref()
                 .and_then(|n| {
                     n.connections.iter().find(|c| {
-                        c.kind != "ethernet" && c.kind != "loopback" && c.kind != "bridge"
+                        c.kind != "ethernet"
+                            && c.kind != "loopback"
+                            && c.kind != "bridge"
+                            && !catostv_core::vpn::is_vpn_type(&c.kind)
                     })
                 })
                 .map(|c| c.name.clone());
@@ -2038,9 +2052,18 @@ fn quick_tile(item: QuickItem, ctx: &ShellContext) -> (&'static str, &'static st
                 sys.bluetooth.powered,
             )
         }
-        QuickItem::Mute => {
-            let m = sys.volume.map(|v| v.muted);
-            ("muted", "Mute", on_off(m), m == Some(true))
+        QuickItem::Vpn => {
+            let on = sys.vpns.iter().find(|v| v.on());
+            (
+                "lock",
+                "VPN",
+                match (on, sys.vpns.is_empty()) {
+                    (Some(v), _) => v.name.clone(),
+                    (None, true) => "Not set up".into(),
+                    (None, false) => "Off".into(),
+                },
+                on.is_some(),
+            )
         }
         QuickItem::Settings => ("gear", "Settings", String::new(), false),
         QuickItem::Sleep => ("moon", "Sleep", String::new(), false),
@@ -2726,6 +2749,109 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                 ..ListRow::simple("Search again")
             });
             modal_list(c, "bt", mx + 32.0, y, 576.0, &rows, *index, 6);
+        }
+        Overlay::QuickVpn { index } => {
+            let y = qs_panel(c, "lock", "VPN");
+            let vpns = &ctx.sys.vpns;
+            let subs: Vec<String> = vpns
+                .iter()
+                .map(|v| {
+                    if s.vpn_busy.as_deref() == Some(v.uuid.as_str())
+                        || v.state == catostv_core::vpn::State::Connecting
+                    {
+                        "Connecting…".into()
+                    } else {
+                        v.kind.label().to_string()
+                    }
+                })
+                .collect();
+            let mut rows: Vec<ListRow> = vpns
+                .iter()
+                .zip(&subs)
+                .map(|(v, sub)| ListRow {
+                    icon: Some("lock"),
+                    subtitle: sub,
+                    kind: Some(RowKind::Toggle(Some(v.on()))),
+                    ..ListRow::simple(&v.name)
+                })
+                .collect();
+            rows.push(ListRow {
+                icon: Some("plus"),
+                subtitle: "From a WireGuard or OpenVPN file",
+                kind: Some(RowKind::Action),
+                ..ListRow::simple("Add a VPN")
+            });
+            modal_list(c, "qs-vpn", 868.0, y, 360.0, &rows, *index, 9);
+        }
+        Overlay::VpnOptions { vpn, index } => {
+            let Some(v) = ctx.sys.vpns.get(*vpn) else {
+                return;
+            };
+            let opts = shell::VPN_OPTIONS;
+            let m = widgets::modal(c, 460.0, 130.0 + opts.len() as f32 * 62.0);
+            c.hit(m, Target::Item(usize::MAX));
+            let (mx, my) = c.to_design(m.min);
+            let y = modal_header(c, mx, my, Some("lock"), &v.name, 460.0);
+            let auto = if v.autoconnect {
+                "Connect by itself: on"
+            } else {
+                "Connect by itself: off"
+            };
+            let labels: Vec<(&str, ButtonStyle)> = opts
+                .iter()
+                .map(|o| match o {
+                    shell::VpnOption::Switch if v.on() => ("Turn off", ButtonStyle::Primary),
+                    shell::VpnOption::Switch => ("Turn on", ButtonStyle::Primary),
+                    shell::VpnOption::Autoconnect => (auto, ButtonStyle::Secondary),
+                    shell::VpnOption::Remove => ("Remove", ButtonStyle::Danger),
+                })
+                .collect();
+            button_column(c, "vpnopt", mx + 32.0, y, 396.0, &labels, *index);
+        }
+        Overlay::VpnAdd { index } => {
+            let files = s.vpn_files.items();
+            let m = widgets::modal(c, 760.0, list_modal_h(files.len().max(1), 7) + 24.0);
+            c.hit(m, Target::Item(usize::MAX));
+            let (mx, my) = c.to_design(m.min);
+            let y = modal_header(c, mx, my, Some("lock"), "Add a VPN", 760.0);
+            let status = match &s.vpn_files {
+                Scan::Busy => "Looking for VPN files…".to_string(),
+                Scan::Done(f) if f.is_empty() => {
+                    "No VPN files found. Put your provider's WireGuard (.conf) or OpenVPN (.ovpn) file on a USB stick, or send it from your phone".into()
+                }
+                _ => "Pick the file your VPN provider gave you".into(),
+            };
+            widgets::busy_line(
+                c,
+                mx + 36.0,
+                y - 18.0,
+                &c.fit(&status, 690.0, 14.0, Weight::Regular),
+                matches!(s.vpn_files, Scan::Busy),
+                v.now,
+            );
+            let titles: Vec<String> = files
+                .iter()
+                .map(|p| catostv_core::vpn::file_title(p))
+                .collect();
+            let wheres: Vec<String> = files
+                .iter()
+                .map(|p| {
+                    p.parent()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_default()
+                })
+                .collect();
+            let rows: Vec<ListRow> = titles
+                .iter()
+                .zip(&wheres)
+                .map(|(t, w)| ListRow {
+                    icon: Some("lock"),
+                    subtitle: w,
+                    kind: Some(RowKind::Action),
+                    ..ListRow::simple(t)
+                })
+                .collect();
+            modal_list(c, "vpnadd", mx + 32.0, y + 6.0, 696.0, &rows, *index, 7);
         }
         Overlay::BtDevice { device, index } => {
             let name = ctx

@@ -96,6 +96,7 @@ pub mod kdeconnect;
 pub mod remote;
 pub mod screensaver;
 pub mod volume_panel;
+pub mod vpn;
 
 pub use error::{Error, Result};
 

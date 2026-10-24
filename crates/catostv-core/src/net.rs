@@ -39,9 +39,14 @@ impl NetStatus {
         self.connections.iter().any(|c| c.kind == "ethernet")
     }
 
-    /// "Home Wi-Fi", "Wired", or "Not connected".
+    /// "Home Wi-Fi", "Wired", or "Not connected". A VPN is not the
+    /// connection itself (it runs over it): left out here.
     pub fn summary(&self) -> String {
-        match self.connections.first() {
+        match self
+            .connections
+            .iter()
+            .find(|c| !crate::vpn::is_vpn_type(&c.kind))
+        {
             Some(c) if c.kind == "ethernet" => format!("Wired ({})", c.name),
             Some(c) => c.name.clone(),
             None => "Not connected".into(),

@@ -33,6 +33,9 @@ pub struct SystemSnapshot {
     /// `None`: no Wi-Fi adapter (or it could not be read).
     pub wifi_on: Option<bool>,
     pub net: Option<NetStatus>,
+    /// VPN connections NetworkManager knows (Settings → Network, Quick
+    /// settings).
+    pub vpns: Vec<crate::vpn::Vpn>,
     pub bluetooth: BluetoothStatus,
     pub bt_devices: Vec<Device>,
     /// `bluetoothctl info` of the paired devices: connected?, kind (icon).
@@ -216,6 +219,13 @@ pub enum RowId {
     WifiHeading,
     /// A Wi-Fi network found nearby (index into the scan results).
     WifiNet(usize),
+    /// The "VPN" heading on the Network page.
+    VpnHeading,
+    /// A VPN (index into `SystemSnapshot::vpns`): OK turns it on or off,
+    /// holding OK opens its options.
+    Vpn(usize),
+    /// "Add a VPN" from a WireGuard or OpenVPN file.
+    VpnAdd,
     BtRadio,
     BtDevice(usize),
     BtPair,
@@ -401,6 +411,45 @@ pub fn wifi_rows(
         };
         row(RowId::WifiNet(i), &n.ssid, state, signal, RowKind::Action)
     }));
+    v
+}
+
+/// The VPN part of the Network page: a heading, each VPN with its switch
+/// (`busy`: the one being turned on or off), and "Add a VPN".
+pub fn vpn_rows(vpns: &[crate::vpn::Vpn], busy: Option<&str>) -> Vec<Row> {
+    use crate::vpn::State;
+    let on = vpns.iter().find(|v| v.on()).map(|v| v.name.clone());
+    let mut v = vec![row(
+        RowId::VpnHeading,
+        "VPN",
+        "",
+        on.map_or(String::new(), |n| format!("On: {n}")),
+        RowKind::Heading,
+    )];
+    v.extend(vpns.iter().enumerate().map(|(i, x)| {
+        let turning = busy == Some(x.uuid.as_str()) || x.state == State::Connecting;
+        let sub = match (turning, x.autoconnect) {
+            (true, _) => "Connecting…".to_string(),
+            (false, true) => format!("{} · Connects by itself", x.kind.label()),
+            (false, false) => x.kind.label().to_string(),
+        };
+        let mut r = row(
+            RowId::Vpn(i),
+            &x.name,
+            &sub,
+            on_off(Some(x.on())),
+            RowKind::Toggle(Some(x.on())),
+        );
+        r.busy = turning;
+        r
+    }));
+    v.push(row(
+        RowId::VpnAdd,
+        "Add a VPN",
+        "From a WireGuard or OpenVPN file",
+        "",
+        RowKind::Action,
+    ));
     v
 }
 

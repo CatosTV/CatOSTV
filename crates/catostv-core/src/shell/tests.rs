@@ -272,10 +272,10 @@ fn quick_panel_actions() {
     assert!(matches!(s.overlay(), Some(Overlay::QuickBluetooth { .. })));
     assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::SetBluetooth(true)]);
     press(&mut s, &f, &[Back]);
-    assert_eq!(
-        press(&mut s, &f, &[Down, Left, Ok]),
-        vec![Effect::ToggleMute]
-    );
+    // The VPN tile (where Mute was; the volume row mutes) opens its panel.
+    assert_eq!(press(&mut s, &f, &[Down, Left, Ok]), vec![]);
+    assert!(matches!(s.overlay(), Some(Overlay::QuickVpn { .. })));
+    press(&mut s, &f, &[Back]);
     press(&mut s, &f, &[Down, Right, Ok]); // Power → power menu
     assert!(matches!(s.overlay(), Some(Overlay::Power { index: 0 })));
     assert_eq!(
@@ -371,10 +371,11 @@ fn wifi_join_flow() {
             in_use: false,
         },
     ]));
+    // Wi-Fi, Connection, the VPN part (heading, Add a VPN), then the networks.
     let rows = s.settings_rows(&f.ctx());
-    assert_eq!(rows[2].kind, crate::settings::RowKind::Heading);
-    assert_eq!(rows[2].value, "");
-    let home = &rows[3];
+    assert_eq!(rows[4].kind, crate::settings::RowKind::Heading);
+    assert_eq!(rows[4].value, "");
+    let home = &rows[5];
     assert_eq!(
         (
             home.title.as_str(),
@@ -383,15 +384,15 @@ fn wifi_join_flow() {
         ),
         ("Home", "Secured", "Strong")
     );
-    assert_eq!(rows.len(), 5);
-    // Focus never rests on the heading.
-    s.settings_row = 2;
+    assert_eq!(rows.len(), 7);
+    // Focus never rests on a heading.
+    s.settings_row = 4;
     s.clamp(&f.ctx());
-    assert_eq!(s.settings_row, 3);
+    assert_eq!(s.settings_row, 5);
     s.settings_row = 0;
-    // Focus steps over the heading: Wi-Fi, Connection, Home, Cafe.
+    // Focus steps over the headings: Wi-Fi, Connection, Add a VPN, Home, Cafe.
     assert_eq!(
-        press(&mut s, &f, &[Down, Down, Down, Ok]),
+        press(&mut s, &f, &[Down, Down, Down, Down, Ok]),
         vec![Effect::ConnectWifi {
             ssid: "Cafe".into(),
             password: None
@@ -1767,4 +1768,108 @@ fn power_menu_tiles_move_with_left_and_right() {
     s.overlays.push(Overlay::Power { index: 1 });
     assert_eq!(press(&mut s, &f, &[Back]), vec![]);
     assert!(s.overlay().is_none());
+}
+
+fn vpn(name: &str, uuid: &str, on: bool) -> crate::vpn::Vpn {
+    crate::vpn::Vpn {
+        name: name.into(),
+        uuid: uuid.into(),
+        kind: crate::vpn::Kind::WireGuard,
+        autoconnect: false,
+        state: if on {
+            crate::vpn::State::On
+        } else {
+            crate::vpn::State::Off
+        },
+    }
+}
+
+const VPN_A: &str = "1b4e28ba-2fa1-11d2-883f-0016d3cca427";
+const VPN_B: &str = "2c5f39cb-3fa1-11d2-883f-0016d3cca428";
+
+#[test]
+fn vpns_on_the_network_page_one_at_a_time() {
+    let mut f = Fixture::new();
+    f.sys.vpns = vec![vpn("Home", VPN_A, true), vpn("Sweden", VPN_B, false)];
+    let mut s = Shell::new();
+    open_settings(&mut s, &f, Category::Network);
+    let rows = s.settings_rows(&f.ctx());
+    let at = rows.iter().position(|r| r.id == RowId::Vpn(1)).unwrap();
+    assert_eq!(
+        rows[at - 2].value,
+        "On: Home",
+        "the heading says which is on"
+    );
+    s.settings_row = at;
+    // Turning Sweden on turns Home off first.
+    assert_eq!(
+        press(&mut s, &f, &[Ok]),
+        vec![
+            Effect::VpnDown(VPN_A.into()),
+            Effect::VpnUp {
+                uuid: VPN_B.into(),
+                name: "Sweden".into()
+            }
+        ]
+    );
+    // Busy until the answer: a second press does nothing.
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![]);
+    assert_eq!(
+        s.on_vpn_done(Result::Ok("VPN on: Sweden".into())),
+        vec![Effect::Toast("VPN on: Sweden".into())]
+    );
+    // Holding OK: its options.
+    press(&mut s, &f, &[OkLong]);
+    assert!(matches!(
+        s.overlay(),
+        Some(Overlay::VpnOptions { vpn: 1, index: 0 })
+    ));
+    assert_eq!(
+        press(&mut s, &f, &[Down, Ok]),
+        vec![Effect::VpnAutoconnect(VPN_B.into(), true)]
+    );
+}
+
+#[test]
+fn adding_a_vpn_from_a_file() {
+    let f = Fixture::new();
+    let mut s = Shell::new();
+    open_settings(&mut s, &f, Category::Network);
+    let rows = s.settings_rows(&f.ctx());
+    s.settings_row = rows.iter().position(|r| r.id == RowId::VpnAdd).unwrap();
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::VpnFindFiles]);
+    assert!(matches!(s.overlay(), Some(Overlay::VpnAdd { .. })));
+    assert_eq!(press(&mut s, &f, &[Ok]), vec![], "nothing found yet");
+    s.on_vpn_files(vec![
+        "/media/stick/se.conf".into(),
+        "/media/stick/nl.ovpn".into(),
+    ]);
+    assert_eq!(
+        press(&mut s, &f, &[Down, Ok]),
+        vec![Effect::VpnImport("/media/stick/nl.ovpn".into())]
+    );
+    assert!(s.overlay().is_none());
+}
+
+#[test]
+fn quick_settings_vpn_panel() {
+    let mut f = Fixture::new();
+    f.sys.vpns = vec![vpn("Home", VPN_A, false)];
+    let mut s = Shell::new();
+    s.overlays.push(Overlay::QuickVpn { index: 0 });
+    assert_eq!(
+        press(&mut s, &f, &[Ok]),
+        vec![Effect::VpnUp {
+            uuid: VPN_A.into(),
+            name: "Home".into()
+        }]
+    );
+    assert!(
+        matches!(s.overlay(), Some(Overlay::QuickVpn { .. })),
+        "stays open"
+    );
+    s.on_vpn_done(Result::Ok(String::new()));
+    // Last row: Add a VPN.
+    assert_eq!(press(&mut s, &f, &[Down, Ok]), vec![Effect::VpnFindFiles]);
+    assert!(matches!(s.overlay(), Some(Overlay::VpnAdd { .. })));
 }

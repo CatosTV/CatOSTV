@@ -89,6 +89,8 @@ pub const BASE_PACKAGES: &[&str] = &[
     "polkit",
     // Network / Bluetooth
     "networkmanager",
+    // VPNs from OpenVPN files (WireGuard is built into NetworkManager).
+    "networkmanager-openvpn",
     "wpa_supplicant",
     "bluez",
     "bluez-utils",

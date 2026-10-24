@@ -115,7 +115,8 @@ pub enum QuickItem {
     /// Wi-Fi and Ethernet: OK opens the Network panel.
     Network,
     Bluetooth,
-    Mute,
+    /// VPN on or off (the volume row below mutes, so no Mute tile).
+    Vpn,
     Settings,
     Sleep,
     Power,
@@ -127,7 +128,7 @@ pub enum QuickItem {
 pub const QUICK_ITEMS: [QuickItem; 6] = [
     QuickItem::Network,
     QuickItem::Bluetooth,
-    QuickItem::Mute,
+    QuickItem::Vpn,
     QuickItem::Settings,
     QuickItem::Sleep,
     QuickItem::Power,
@@ -428,6 +429,19 @@ pub enum BtOption {
     Cancel,
 }
 
+/// A VPN's options sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VpnOption {
+    /// Turn on / Turn off.
+    Switch,
+    /// Connects by itself: on / off.
+    Autoconnect,
+    Remove,
+}
+
+pub const VPN_OPTIONS: [VpnOption; 3] =
+    [VpnOption::Switch, VpnOption::Autoconnect, VpnOption::Remove];
+
 pub const BT_OPTIONS: [BtOption; 4] = [
     BtOption::Connect,
     BtOption::Disconnect,
@@ -711,6 +725,20 @@ pub enum Overlay {
     BtScan {
         index: usize,
     },
+    /// Options for VPN `vpn` (index into `sys.vpns`): on/off, connects by
+    /// itself, remove.
+    VpnOptions {
+        vpn: usize,
+        index: usize,
+    },
+    /// "Add a VPN": the VPN files found (`Shell::vpn_files`).
+    VpnAdd {
+        index: usize,
+    },
+    /// Quick settings' VPN panel: each VPN, then "Add a VPN".
+    QuickVpn {
+        index: usize,
+    },
     /// Options for paired device `device` (index into `sys.bt_devices`).
     BtDevice {
         device: usize,
@@ -777,6 +805,9 @@ impl Overlay {
             | Overlay::Power { index }
             | Overlay::BtScan { index }
             | Overlay::BtDevice { index, .. }
+            | Overlay::VpnOptions { index, .. }
+            | Overlay::VpnAdd { index }
+            | Overlay::QuickVpn { index }
             | Overlay::DisplayModes { index }
             | Overlay::DisplayConfirm { index }
             | Overlay::KdeRequest { index, .. }
@@ -912,6 +943,18 @@ pub enum Effect {
     BtConnect(String),
     BtDisconnect(String),
     BtForget(String),
+    /// Turn a VPN on (uuid, name for messages) or off.
+    VpnUp {
+        uuid: String,
+        name: String,
+    },
+    VpnDown(String),
+    /// "Connects by itself" on or off.
+    VpnAutoconnect(String, bool),
+    VpnRemove(String),
+    /// Look for WireGuard / OpenVPN files to add.
+    VpnFindFiles,
+    VpnImport(std::path::PathBuf),
     SetMode {
         output: String,
         mode: Mode,
@@ -1053,6 +1096,10 @@ pub struct Shell {
     /// refresh while it connects) the focus goes back to it once it is
     /// there again, instead of staying wherever the shorter list put it.
     settings_kept: Option<(usize, RowId, usize)>,
+    /// The VPN being turned on or off (its uuid), until the answer.
+    pub vpn_busy: Option<String>,
+    /// VPN files found for "Add a VPN".
+    pub vpn_files: Scan<std::path::PathBuf>,
     pub search_osk: Osk,
     pub search_focus: SearchFocus,
     pub search_index: usize,
@@ -1171,6 +1218,8 @@ impl Shell {
             accent_pick: None,
             settings_editing: None,
             settings_kept: None,
+            vpn_busy: None,
+            vpn_files: Scan::Idle,
             search_osk: Osk::new(false, "Search"),
             search_focus: SearchFocus::Keyboard,
             search_index: 0,
@@ -1204,6 +1253,9 @@ impl Shell {
     /// The rows of the current Settings category (Apps filtered).
     pub fn settings_rows(&self, ctx: &ShellContext) -> Vec<settings::Row> {
         let mut rows = settings::rows_for(self.current_category(), ctx, &self.apps_filter);
+        if self.current_category() == Category::Network {
+            rows.extend(settings::vpn_rows(&ctx.sys.vpns, self.vpn_busy.as_deref()));
+        }
         // Wi-Fi on: the networks nearby are right there to pick.
         if self.current_category() == Category::Network && ctx.sys.wifi_on == Some(true) {
             rows.extend(settings::wifi_rows(
@@ -1362,6 +1414,9 @@ impl Shell {
             Overlay::Power { .. } => POWER_ITEMS.len(),
             Overlay::BtScan { .. } => self.bt_scan.items().len() + 1,
             Overlay::BtDevice { .. } => BT_OPTIONS.len(),
+            Overlay::VpnOptions { .. } => VPN_OPTIONS.len(),
+            Overlay::VpnAdd { .. } => self.vpn_files.items().len().max(1),
+            Overlay::QuickVpn { .. } => ctx.sys.vpns.len() + 1,
             Overlay::DisplayModes { .. } => self.menu_modes(ctx).len(),
             Overlay::DisplayConfirm { .. } | Overlay::KdeRequest { .. } => 2,
             Overlay::AudioOutputs { .. } => ctx.sys.sinks.len(),
@@ -1501,6 +1556,7 @@ impl Shell {
         self.overlays.retain(|o| match o {
             Overlay::AppOptions { app, .. } => *app < n_apps,
             Overlay::BtDevice { device, .. } => *device < ctx.sys.bt_devices.len(),
+            Overlay::VpnOptions { vpn, .. } => *vpn < ctx.sys.vpns.len(),
             _ => true,
         });
         let lens: Vec<usize> = self
@@ -2471,6 +2527,12 @@ impl Shell {
                 }
                 vec![]
             }
+            Action::OkLong | Action::Options if matches!(row.id, RowId::Vpn(_)) => {
+                if let RowId::Vpn(i) = row.id {
+                    self.overlays.push(Overlay::VpnOptions { vpn: i, index: 0 });
+                }
+                vec![]
+            }
             Action::Ok | Action::OkLong if adjustable => {
                 self.settings_editing = Some(here);
                 if accent {
@@ -2481,6 +2543,49 @@ impl Shell {
             Action::Ok | Action::OkLong => self.activate_row(row.id, row.kind, &row.title, ctx),
             _ => vec![],
         }
+    }
+
+    /// Turn `v` on (any other VPN that is on goes off first: one at a time)
+    /// or off.
+    fn switch_vpn(&mut self, v: crate::vpn::Vpn, ctx: &ShellContext) -> Vec<Effect> {
+        if self.vpn_busy.is_some() {
+            return vec![];
+        }
+        self.vpn_busy = Some(v.uuid.clone());
+        if v.on() || v.state == crate::vpn::State::Connecting {
+            return vec![Effect::VpnDown(v.uuid)];
+        }
+        let mut e: Vec<Effect> = ctx
+            .sys
+            .vpns
+            .iter()
+            .filter(|o| o.uuid != v.uuid && o.on())
+            .map(|o| Effect::VpnDown(o.uuid.clone()))
+            .collect();
+        e.push(Effect::VpnUp {
+            uuid: v.uuid,
+            name: v.name,
+        });
+        e
+    }
+
+    fn open_vpn_add(&mut self) -> Vec<Effect> {
+        self.vpn_files = Scan::Busy;
+        self.overlays.push(Overlay::VpnAdd { index: 0 });
+        vec![Effect::VpnFindFiles]
+    }
+
+    /// A VPN was turned on or off (or failed to).
+    pub fn on_vpn_done(&mut self, result: Result<String, String>) -> Vec<Effect> {
+        self.vpn_busy = None;
+        match result {
+            Ok(text) if text.is_empty() => vec![],
+            Ok(text) | Err(text) => vec![Effect::Toast(text)],
+        }
+    }
+
+    pub fn on_vpn_files(&mut self, files: Vec<std::path::PathBuf>) {
+        self.vpn_files = Scan::Done(files);
     }
 
     fn activate_row(
@@ -2501,6 +2606,11 @@ impl Shell {
             },
             RowId::WifiNet(i) => self.choose_wifi(i),
             RowId::Ethernet => self.open_ethernet(ctx),
+            RowId::Vpn(i) => match ctx.sys.vpns.get(i) {
+                Some(v) => self.switch_vpn(v.clone(), ctx),
+                None => vec![],
+            },
+            RowId::VpnAdd => self.open_vpn_add(),
             RowId::UpdateCheck => vec![Effect::CheckUpdates],
             RowId::UpdateInstall => vec![Effect::InstallUpdate],
             RowId::BtRadio if sys.bluetooth.available => {
@@ -3045,6 +3155,51 @@ impl Shell {
                     BtOption::Cancel => vec![],
                 }
             }
+            Overlay::VpnOptions { vpn, index } => {
+                if vertical(index) || !is_ok {
+                    return vec![];
+                }
+                let (vpn, choice) = (*vpn, VPN_OPTIONS[(*index).min(VPN_OPTIONS.len() - 1)]);
+                self.overlays.pop();
+                let Some(v) = ctx.sys.vpns.get(vpn).cloned() else {
+                    return vec![];
+                };
+                match choice {
+                    VpnOption::Switch => self.switch_vpn(v, ctx),
+                    VpnOption::Autoconnect => vec![Effect::VpnAutoconnect(v.uuid, !v.autoconnect)],
+                    VpnOption::Remove => {
+                        self.settings_row = self.settings_row.saturating_sub(1);
+                        vec![Effect::VpnRemove(v.uuid)]
+                    }
+                }
+            }
+            Overlay::VpnAdd { index } => {
+                if vertical(index) || !is_ok {
+                    return vec![];
+                }
+                let Some(path) = self.vpn_files.items().get(*index).cloned() else {
+                    return vec![];
+                };
+                self.overlays.pop();
+                vec![Effect::VpnImport(path)]
+            }
+            Overlay::QuickVpn { index } => {
+                if vertical(index) {
+                    return vec![];
+                }
+                if action == Action::Back {
+                    self.overlays.pop();
+                    return vec![];
+                }
+                if !is_ok {
+                    return vec![];
+                }
+                let i = *index;
+                match ctx.sys.vpns.get(i).cloned() {
+                    Some(v) => self.switch_vpn(v, ctx),
+                    None => self.open_vpn_add(),
+                }
+            }
             Overlay::DisplayModes { index } => {
                 if vertical(index) || !is_ok {
                     return vec![];
@@ -3425,7 +3580,10 @@ impl Shell {
                     vec![Effect::Toast("No Bluetooth adapter".into())]
                 }
             }
-            QuickItem::Mute => vec![Effect::ToggleMute],
+            QuickItem::Vpn => {
+                self.overlays.push(Overlay::QuickVpn { index: 0 });
+                vec![]
+            }
             QuickItem::Settings => {
                 self.open_page(Page::Settings);
                 vec![]

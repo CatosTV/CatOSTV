@@ -156,6 +156,11 @@ enum Msg {
     ModeFailed(String),
     Toast(String),
     Refresh,
+    /// A VPN was turned on or off: a message to show (empty: none) or why
+    /// it failed.
+    VpnDone(Result<String, String>),
+    /// VPN files found for "Add a VPN".
+    VpnFiles(Vec<PathBuf>),
     Nothing,
 }
 
@@ -926,6 +931,7 @@ fn snapshot(appliance: bool, home: &Path) -> (SystemSnapshot, Vec<AppEntry>) {
     let sys = SystemSnapshot {
         wifi_on: net::wifi_state(&mut r).ok().flatten(),
         net: net::status(&mut r).ok(),
+        vpns: catostv_core::vpn::list(&mut r).unwrap_or_default(),
         bluetooth: bt,
         bt_devices,
         bt_details,
@@ -2249,6 +2255,37 @@ impl ShellApp {
             Effect::BtConnect(mac) => self.job(move |r| bluetooth::connect(r, &mac)),
             Effect::BtDisconnect(mac) => self.job(move |r| bluetooth::disconnect(r, &mac)),
             Effect::BtForget(mac) => self.job(move |r| bluetooth::remove(r, &mac)),
+            Effect::VpnUp { uuid, name } => self.jobs.spawn(move || {
+                Msg::VpnDone(
+                    catostv_core::vpn::up(&mut SystemRunner, &uuid, &name)
+                        .map(|()| format!("VPN on: {name}"))
+                        .map_err(|e| e.to_string()),
+                )
+            }),
+            Effect::VpnDown(uuid) => self.jobs.spawn(move || {
+                Msg::VpnDone(
+                    catostv_core::vpn::down(&mut SystemRunner, &uuid)
+                        .map(|()| String::new())
+                        .map_err(|e| e.to_string()),
+                )
+            }),
+            Effect::VpnAutoconnect(uuid, on) => {
+                self.job(move |r| catostv_core::vpn::set_autoconnect(r, &uuid, on))
+            }
+            Effect::VpnRemove(uuid) => self.job(move |r| catostv_core::vpn::remove(r, &uuid)),
+            Effect::VpnFindFiles => {
+                let dirs = catostv_core::vpn::file_dirs(&self.home);
+                self.jobs
+                    .spawn(move || Msg::VpnFiles(catostv_core::vpn::find_files(&dirs)));
+            }
+            Effect::VpnImport(path) => self.jobs.spawn(move || {
+                let scratch = catostv_core::env::runtime_dir();
+                Msg::VpnDone(
+                    catostv_core::vpn::import(&mut SystemRunner, &path, &scratch)
+                        .map(|name| format!("Added {name}. Turn it on in the list"))
+                        .map_err(|e| e.to_string()),
+                )
+            }),
             Effect::SetMode { output, mode } => {
                 self.confirm_deadline = Some(
                     Instant::now() + Duration::from_secs(catostv_core::shell::DISPLAY_CONFIRM_SECS),
@@ -3655,6 +3692,13 @@ impl ShellApp {
             }
             Msg::Volume(Err(e)) | Msg::Toast(e) => self.show_toast(ctx, &e),
             Msg::Refresh => self.refresh_soon(),
+            Msg::VpnDone(r) => {
+                for e in self.shell.on_vpn_done(r) {
+                    self.apply(ctx, e);
+                }
+                self.refresh_soon();
+            }
+            Msg::VpnFiles(files) => self.shell.on_vpn_files(files),
             Msg::Nothing => {}
         }
     }
