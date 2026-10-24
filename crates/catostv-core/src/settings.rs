@@ -272,6 +272,8 @@ pub enum RowId {
     PadBindReset,
     PadNav,
     About,
+    /// The running Linux kernel's version.
+    Kernel,
     DebugSsh,
     DebugLogin,
     DebugPassword,
@@ -451,6 +453,13 @@ pub fn vpn_rows(vpns: &[crate::vpn::Vpn], busy: Option<&str>) -> Vec<Row> {
         RowKind::Action,
     ));
     v
+}
+
+/// The running kernel ("7.2.9-arch1-1"), from /proc.
+pub fn kernel_version() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "-".into())
 }
 
 pub fn rows(cat: Category, ctx: &ShellContext) -> Vec<Row> {
@@ -858,6 +867,13 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                 "CatosTV",
                 "",
                 format!("Version {}", crate::env::version()),
+                RowKind::Info,
+            ),
+            row(
+                RowId::Kernel,
+                "Linux kernel",
+                "",
+                kernel_version(),
                 RowKind::Info,
             ),
             row(

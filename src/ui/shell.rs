@@ -1683,6 +1683,7 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::KeyGuide => "keyboard",
         R::PadNav | R::PadBind(_) | R::PadBindReset => "game",
         R::About => "spark",
+        R::Kernel => "disk",
         R::RestartShell => "refresh",
         R::Reboot => "refresh",
         R::PowerOff => "power",
@@ -2530,7 +2531,7 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                 .iter()
                 .map(|d| {
                     if s.bt_busy.as_deref() == Some(d.address.as_str()) {
-                        "…".into()
+                        "Connecting…".into()
                     } else if shell::bt_connected(sys, &d.address) {
                         shell::bt_connected_label(sys, &d.address)
                     } else if shell::bt_unpaired(sys, &d.address) {
@@ -2561,6 +2562,22 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                 })
                 .collect();
             modal_list(c, "qs-bt", 868.0, y, 360.0, &rows, *index, 9);
+            // The device being connected: a spinner at the right of its row.
+            if let Some(k) = rows_ids.iter().position(|r| {
+                matches!(r, shell::BtRow::Device(i)
+                    if sys.bt_devices.get(*i).map(|d| d.address.as_str()) == s.bt_busy.as_deref())
+            }) {
+                let first = index.saturating_sub(8);
+                if k >= first && k < first + 9 {
+                    widgets::spinner(
+                        c,
+                        868.0 + 360.0 - 30.0,
+                        y + (k - first) as f32 * 60.0 + 26.0,
+                        9.0,
+                        v.now,
+                    );
+                }
+            }
         }
         Overlay::Ethernet { index } => {
             let y = qs_panel(c, "ethernet", "Ethernet");

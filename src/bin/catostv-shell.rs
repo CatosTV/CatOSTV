@@ -4044,6 +4044,7 @@ impl ShellApp {
         self.sys.android_setup.as_ref().is_some_and(|s| s.running())
             || self.sys.android_repairing
             || self.shell.bt_busy.is_some()
+            || self.shell.vpn_busy.is_some()
             || self.shell.debug_ssh_busy.is_some()
             || !self.shell.store_jobs.is_empty()
             || self.bluetooth_on_screen()
