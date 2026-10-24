@@ -26,7 +26,7 @@ use catostv_core::{android, audio, bluetooth, desktop, disk, env, flatpak, ipc, 
 use std::time::Duration;
 
 const USAGE: &str =
-    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|packages|install-prepare|windows|activate|version> [options]
+    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|packages|install-prepare|windows|activate|minimize|version> [options]
   plan/dry-run options: --disk /dev/X  [--timezone Area/City]  [--keyboard us|de|…]  [--cpu intel|amd|other]";
 
 fn opt(args: &[String], name: &str) -> Option<String> {
@@ -113,6 +113,27 @@ fn main() {
             Err(e) => {
                 eprintln!("catostv-diag: {e}");
                 1
+            }
+        },
+        // Minimize an app's window, as its title bar button does.
+        Some("minimize") => match args.get(1) {
+            Some(want) => match catostv_core::toplevel::control(
+                want,
+                catostv_core::toplevel::WindowAction::Minimize,
+            ) {
+                Ok(true) => 0,
+                Ok(false) => {
+                    eprintln!("catostv-diag: no window {want}");
+                    1
+                }
+                Err(e) => {
+                    eprintln!("catostv-diag: {e}");
+                    1
+                }
+            },
+            None => {
+                eprintln!("usage: catostv-diag minimize APP_ID");
+                2
             }
         },
         Some("activate") => match args.get(1) {

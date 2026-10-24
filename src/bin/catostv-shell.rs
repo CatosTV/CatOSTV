@@ -375,7 +375,7 @@ fn spawn_app_watcher(
                 }
             }
             let windows = if appliance && hidden && !android_front {
-                all
+                all.clone()
             } else {
                 None
             };
@@ -399,7 +399,24 @@ fn spawn_app_watcher(
             {
                 last_window = Some(t.app_id.clone());
             }
-            if android_on_top
+            // The app's window was minimized (its title bar button): with no
+            // taskbar to bring it back from, that means Home, the app kept
+            // running (opening it again restores the window).
+            let minimized = hidden
+                && last_window.as_deref().is_some_and(|w| {
+                    let mine: Vec<_> = all.iter().flatten().filter(|t| t.app_id == w).collect();
+                    !mine.is_empty() && mine.iter().all(|t| t.minimized)
+                });
+            if minimized {
+                eprintln!(
+                    "catostv: {} minimized; back to Home",
+                    last_window.as_deref().unwrap_or("")
+                );
+                last_window = None;
+                let _ = tx.send(Msg::LeftApp);
+                ctx.request_repaint();
+                let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
+            } else if android_on_top
                 && let Some(w) = last_window
                     .clone()
                     .or_else(|| fg_window.clone())

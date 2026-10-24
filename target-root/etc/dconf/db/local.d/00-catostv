@@ -8,3 +8,8 @@ icon-theme='Papirus-Dark'
 cursor-theme='Adwaita'
 cursor-size=32
 enable-animations=true
+
+# Minimize, maximize and close on the title bars apps draw themselves
+# (Stremio and other GNOME apps showed only close). Minimize goes to Home.
+[org/gnome/desktop/wm/preferences]
+button-layout='appmenu:minimize,maximize,close'
