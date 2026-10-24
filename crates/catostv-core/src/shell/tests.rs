@@ -1743,3 +1743,28 @@ fn settings_focus_comes_back_to_a_row_that_was_missing_for_a_moment() {
     s.clamp(&f.ctx());
     assert_eq!(s.settings_row, 1);
 }
+
+#[test]
+fn power_menu_tiles_move_with_left_and_right() {
+    let f = Fixture::new();
+    let mut s = Shell::new();
+    s.overlays.push(Overlay::Power { index: 0 });
+    press(&mut s, &f, &[Left]);
+    assert!(
+        matches!(s.overlay(), Some(Overlay::Power { index: 0 })),
+        "stops at Sleep"
+    );
+    press(&mut s, &f, &[Right, Right, Right]);
+    assert!(
+        matches!(s.overlay(), Some(Overlay::Power { index: 2 })),
+        "stops at Power off"
+    );
+    assert_eq!(
+        press(&mut s, &f, &[Ok]),
+        vec![Effect::Power(PowerAction::PowerOff)]
+    );
+    // No Cancel tile: Back closes it.
+    s.overlays.push(Overlay::Power { index: 1 });
+    assert_eq!(press(&mut s, &f, &[Back]), vec![]);
+    assert!(s.overlay().is_none());
+}

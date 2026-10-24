@@ -2074,6 +2074,84 @@ fn modal_header(c: &C, mx: f32, my: f32, icon: Option<&str>, title: &str, w: f32
 }
 
 /// Vertical list of buttons; registers `Target::Item(k)`.
+/// The power menu: three tiles side by side (Left/Right, OK; Back closes).
+/// The focused tile lifts and fills with the accent, Power off with red.
+fn draw_power(c: &C, ctx: &ShellContext, index: usize) {
+    let (tw, th, gap) = (216.0, 196.0, 24.0);
+    let n = POWER_ITEMS.len() as f32;
+    let w = 64.0 + n * tw + (n - 1.0) * gap;
+    let m = widgets::modal(c, w, 372.0);
+    c.hit(m, Target::Item(usize::MAX));
+    let (mx, my) = c.to_design(m.min);
+    let y = modal_header(c, mx, my, Some("power"), "Power", w) + 6.0;
+    for (k, item) in POWER_ITEMS.iter().enumerate() {
+        let t = focus_t(c, ("power", k), index == k);
+        let off = *item == shell::PowerItem::PowerOff;
+        let rect = widgets::lifted(c, c.r(mx + 32.0 + k as f32 * (tw + gap), y, tw, th), t);
+        let tint: theme::Rgb = if off {
+            theme::DANGER
+        } else {
+            theme::accent_rgb()
+        };
+        widgets::focus_lift(c, rect, 26.0, t);
+        if t > 0.01 {
+            c.soft_shadow(rect, 26.0, 20.0, 2.0, theme::rgba(tint, (110.0 * t) as u8));
+        }
+        c.fill(
+            rect,
+            26.0,
+            theme::rgba(theme::WHITE, (14.0 * (1.0 - t)) as u8),
+        );
+        c.fill(rect, 26.0, theme::rgba(tint, (255.0 * t) as u8));
+        c.outline(
+            rect,
+            26.0,
+            1.0,
+            theme::rgba(theme::WHITE, (18.0 * (1.0 - t)) as u8),
+        );
+        widgets::focus_pill(c, rect, 26.0, t * 0.6);
+        let (rx, ry) = c.to_design(rect.min);
+        let (rw, _) = c.dsize(rect);
+        let cx = rx + rw / 2.0;
+        let on = if off {
+            theme::rgb((40, 10, 10))
+        } else {
+            theme::on_accent()
+        };
+        let icon_ink = widgets::mix(theme::rgb(tint), on, t);
+        icons::draw(c, item.icon(), cx, ry + 66.0, 40.0, icon_ink);
+        c.text(
+            cx,
+            ry + 124.0,
+            Align2::CENTER_CENTER,
+            item.label(),
+            20.0,
+            widgets::mix(theme::text(), on, t),
+            Weight::Semibold,
+        );
+        let detail = item.detail(ctx.prefs.screensaver);
+        c.text(
+            cx,
+            ry + 154.0,
+            Align2::CENTER_CENTER,
+            &c.fit(detail, rw - 24.0, 13.5, Weight::Regular),
+            13.5,
+            widgets::mix(theme::text2(), on, t * 0.85),
+            Weight::Regular,
+        );
+        c.hit(rect, Target::Item(k));
+    }
+    c.text(
+        mx + w / 2.0,
+        y + th + 34.0,
+        Align2::CENTER_CENTER,
+        "Back to cancel",
+        13.0,
+        theme::text3(),
+        Weight::Regular,
+    );
+}
+
 fn button_column(
     c: &C,
     id: &str,
@@ -2376,26 +2454,7 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                 .collect();
             button_column(c, "appopt", mx + 32.0, my + 120.0, 376.0, &labels, *index);
         }
-        Overlay::Power { index } => {
-            let m = widgets::modal(c, 400.0, 130.0 + POWER_ITEMS.len() as f32 * 62.0);
-            c.hit(m, Target::Item(usize::MAX));
-            let (mx, my) = c.to_design(m.min);
-            let y = modal_header(c, mx, my, Some("power"), "Power", 400.0);
-            let labels: Vec<(&str, ButtonStyle)> = POWER_ITEMS
-                .iter()
-                .map(|p| {
-                    (
-                        p.label(),
-                        match p {
-                            shell::PowerItem::PowerOff => ButtonStyle::Danger,
-                            shell::PowerItem::Cancel => ButtonStyle::Secondary,
-                            _ => ButtonStyle::Primary,
-                        },
-                    )
-                })
-                .collect();
-            button_column(c, "power", mx + 32.0, y, 336.0, &labels, *index);
-        }
+        Overlay::Power { index } => draw_power(c, ctx, *index),
         Overlay::QuickNetwork { index } => {
             let y = qs_panel(c, "globe", "Network");
             let sys = ctx.sys;

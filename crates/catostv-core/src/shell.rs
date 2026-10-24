@@ -335,15 +335,10 @@ pub enum PowerItem {
     Sleep,
     Restart,
     PowerOff,
-    Cancel,
 }
 
-pub const POWER_ITEMS: [PowerItem; 4] = [
-    PowerItem::Sleep,
-    PowerItem::Restart,
-    PowerItem::PowerOff,
-    PowerItem::Cancel,
-];
+/// The power menu: three tiles side by side; Back closes it.
+pub const POWER_ITEMS: [PowerItem; 3] = [PowerItem::Sleep, PowerItem::Restart, PowerItem::PowerOff];
 
 impl PowerItem {
     pub fn label(self) -> &'static str {
@@ -351,7 +346,25 @@ impl PowerItem {
             Self::Sleep => "Sleep",
             Self::Restart => "Restart",
             Self::PowerOff => "Power off",
-            Self::Cancel => "Cancel",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Sleep => "moon",
+            Self::Restart => "refresh",
+            Self::PowerOff => "power",
+        }
+    }
+
+    /// One line under the label: what it does. Sleep shows the screensaver
+    /// when that is on, else it puts the PC to sleep.
+    pub fn detail(self, screensaver: bool) -> &'static str {
+        match self {
+            Self::Sleep if screensaver => "Screensaver until a button",
+            Self::Sleep => "Any button wakes it",
+            Self::Restart => "Starts everything again",
+            Self::PowerOff => "Turns the PC off",
         }
     }
 }
@@ -2766,16 +2779,25 @@ impl Shell {
                 }
             }
             Overlay::Power { index } => {
-                if vertical(index) || !is_ok {
-                    return vec![];
+                // Tiles side by side: Left/Right (Up/Down too) move.
+                match action {
+                    Action::Left | Action::Up => {
+                        *index = index.saturating_sub(1);
+                        return vec![];
+                    }
+                    Action::Right | Action::Down => {
+                        *index = (*index + 1).min(POWER_ITEMS.len() - 1);
+                        return vec![];
+                    }
+                    _ if !is_ok => return vec![],
+                    _ => {}
                 }
-                let item = POWER_ITEMS[*index];
+                let item = POWER_ITEMS[(*index).min(POWER_ITEMS.len() - 1)];
                 self.overlays.pop();
                 match item {
                     PowerItem::Sleep => vec![sleep_effect(ctx)],
                     PowerItem::Restart => vec![Effect::Power(PowerAction::Reboot)],
                     PowerItem::PowerOff => vec![Effect::Power(PowerAction::PowerOff)],
-                    PowerItem::Cancel => vec![],
                 }
             }
             Overlay::KdeDevice { device, index } => {

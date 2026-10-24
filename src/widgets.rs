@@ -386,7 +386,16 @@ pub enum ButtonStyle {
 pub fn button<H: Copy>(c: &Canvas<H>, rect: Rect, label: &str, style: ButtonStyle, t: f32) {
     let radius = rect.height() / c.s / 2.0;
     let (fill, ink) = match style {
-        ButtonStyle::Primary => (theme::accent(), theme::on_accent()),
+        // Like Danger: a tint at rest, solid when focused, so a column of
+        // them (Sleep, Restart) shows which one is picked.
+        ButtonStyle::Primary => (
+            theme::rgba(theme::accent_rgb(), lerp(40, 255, t)),
+            if t > 0.5 {
+                theme::on_accent()
+            } else {
+                theme::accent()
+            },
+        ),
         ButtonStyle::Secondary => (
             theme::rgba(theme::WHITE, lerp(12, 44, t)),
             if t > 0.5 {
