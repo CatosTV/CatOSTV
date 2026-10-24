@@ -9,7 +9,8 @@
 //! play, media, game, music, stream, browser, tv, cat, catfyn, lock, chevron, check,
 //! refresh, disk, globe, spark, store, android, cast, keyboard, palette,
 //! phone, remote, download, trash, usb, plus, close, back, headphones,
-//! sun, cloud, rain, snow, storm, fog.
+//! sun, cloud, rain, snow, storm, fog, clock, timer, info, chip, hdr,
+//! sync, image, key, terminal, pin, restart.
 //! Anything else is drawn as a monogram.
 
 use crate::canvas::Canvas;
@@ -118,16 +119,27 @@ pub fn draw<H: Copy>(c: &Canvas<H>, name: &str, cx: f32, cy: f32, size: f32, col
             c.segment(at(0.0, -0.9), at(0.0, 0.0), w, color);
         }
         "moon" => {
-            let mut pts = arc(cx, cy, 0.8 * u, PI * 0.35, PI * 1.65, 20);
-            pts.extend(arc(
-                cx + 0.45 * u,
-                cy - 0.15 * u,
-                0.6 * u,
-                PI * 1.45,
-                PI * 0.55,
-                16,
-            ));
-            c.closed(&pts, w, color);
+            // A crescent: the outer circle's arc from tip to tip round the
+            // left, then back along the inner circle; both meet at the tips.
+            // Two strokes, not one closed line: a join at the sharp tips
+            // would stick out.
+            c.polyline(
+                &arc(cx, cy, 0.82 * u, PI * 0.0765, PI * 1.4813, 28),
+                w,
+                color,
+            );
+            c.polyline(
+                &arc(
+                    cx + 0.36 * u,
+                    cy - 0.30 * u,
+                    0.66 * u,
+                    PI * 1.2877,
+                    PI * 0.27,
+                    22,
+                ),
+                w,
+                color,
+            );
         }
         "sun" => {
             c.ring(cx, cy, 0.38 * u, w, color);
@@ -293,6 +305,131 @@ pub fn draw<H: Copy>(c: &Canvas<H>, name: &str, cx: f32, cy: f32, size: f32, col
             let (x0, y0) = at(-0.55, -0.1);
             c.fill(c.r(x0, y0, 1.1 * u, 0.9 * u), 0.15 * u, color);
             c.polyline(&arc(cx, cy - 0.1 * u, 0.35 * u, PI, PI * 2.0, 10), w, color);
+        }
+        "clock" | "timer" => {
+            c.ring(
+                cx,
+                cy + if name == "timer" { 0.1 * u } else { 0.0 },
+                0.85 * u,
+                w,
+                color,
+            );
+            let oy = if name == "timer" { 0.1 } else { 0.0 };
+            c.segment(at(0.0, oy), at(0.0, oy - 0.5), w, color);
+            c.segment(at(0.0, oy), at(0.38, oy + 0.22), w, color);
+            if name == "timer" {
+                c.segment(at(-0.3, -0.98), at(0.3, -0.98), w, color);
+            }
+        }
+        "info" => {
+            c.ring(cx, cy, 0.85 * u, w, color);
+            c.circle(cx, cy - 0.42 * u, w * 0.9, color);
+            c.segment(at(0.0, -0.12), at(0.0, 0.5), w * 1.1, color);
+        }
+        "chip" => {
+            let (x0, y0) = at(-0.55, -0.55);
+            c.outline(c.r(x0, y0, 1.1 * u, 1.1 * u), 0.15 * u, w, color);
+            let (x1, y1) = at(-0.22, -0.22);
+            c.fill(c.r(x1, y1, 0.44 * u, 0.44 * u), 0.06 * u, color);
+            for k in [-0.3_f32, 0.0, 0.3] {
+                c.segment(at(k, -0.55), at(k, -0.9), w * 0.8, color);
+                c.segment(at(k, 0.55), at(k, 0.9), w * 0.8, color);
+                c.segment(at(-0.55, k), at(-0.9, k), w * 0.8, color);
+                c.segment(at(0.55, k), at(0.9, k), w * 0.8, color);
+            }
+        }
+        "hdr" => {
+            let (x0, y0) = at(-0.95, -0.6);
+            c.outline(c.r(x0, y0, 1.9 * u, 1.2 * u), 0.2 * u, w, color);
+            c.text(
+                cx,
+                cy,
+                Align2::CENTER_CENTER,
+                "HDR",
+                0.62 * u,
+                color,
+                Weight::Semibold,
+            );
+        }
+        "sync" => {
+            c.polyline(&arc(cx, cy, 0.75 * u, PI * 1.1, PI * 1.9, 14), w, color);
+            c.polyline(&arc(cx, cy, 0.75 * u, PI * 0.1, PI * 0.9, 14), w, color);
+            let (ax, ay) = (
+                cx + 0.75 * u * (PI * 1.9).cos(),
+                cy + 0.75 * u * (PI * 1.9).sin(),
+            );
+            c.polyline(
+                &[
+                    (ax - 0.3 * u, ay - 0.05 * u),
+                    (ax, ay),
+                    (ax + 0.05 * u, ay - 0.32 * u),
+                ],
+                w,
+                color,
+            );
+            let (bx, by) = (
+                cx + 0.75 * u * (PI * 0.9).cos(),
+                cy + 0.75 * u * (PI * 0.9).sin(),
+            );
+            c.polyline(
+                &[
+                    (bx + 0.3 * u, by + 0.05 * u),
+                    (bx, by),
+                    (bx - 0.05 * u, by + 0.32 * u),
+                ],
+                w,
+                color,
+            );
+        }
+        "image" => {
+            let (x0, y0) = at(-0.9, -0.7);
+            c.outline(c.r(x0, y0, 1.8 * u, 1.4 * u), 0.15 * u, w, color);
+            c.circle(cx + 0.4 * u, cy - 0.3 * u, 0.15 * u, color);
+            c.polyline(
+                &[
+                    at(-0.75, 0.55),
+                    at(-0.25, -0.05),
+                    at(0.15, 0.35),
+                    at(0.4, 0.15),
+                    at(0.75, 0.55),
+                ],
+                w,
+                color,
+            );
+        }
+        "key" => {
+            c.ring(cx - 0.45 * u, cy, 0.35 * u, w, color);
+            c.segment(at(-0.1, 0.0), at(0.9, 0.0), w, color);
+            c.segment(at(0.55, 0.0), at(0.55, 0.35), w, color);
+            c.segment(at(0.8, 0.0), at(0.8, 0.3), w, color);
+        }
+        "terminal" => {
+            let (x0, y0) = at(-0.9, -0.75);
+            c.outline(c.r(x0, y0, 1.8 * u, 1.5 * u), 0.15 * u, w, color);
+            c.polyline(&[at(-0.5, -0.3), at(-0.15, 0.0), at(-0.5, 0.3)], w, color);
+            c.segment(at(0.05, 0.35), at(0.5, 0.35), w, color);
+        }
+        "pin" => {
+            let mut pts = arc(cx, cy - 0.25 * u, 0.55 * u, PI * 0.8, PI * 2.2, 20);
+            pts.push(at(0.0, 0.9));
+            c.closed(&pts, w, color);
+            c.circle(cx, cy - 0.25 * u, 0.17 * u, color);
+        }
+        "restart" => {
+            c.polyline(&arc(cx, cy, 0.75 * u, -PI * 0.3, PI * 1.35, 24), w, color);
+            let (ax, ay) = (
+                cx + 0.75 * u * (-PI * 0.3).cos(),
+                cy + 0.75 * u * (-PI * 0.3).sin(),
+            );
+            c.polygon(
+                &[
+                    (ax - 0.35 * u, ay - 0.05 * u),
+                    (ax + 0.1 * u, ay - 0.35 * u),
+                    (ax + 0.1 * u, ay + 0.15 * u),
+                ],
+                color,
+            );
+            c.segment(at(0.0, -0.35), at(0.0, 0.2), w, color);
         }
         "chevron" => c.polyline(
             &[at(-0.25, -0.55), at(0.3, 0.0), at(-0.25, 0.55)],

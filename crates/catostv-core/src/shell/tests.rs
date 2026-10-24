@@ -339,7 +339,10 @@ fn power_rows_ask_for_confirmation() {
     let mut s = Shell::new();
     open_settings(&mut s, &f, Category::System);
     // CatosTV, Linux kernel, IP address, Storage, Restart, Power off.
-    assert_eq!(press(&mut s, &f, &[Down, Down, Down, Down, Down, Ok]), vec![]);
+    assert_eq!(
+        press(&mut s, &f, &[Down, Down, Down, Down, Down, Ok]),
+        vec![]
+    );
     assert!(matches!(s.overlay(), Some(Overlay::Power { index: 2 })));
     assert_eq!(press(&mut s, &f, &[Back]), vec![]);
     assert!(s.overlay().is_none());

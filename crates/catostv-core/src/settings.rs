@@ -671,7 +671,8 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                 "When the TV is idle this long",
                 format!("{} min", ctx.prefs.saver_minutes),
                 RowKind::Choice,
-            ),
+            )
+            .disabled_if(!ctx.prefs.screensaver),
         ],
         Category::Apps => {
             let needle = apps_filter.trim().to_lowercase();
