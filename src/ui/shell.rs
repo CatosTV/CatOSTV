@@ -2099,11 +2099,11 @@ fn modal_header(c: &C, mx: f32, my: f32, icon: Option<&str>, title: &str, w: f32
 /// Vertical list of buttons; registers `Target::Item(k)`.
 /// The power menu: three tiles side by side (Left/Right, OK; Back closes).
 /// The focused tile lifts and fills with the accent, Power off with red.
-fn draw_power(c: &C, ctx: &ShellContext, index: usize) {
-    let (tw, th, gap) = (216.0, 196.0, 24.0);
+fn draw_power(c: &C, index: usize) {
+    let (tw, th, gap) = (216.0, 170.0, 24.0);
     let n = POWER_ITEMS.len() as f32;
     let w = 64.0 + n * tw + (n - 1.0) * gap;
-    let m = widgets::modal(c, w, 372.0);
+    let m = widgets::modal(c, w, 346.0);
     c.hit(m, Target::Item(usize::MAX));
     let (mx, my) = c.to_design(m.min);
     let y = modal_header(c, mx, my, Some("power"), "Power", w) + 6.0;
@@ -2142,25 +2142,15 @@ fn draw_power(c: &C, ctx: &ShellContext, index: usize) {
             theme::on_accent()
         };
         let icon_ink = widgets::mix(theme::rgb(tint), on, t);
-        icons::draw(c, item.icon(), cx, ry + 66.0, 40.0, icon_ink);
+        icons::draw(c, item.icon(), cx, ry + 64.0, 42.0, icon_ink);
         c.text(
             cx,
-            ry + 124.0,
+            ry + 120.0,
             Align2::CENTER_CENTER,
             item.label(),
             20.0,
             widgets::mix(theme::text(), on, t),
             Weight::Semibold,
-        );
-        let detail = item.detail(ctx.prefs.screensaver);
-        c.text(
-            cx,
-            ry + 154.0,
-            Align2::CENTER_CENTER,
-            &c.fit(detail, rw - 24.0, 13.5, Weight::Regular),
-            13.5,
-            widgets::mix(theme::text2(), on, t * 0.85),
-            Weight::Regular,
         );
         c.hit(rect, Target::Item(k));
     }
@@ -2477,7 +2467,7 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                 .collect();
             button_column(c, "appopt", mx + 32.0, my + 120.0, 376.0, &labels, *index);
         }
-        Overlay::Power { index } => draw_power(c, ctx, *index),
+        Overlay::Power { index } => draw_power(c, *index),
         Overlay::QuickNetwork { index } => {
             let y = qs_panel(c, "globe", "Network");
             let sys = ctx.sys;

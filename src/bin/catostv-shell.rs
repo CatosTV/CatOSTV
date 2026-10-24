@@ -3205,6 +3205,22 @@ impl ShellApp {
     }
 
     fn handle_message(&mut self, ctx: &egui::Context, msg: Msg) {
+        // The phone remote and catostv-ctl come in here, not as input, so
+        // neither the shell's own check nor swayidle sees them: they wake
+        // a dark screen and end the screensaver here. A move or OK that
+        // only did that does nothing else, like a key on the screensaver.
+        if let Msg::Ipc(cmd, _) = &msg
+            && !matches!(cmd, ShellCommand::PadCaptured)
+            && (self.saver.is_some() || self.blank_since.is_some() || self.power.is_off())
+        {
+            self.saver = None;
+            self.wake_display();
+            self.last_input = Instant::now();
+            ctx.request_repaint();
+            if cmd.nav_action().is_some() {
+                return;
+            }
+        }
         match msg {
             // Controller navigation is queued for the next frame (it needs
             // the shell context). A press older than a moment was made

@@ -357,17 +357,6 @@ impl PowerItem {
             Self::PowerOff => "power",
         }
     }
-
-    /// One line under the label: what it does. Sleep shows the screensaver
-    /// when that is on, else it puts the PC to sleep.
-    pub fn detail(self, screensaver: bool) -> &'static str {
-        match self {
-            Self::Sleep if screensaver => "Screensaver until a button",
-            Self::Sleep => "Any button wakes it",
-            Self::Restart => "Starts everything again",
-            Self::PowerOff => "Turns the PC off",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
