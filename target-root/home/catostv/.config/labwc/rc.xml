@@ -142,11 +142,9 @@
       </action>
     </keybind>
 
-    <!-- Full screen on/off for the app in front (keyboard; the remote
-         uses the Control Center's app row). -->
-    <keybind key="F11">
-      <action name="ToggleFullscreen" />
-    </keybind>
+    <!-- No plain F11 for full screen: the shell's own W-A-F11 is F11 too,
+         and if its modifiers ever got lost on the way it took a film out of
+         full screen. Full screen is in the Control Center's app row. -->
 
     <!-- Development fallback keys (keyboard only). -->
     <keybind key="W-1"><action name="ForEach">

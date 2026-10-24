@@ -258,13 +258,25 @@ mod repo_consistency {
     }
 
     #[test]
+    fn no_plain_f11_binding() {
+        // The shell's chords end in F11/F12/F9/F10; plain F11 toggled full
+        // screen when a chord's modifiers got lost.
+        for f in [
+            "target-root/home/catostv/.config/labwc/rc.xml",
+            "iso-overlay/root/.config/labwc/rc.xml",
+        ] {
+            assert!(!repo_file(f).contains("<keybind key=\"F11\">"), "{f}");
+        }
+    }
+
+    #[test]
     fn window_rules_never_toggle_fullscreen() {
         for f in [
             "target-root/home/catostv/.config/labwc/rc.xml",
             "iso-overlay/root/.config/labwc/rc.xml",
         ] {
-            // Window rules only (the green window button and F11
-            // toggle full screen on purpose; a rule must never).
+            // Window rules only (the green window button toggles full
+            // screen on purpose; a rule must never).
             let text = repo_file(f);
             let rules = text
                 .split("<windowRules>")

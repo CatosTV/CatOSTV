@@ -38,6 +38,10 @@ fn press(r: &mut dyn Runner, key: &str, appliance: bool) -> Result<()> {
             "Switching to the app needs the CatosTV appliance session",
         ));
     }
+    // One chord at a time: two overlapping ones (an app's window going while
+    // the next one opens) can let a key through without its modifiers.
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     r.run_ok(&chord(key))?;
     Ok(())
 }
