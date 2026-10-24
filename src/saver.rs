@@ -215,7 +215,12 @@ pub fn fetch(home: &Path, kind: Pictures) -> Vec<PathBuf> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
             (0..4)
-                .map(|i| (ss::photo_url(stamp * 10 + i), format!("photo-{stamp}-{i}.jpg")))
+                .map(|i| {
+                    (
+                        ss::photo_url(stamp * 10 + i),
+                        format!("photo-{stamp}-{i}.jpg"),
+                    )
+                })
                 .collect()
         }
     };

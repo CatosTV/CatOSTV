@@ -4211,17 +4211,8 @@ impl eframe::App for ShellApp {
         if self.blank_due() {
             self.start_blank();
         }
-        // The slideshow has run its time: black, and then the display off.
-        if self.blank_since.is_none()
-            && self.saver.as_ref().is_some_and(|s| {
-                s.started.elapsed()
-                    >= Duration::from_secs(
-                        catostv_core::screensaver::SCREEN_OFF_AFTER_SAVER_MINUTES * 60,
-                    )
-            })
-        {
-            self.blank_since = Some(Instant::now());
-        }
+        // The slideshow runs for as long as the TV is idle, like other TVs'
+        // screensavers; only with the screensaver off does the screen go dark.
         // Black first; two seconds later the display itself goes off.
         if let Some(t) = self.blank_since
             && !self.power.is_off()

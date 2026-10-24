@@ -250,7 +250,10 @@ mod repo_consistency {
         // The shell only switches the screen off when both tools exist, and
         // swayidle is what turns it back on at the first input.
         for t in crate::display::POWER_TOOLS {
-            assert!(crate::install::BASE_PACKAGES.contains(&t), "{t} is not installed");
+            assert!(
+                crate::install::BASE_PACKAGES.contains(&t),
+                "{t} is not installed"
+            );
         }
         let autostart = repo_file("target-root/home/catostv/.config/labwc/autostart");
         let line = autostart

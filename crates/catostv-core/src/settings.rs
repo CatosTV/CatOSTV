@@ -595,7 +595,7 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
             row(
                 RowId::Screensaver,
                 "Screensaver",
-                "Pictures, the time and the weather when the TV is idle; off: a dark screen",
+                "Pictures, the time and the weather when the TV is idle. Off, the screen goes dark",
                 on_off(Some(ctx.prefs.screensaver)),
                 RowKind::Toggle(Some(ctx.prefs.screensaver)),
             ),
@@ -610,7 +610,7 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
             row(
                 RowId::SaverMinutes,
                 "Start after",
-                "The screensaver, or the dark screen when it is off",
+                "When the TV is idle this long",
                 format!("{} min", ctx.prefs.saver_minutes),
                 RowKind::Choice,
             ),
