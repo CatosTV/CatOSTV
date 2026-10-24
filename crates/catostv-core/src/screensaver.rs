@@ -22,6 +22,9 @@ pub const KEEP: usize = 40;
 /// The idle times Settings offers, in minutes.
 pub const MINUTES: [u32; 5] = [1, 3, 5, 10, 15];
 pub const DEFAULT_MINUTES: u32 = 3;
+/// How long the slideshow runs before the screen goes black and the display
+/// itself switches off (an idle TV must not light a panel all night).
+pub const SCREEN_OFF_AFTER_SAVER_MINUTES: u64 = 30;
 /// Seconds each picture shows, and the cross-fade between two.
 pub const PICTURE_SECS: f32 = 12.0;
 pub const FADE_SECS: f32 = 1.6;
@@ -293,6 +296,12 @@ mod tests {
         ] {
             assert!(parse_cats(&item(bad)).is_empty(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_screen_goes_off_well_after_the_slideshow_starts() {
+        // Long enough to watch the pictures, short enough to save power.
+        assert!((10..=120).contains(&SCREEN_OFF_AFTER_SAVER_MINUTES));
     }
 
     #[test]

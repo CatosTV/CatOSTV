@@ -4387,6 +4387,7 @@ impl eframe::App for ShellApp {
                         date: &saver_clock.date,
                         night: !(6..19).contains(&saver_clock.hour),
                         now: keys::now(&ctx),
+                        blank: false,
                     }),
             },
         );
