@@ -15,6 +15,9 @@ pub struct SaverView<'a> {
     pub date: &'a str,
     pub night: bool,
     pub now: f64,
+    /// A completely black screen: no pictures, no clock (the display
+    /// switches off a moment later).
+    pub blank: bool,
 }
 
 pub fn draw<H: Copy>(c: &Canvas<H>, v: &SaverView) {
@@ -24,6 +27,9 @@ pub fn draw<H: Copy>(c: &Canvas<H>, v: &SaverView) {
         0.0,
         theme::rgba(theme::BLACK, (255.0 * fade_in) as u8),
     );
+    if v.blank {
+        return;
+    }
     if v.show.cur.is_none() {
         c.background_at(None, true, v.now);
     }

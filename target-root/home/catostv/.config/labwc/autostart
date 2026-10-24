@@ -51,6 +51,12 @@ fi
 if command -v mako >/dev/null 2>&1; then
   supervise mako 5 mako
 fi
+# Screen off on an idle TV: the shell switches the display off with wlopm;
+# this wakes it at the first key, remote button or click, even if the shell
+# is stuck (display::PowerSwitch only switches off when both tools exist).
+if command -v swayidle >/dev/null 2>&1 && command -v wlopm >/dev/null 2>&1; then
+  supervise swayidle 5 swayidle -w timeout 2 true resume "wlopm --on '*'"
+fi
 # KDE Connect daemon (pairing is accepted in Settings → Cast & remote).
 if command -v kdeconnectd >/dev/null 2>&1; then
   supervise kdeconnectd 5 kdeconnectd

@@ -22,6 +22,9 @@ pub const KEEP: usize = 40;
 /// The idle times Settings offers, in minutes.
 pub const MINUTES: [u32; 5] = [1, 3, 5, 10, 15];
 pub const DEFAULT_MINUTES: u32 = 3;
+/// How long the slideshow runs before the screen goes black and the display
+/// itself switches off (an idle TV must not light a panel all night).
+pub const SCREEN_OFF_AFTER_SAVER_MINUTES: u64 = 30;
 /// Seconds each picture shows, and the cross-fade between two.
 pub const PICTURE_SECS: f32 = 12.0;
 pub const FADE_SECS: f32 = 1.6;
@@ -30,6 +33,34 @@ pub const CAT_LIST_URL: &str =
     "https://api.thecatapi.com/v1/images/search?limit=10&size=full&mime_types=jpg";
 pub const PHOTO_URL: &str = "https://picsum.photos/3840/2160.jpg";
 pub const WEATHER_URL: &str = "https://wttr.in/?format=j1";
+
+/// A different picture every time: Lorem Picsum caches by URL, so four
+/// identical requests could return the same photo four times.
+pub fn photo_url(seed: u64) -> String {
+    format!("{PHOTO_URL}?random={seed}")
+}
+
+/// Cat pictures come only from TheCatAPI's own servers.
+const CAT_HOST_SUFFIX: &str = ".thecatapi.com";
+
+/// The host of an `https://` URL, when it is a plain name (no user name,
+/// port or odd characters).
+fn https_host(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("https://")?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    let plain = !host.is_empty()
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    plain.then_some(host)
+}
+
+/// A TheCatAPI picture address: https, one of its own servers, a `.jpg`.
+fn is_cat_url(url: &str) -> bool {
+    url.ends_with(".jpg")
+        && https_host(url)
+            .is_some_and(|h| h.len() > CAT_HOST_SUFFIX.len() && h.ends_with(CAT_HOST_SUFFIX))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pictures {
@@ -113,17 +144,21 @@ pub fn parse_cats(text: &str) -> Vec<String> {
             w >= MIN_WIDTH && w >= h
         })
         .filter_map(|i| i.get("url")?.as_str())
-        .filter(|u| u.starts_with("https://") && u.ends_with(".jpg"))
+        .filter(|u| is_cat_url(u))
         .map(str::to_string)
         .collect()
 }
 
-/// `curl` fetching `url` (following redirects) into `out`.
+/// `curl` fetching `url` (following redirects, but only to https) into `out`.
 pub fn download_cmd(url: &str, out: &Path) -> Cmd {
     Cmd::new("curl")
         .args([
             "-sS".to_string(),
             "--fail".to_string(),
+            "--proto".to_string(),
+            "=https".to_string(),
+            "--proto-redir".to_string(),
+            "=https".to_string(),
             "-L".to_string(),
             "-m".to_string(),
             "40".to_string(),
@@ -143,6 +178,8 @@ pub fn get_cmd(url: &str) -> Cmd {
         .args([
             "-sS",
             "--fail",
+            "--proto",
+            "=https",
             "-m",
             "15",
             "--max-filesize",
@@ -236,6 +273,56 @@ mod tests {
             ]
         );
         assert!(parse_cats("oops").is_empty());
+    }
+
+    #[test]
+    fn cat_pictures_only_from_the_cat_servers() {
+        let item = |u: &str| format!(r#"[{{"url":"{u}","width":4000,"height":3000}}]"#);
+        for good in [
+            "https://cdn2.thecatapi.com/images/a.jpg",
+            "https://cdn.thecatapi.com/images/a.jpg",
+        ] {
+            assert_eq!(parse_cats(&item(good)), [good]);
+        }
+        for bad in [
+            "https://evilthecatapi.com/a.jpg",
+            "https://thecatapi.com.evil.example/a.jpg",
+            "https://cdn2.thecatapi.com@evil.example/a.jpg",
+            "https://cdn2.thecatapi.com:8443/a.jpg",
+            "https://192.168.1.1/a.jpg",
+            "https://thecatapi.com/a.jpg",
+            "https://cdn2.thecatapi.com/a.png",
+            "http://cdn2.thecatapi.com/a.jpg",
+        ] {
+            assert!(parse_cats(&item(bad)).is_empty(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_screen_goes_off_well_after_the_slideshow_starts() {
+        // Long enough to watch the pictures, short enough to save power.
+        assert!((10..=120).contains(&SCREEN_OFF_AFTER_SAVER_MINUTES));
+    }
+
+    #[test]
+    fn every_photo_is_its_own_request() {
+        assert_ne!(photo_url(1), photo_url(2));
+        assert!(photo_url(7).starts_with("https://picsum.photos/3840/2160.jpg?"));
+    }
+
+    #[test]
+    fn downloads_never_leave_https() {
+        let args = download_cmd("https://x/a.jpg", Path::new("/tmp/a")).args;
+        let at = args.iter().position(|a| a == "--proto").unwrap();
+        assert_eq!(args[at + 1], "=https");
+        let at = args.iter().position(|a| a == "--proto-redir").unwrap();
+        assert_eq!(args[at + 1], "=https");
+        assert!(
+            get_cmd(WEATHER_URL)
+                .args
+                .windows(2)
+                .any(|w| w == ["--proto", "=https"])
+        );
     }
 
     #[test]
