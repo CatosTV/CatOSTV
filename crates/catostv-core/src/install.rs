@@ -340,6 +340,10 @@ pub enum Op {
 /// new system's chroot on a slow disk, can take minutes.
 const STEP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
+/// How often a [`Op::Stream`] command (pacstrap) runs before its failure
+/// counts.
+const STREAM_TRIES: u32 = 3;
+
 /// `cmd` with [`STEP_TIMEOUT`] unless it chose a time itself.
 fn step_cmd(cmd: Cmd) -> Cmd {
     if cmd.timeout == crate::process::QUICK {
@@ -997,17 +1001,36 @@ fn run_op(op: &Op, host: &mut dyn Host, on_event: &mut dyn FnMut(InstallEvent)) 
     match op {
         Op::Stream(cmd) => {
             let mut last_fraction = None;
-            let out = host.run_lines(cmd, &mut |line| {
-                if let Some((text, fraction)) = pacman_progress(line) {
-                    if fraction.is_some() {
-                        last_fraction = fraction;
+            let mut attempt = 1;
+            let out = loop {
+                let out = host.run_lines(cmd, &mut |line| {
+                    if let Some((text, fraction)) = pacman_progress(line) {
+                        if fraction.is_some() {
+                            last_fraction = fraction;
+                        }
+                        on_event(InstallEvent::Detail {
+                            text,
+                            fraction: fraction.or(last_fraction),
+                        });
                     }
-                    on_event(InstallEvent::Detail {
-                        text,
-                        fraction: fraction.or(last_fraction),
-                    });
+                })?;
+                // A download that drops halfway (weak Wi-Fi, a slow mirror)
+                // fails the whole run; pacman keeps what it already has, so
+                // running it again picks up where it stopped.
+                if out.success() || out.timed_out || attempt == STREAM_TRIES {
+                    break out;
                 }
-            })?;
+                host.log(&format!(
+                    "   -> {} (try {attempt} of {STREAM_TRIES}), trying again",
+                    out.failure_reason()
+                ));
+                on_event(InstallEvent::Detail {
+                    text: "The download stopped, trying again".into(),
+                    fraction: last_fraction,
+                });
+                host.sleep(Duration::from_secs(5));
+                attempt += 1;
+            };
             if !out.success() {
                 host.log(&format!(
                     "   -> {}\n   stderr: {}",
@@ -1666,6 +1689,22 @@ mod tests {
         ));
         assert_eq!(host.ran.last().unwrap(), "umount -R /mnt/catostv");
         assert!(host.log.iter().any(|l| l.starts_with("FAILED")));
+    }
+
+    #[test]
+    fn a_dropped_download_is_tried_again() {
+        let p = plan(&cfg("/dev/vda")).unwrap();
+        let mut host = MemHost {
+            fail_program: Some("pacstrap".into()),
+            ..MemHost::default()
+        };
+        let _ = execute(&p, &mut host, &mut |_| {});
+        let runs = host
+            .ran
+            .iter()
+            .filter(|c| c.starts_with("pacstrap"))
+            .count();
+        assert_eq!(runs, STREAM_TRIES as usize);
     }
 
     #[test]
