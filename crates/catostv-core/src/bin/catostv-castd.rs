@@ -125,7 +125,7 @@ fn main() {
         ))
     });
     let dial_ctx = if args.dial {
-        // CatTube (YouTube based on SmartTube) when installed, else the
+        // CatTube (the native YouTube app) when installed, else the
         // YouTube TV page in Firefox.
         let app: std::result::Result<Box<dyn dial::AppControl>, _> =
             if dial::CatTubeYouTube::available() {

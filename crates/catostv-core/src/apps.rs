@@ -278,7 +278,7 @@ pub fn default_specs() -> Vec<AppSpec> {
         // Catfyn: CatosTV's own Jellyfin client,
         // built into the shell; replaces the Jellyfin Media Player wrapper.
         spec("Catfyn", "Jellyfin", "catfyn", "violet", FIN_COMMAND),
-        // CatTube: YouTube, the native client based on SmartTube; shown
+        // CatTube: CatosTV's native YouTube app; shown
         // once `cattube` is installed.
         spec("CatTube", "YouTube", "play", "red", "cattube"),
         spec("Steam", "Games", "game", "blue", "steam -gamepadui"),

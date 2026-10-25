@@ -1,4 +1,4 @@
-//! CatTube (the YouTube app based on SmartTube) on CatosTV's Home: a row
+//! CatTube (the native YouTube app) on CatosTV's Home: a row
 //! of the newest videos from the signed-in account's subscriptions, led by
 //! a "Recommended for you" button that opens CatTube on YouTube's own
 //! recommendations.

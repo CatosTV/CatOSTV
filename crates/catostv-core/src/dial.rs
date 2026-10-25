@@ -440,7 +440,7 @@ pub fn pairing_code(url: &str) -> Option<String> {
         .filter(|v| is_safe_value(v))
 }
 
-/// YouTube through CatTube (the native client based on SmartTube), when
+/// YouTube through CatTube (the native YouTube app), when
 /// it is installed: a cast pairs the phone with CatTube's remote service
 /// (`cattube --pair CODE`); the phone then says what to play over
 /// YouTube's own connection, and CatTube plays it.
