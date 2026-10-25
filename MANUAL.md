@@ -25,9 +25,9 @@ first entry after ten seconds.
 | Entry | When to use it |
 |---|---|
 | **Install CatosTV** | Almost always. The installer picks the graphics drivers. |
-| **…with NVIDIA graphics** | NVIDIA's own driver, for GeForce GTX 16 / RTX 20 or newer. |
-| **…with open graphics drivers** | The open-source driver, even on an NVIDIA card. |
-| **…with safe graphics** | The screen stays black or garbled with the others. Fine for installing, too slow for films. |
+| **Install with NVIDIA's driver** | For GeForce GTX 16 / RTX 20 or newer. |
+| **Install with the open-source NVIDIA driver** | Older NVIDIA cards, or when NVIDIA's driver gives no picture. |
+| **Install with basic graphics** | The screen stays black or garbled with the others. Fine for installing, too slow for films. |
 
 The installer needs **internet**, because it downloads the newest
 version, and it takes 10 to 30 minutes. **The disk you pick is erased.**
@@ -146,8 +146,8 @@ first: otherwise anyone on your network can log in as administrator.
 
 | Problem | Try |
 |---|---|
-| Black screen after choosing *Install* | Wait for the CatosTV start-up screen; if it never comes, use *…with safe graphics*. |
-| No picture after installing on an NVIDIA card | Reinstall with *…with open graphics drivers*. |
+| Black screen after choosing *Install* | Wait for the CatosTV start-up screen; if it never comes, use *Install with basic graphics*. |
+| No picture after installing on an NVIDIA card | Reinstall with *Install with the open-source NVIDIA driver*. |
 | The edges of the picture are cut off | Settings → Display → *Picture fit*. |
 | No sound over HDMI | Settings → Sound → choose the HDMI output, or turn on *Use TV speakers (HDMI)*. |
 | An app froze | Press Home, then close it in Recents. |

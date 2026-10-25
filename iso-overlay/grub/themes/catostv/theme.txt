@@ -33,5 +33,5 @@ terminal-font: "CatosTV Regular 22"
     align = "center"
     font = "CatosTV Regular 22"
     color = "#7b8094"
-    text = "Starting in %d s · use ↑ ↓ and Enter"
+    text = "Install CatosTV starts in %d s · ↑ ↓ to choose, Enter to start"
 }

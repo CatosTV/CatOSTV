@@ -9,7 +9,7 @@ export MOZ_ENABLE_WAYLAND=1
 export XCURSOR_THEME=Adwaita
 export XCURSOR_SIZE=32
 
-# "Install CatosTV with safe graphics" (boot menu): no GPU
+# "Install with basic graphics" (boot menu): no GPU
 # acceleration, so draw in software.
 if grep -qw 'catostv.gpu=safe' /proc/cmdline; then
   export WLR_RENDERER=pixman

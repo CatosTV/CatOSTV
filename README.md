@@ -91,7 +91,7 @@ checks for updates before it starts and installs the newest version.
 1. Plug in the USB stick and boot from it (F12, F11 or Esc at power-on
    usually opens the boot menu).
 2. Choose **Install CatosTV**. If the screen stays dark on an unusual
-   graphics card, try **Install CatosTV with safe graphics**.
+   graphics card, try **Install with basic graphics**.
 3. Follow the installer: keyboard, network, the disk to use, time zone. It
    shows you the disk and asks before erasing anything.
 4. When it says **You're all set**, remove the stick and restart.

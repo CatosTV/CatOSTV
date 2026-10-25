@@ -83,7 +83,7 @@ pleasant on a TV. Phone-only apps open but may expect a touch screen.
 ## Good to know
 
 - **Graphics**: on Intel and AMD graphics Android draws with the GPU. With
-  NVIDIA's driver, the open NVIDIA driver, or *safe graphics*, Android draws
+  NVIDIA's driver, the open NVIDIA driver, or *basic graphics*, Android draws
   in software: fine for most apps, slow for 3D games and very high
   resolutions. CatosTV's own video player (Catfyn) isn't affected.
 - **Streaming services**: Android on CatosTV has software copy
