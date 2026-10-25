@@ -2107,10 +2107,10 @@ fn modal_header(c: &C, mx: f32, my: f32, icon: Option<&str>, title: &str, w: f32
 /// The power menu: three tiles side by side (Left/Right, OK; Back closes).
 /// The focused tile lifts and fills with the accent, Power off with red.
 fn draw_power(c: &C, index: usize) {
-    let (tw, th, gap) = (216.0, 170.0, 24.0);
+    let (tw, th, gap) = (150.0, 118.0, 16.0);
     let n = POWER_ITEMS.len() as f32;
     let w = 64.0 + n * tw + (n - 1.0) * gap;
-    let m = widgets::modal(c, w, 346.0);
+    let m = widgets::modal(c, w, 280.0);
     c.hit(m, Target::Item(usize::MAX));
     let (mx, my) = c.to_design(m.min);
     let y = modal_header(c, mx, my, Some("power"), "Power", w) + 6.0;
@@ -2123,23 +2123,23 @@ fn draw_power(c: &C, index: usize) {
         } else {
             theme::accent_rgb()
         };
-        widgets::focus_lift(c, rect, 26.0, t);
+        widgets::focus_lift(c, rect, 20.0, t);
         if t > 0.01 {
-            c.soft_shadow(rect, 26.0, 20.0, 2.0, theme::rgba(tint, (110.0 * t) as u8));
+            c.soft_shadow(rect, 20.0, 20.0, 2.0, theme::rgba(tint, (110.0 * t) as u8));
         }
         c.fill(
             rect,
-            26.0,
+            20.0,
             theme::rgba(theme::WHITE, (14.0 * (1.0 - t)) as u8),
         );
-        c.fill(rect, 26.0, theme::rgba(tint, (255.0 * t) as u8));
+        c.fill(rect, 20.0, theme::rgba(tint, (255.0 * t) as u8));
         c.outline(
             rect,
-            26.0,
+            20.0,
             1.0,
             theme::rgba(theme::WHITE, (18.0 * (1.0 - t)) as u8),
         );
-        widgets::focus_pill(c, rect, 26.0, t * 0.6);
+        widgets::focus_pill(c, rect, 20.0, t * 0.6);
         let (rx, ry) = c.to_design(rect.min);
         let (rw, _) = c.dsize(rect);
         let cx = rx + rw / 2.0;
@@ -2149,13 +2149,13 @@ fn draw_power(c: &C, index: usize) {
             theme::on_accent()
         };
         let icon_ink = widgets::mix(theme::rgb(tint), on, t);
-        icons::draw(c, item.icon(), cx, ry + 64.0, 42.0, icon_ink);
+        icons::draw(c, item.icon(), cx, ry + 44.0, 30.0, icon_ink);
         c.text(
             cx,
-            ry + 120.0,
+            ry + 86.0,
             Align2::CENTER_CENTER,
             item.label(),
-            20.0,
+            16.0,
             widgets::mix(theme::text(), on, t),
             Weight::Semibold,
         );
@@ -2163,7 +2163,7 @@ fn draw_power(c: &C, index: usize) {
     }
     c.text(
         mx + w / 2.0,
-        y + th + 34.0,
+        y + th + 28.0,
         Align2::CENTER_CENTER,
         "Back to cancel",
         13.0,
