@@ -334,16 +334,31 @@ pub enum Op {
     Stream(Cmd),
 }
 
+/// The time an install command gets when it sets none of its own. The
+/// default for commands ([`crate::process::QUICK`], 4 s) is for status
+/// queries: copying CatosTV's files from a slow USB stick, or work in the
+/// new system's chroot on a slow disk, can take minutes.
+const STEP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
+/// `cmd` with [`STEP_TIMEOUT`] unless it chose a time itself.
+fn step_cmd(cmd: Cmd) -> Cmd {
+    if cmd.timeout == crate::process::QUICK {
+        cmd.timeout(STEP_TIMEOUT)
+    } else {
+        cmd
+    }
+}
+
 impl Op {
     fn run(cmd: Cmd) -> Self {
         Self::Run {
-            cmd,
+            cmd: step_cmd(cmd),
             allow_fail: false,
         }
     }
     fn try_run(cmd: Cmd) -> Self {
         Self::Run {
-            cmd,
+            cmd: step_cmd(cmd),
             allow_fail: true,
         }
     }
@@ -1882,5 +1897,19 @@ mod tests {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target-root");
         let limits = format!("{root}/etc/security/limits.d/20-audio.conf");
         assert!(!std::path::Path::new(&limits).exists());
+    }
+
+    #[test]
+    fn install_commands_get_time_for_slow_disks() {
+        // Copying CatosTV's files ran into the 4 s query default on a slow
+        // machine. Every install command has minutes unless it set a time.
+        let p = plan(&cfg("/dev/vda")).unwrap();
+        for step in &p.steps {
+            for op in &step.ops {
+                if let Op::Run { cmd, .. } = op {
+                    assert!(cmd.timeout >= SLOW, "{}: {}", step.label, cmd.display());
+                }
+            }
+        }
     }
 }
