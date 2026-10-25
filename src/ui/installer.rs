@@ -296,6 +296,8 @@ fn draw_network(c: &C, f: &Installer, now: f64) {
     let status = match &f.wifi {
         Scan::Busy => "Searching for Wi-Fi…".to_string(),
         Scan::Failed(e) => e.clone(),
+        // Online already (a cable): nothing to ask for.
+        Scan::Done(v) if v.is_empty() && f.online => String::new(),
         Scan::Done(v) if v.is_empty() => "No Wi-Fi networks. Plug in a cable".into(),
         _ => String::new(),
     };
