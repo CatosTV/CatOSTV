@@ -742,8 +742,19 @@ pub fn plan(cfg: &InstallConfig) -> Result<Plan> {
             ops.extend(install_bins);
             ops.push(Op::run(Cmd::new("chmod").args([
                 "755".to_string(),
-                m("/usr/local/bin/catostv-session"),
                 m("/home/catostv/.config/labwc/autostart"),
+            ])));
+            // Every program the copy above put in /usr/local/bin (CatTube
+            // too: without this it was not runnable and missing from Home).
+            ops.push(Op::run(Cmd::new("find").args([
+                m("/usr/local/bin"),
+                "-type".to_string(),
+                "f".to_string(),
+                "-exec".to_string(),
+                "chmod".to_string(),
+                "755".to_string(),
+                "{}".to_string(),
+                "+".to_string(),
             ])));
             // Every helper script: a fixed list missed new ones.
             ops.push(Op::run(Cmd::new("find").args([
@@ -1911,5 +1922,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_program_in_usr_local_bin_is_made_runnable() {
+        // The overlay is copied with --no-preserve=mode: CatTube landed as
+        // 0644 and Home hid it.
+        let p = plan(&cfg("/dev/vda")).unwrap();
+        let runs: Vec<String> = p
+            .steps
+            .iter()
+            .flat_map(|s| s.ops.iter())
+            .filter_map(|o| match o {
+                Op::Run { cmd, .. } => Some(cmd.display()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            runs.iter()
+                .any(|c| c.starts_with("find /mnt/catostv/usr/local/bin -type f -exec chmod 755")),
+            "{runs:#?}"
+        );
     }
 }
