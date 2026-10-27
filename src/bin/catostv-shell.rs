@@ -72,6 +72,8 @@ enum Msg {
     /// A command from catostv-ctl / catostv-inputd, with when it arrived.
     Ipc(ShellCommand, Instant),
     System(Box<SystemSnapshot>, Vec<AppEntry>),
+    Playback(Vec<catostv_core::playback::NowPlaying>),
+    PlayerGone(catostv_core::playback::Source),
     WifiScan(Result<Vec<WifiNetwork>, String>),
     WifiConnect(String, Result<(), String>),
     Volume(Result<VolumeState, String>),
@@ -384,10 +386,15 @@ fn spawn_app_watcher(
             } else {
                 None
             };
-            let android_on_top = windows.as_ref().is_some_and(|list| {
+            let android_on_top = all.as_ref().is_some_and(|list| {
                 list.iter()
                     .any(|t| t.activated && is_android_window(&t.app_id))
             });
+            let recovery = compositor::android_recovery(
+                android_on_top,
+                lock(&watch).blank.is_none(),
+                android_front,
+            );
             if fg != front_app {
                 front_app = fg.clone();
                 last_window = None;
@@ -412,7 +419,11 @@ fn spawn_app_watcher(
                     let mine: Vec<_> = all.iter().flatten().filter(|t| t.app_id == w).collect();
                     !mine.is_empty() && mine.iter().all(|t| t.minimized)
                 });
-            if minimized {
+            if recovery == Some(compositor::AndroidRecovery::Shell) {
+                eprintln!("catostv: Android covered the interface; restoring CatosTV");
+                let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
+                let _ = catostv_core::toplevel::activate(SHELL_APP_ID);
+            } else if minimized {
                 eprintln!(
                     "catostv: {} minimized; back to Home",
                     last_window.as_deref().unwrap_or("")
@@ -421,7 +432,7 @@ fn spawn_app_watcher(
                 let _ = tx.send(Msg::LeftApp);
                 ctx.request_repaint();
                 let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
-            } else if android_on_top
+            } else if recovery == Some(compositor::AndroidRecovery::App)
                 && let Some(w) = last_window
                     .clone()
                     .or_else(|| fg_window.clone())
@@ -448,7 +459,7 @@ fn spawn_app_watcher(
                     ctx.request_repaint();
                     let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
                 }
-            } else if android_on_top && fg.is_none() {
+            } else if recovery == Some(compositor::AndroidRecovery::App) && fg.is_none() {
                 // No app open: Android's window starting in the background
                 // (it is kept running) came over Home and left its own home
                 // screen showing. CatosTV goes back on top.
@@ -784,6 +795,8 @@ struct ShellApp {
     toast: Option<(String, Instant)>,
     last_refresh: Option<Instant>,
     refreshing: bool,
+    playback_at: Option<Instant>,
+    playback_reading: bool,
     /// The app most recently launched/resumed, the one on the App desktop.
     /// Only its exit switches the TV back to the shell.
     foreground: Option<String>,
@@ -848,9 +861,8 @@ struct ShellApp {
     wifi_scanned: Option<Instant>,
     /// What closes it goes to CatosTV, not back to the app.
     leave_to_shell: bool,
-    /// Leaving the app: back to it (true) or to CatosTV, after this many
-    /// more frames.
-    leaving: Option<(bool, u8)>,
+    /// Leave after the sheet fades and two clear frames have been drawn.
+    leaving: Option<(bool, u8, Instant)>,
     /// The volume panel closes then, and since when it shows.
     volume_until: Option<Instant>,
     volume_since: Instant,
@@ -1089,6 +1101,7 @@ impl ShellApp {
         // HDR lasts until the next reboot only (runtime flag).
         prefs.hdr = prefs::hdr_flag_path().exists();
         theme::set_accent(&prefs.accent);
+        theme::set_theme(prefs.theme);
         let jobs = Jobs::new(&cc.egui_ctx);
         let appliance = env::is_appliance();
         let mut app = Self {
@@ -1128,6 +1141,8 @@ impl ShellApp {
             toast: None,
             last_refresh: None,
             refreshing: false,
+            playback_at: None,
+            playback_reading: false,
             foreground: None,
             pending_restart: HashSet::new(),
             android_started: false,
@@ -1147,6 +1162,7 @@ impl ShellApp {
                 },
                 home: Vec::new(),
                 home_note: None,
+                now_playing: Vec::new(),
             },
             fin_images: HashMap::new(),
             plex_wait: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1218,25 +1234,31 @@ impl ShellApp {
                     | ShellCommand::Mute
                     | ShellCommand::VolumeOutputs
             ) {
-                let (appliance, hidden, player) = {
+                let (appliance, hidden) = {
                     let w = lock(&watch);
                     (
                         w.appliance,
                         w.last_frame
                             .is_none_or(|t| t.elapsed() > Duration::from_millis(1500)),
-                        w.foreground.as_deref() == Some(catfyn::PLAYER_ID),
                     )
                 };
                 // A film plays: its control bar draws the volume panel, so
                 // the window never comes over the film (two 4K layers to
                 // blend made the picture stutter, and it flashed).
-                if appliance && hidden && player && catfyn::player_volume(cmd) {
+                if appliance
+                    && cmd != ShellCommand::Quick
+                    && let Some(source) = catostv_core::toplevel::list()
+                        .ok()
+                        .and_then(|list| list.into_iter().find(|t| t.activated))
+                        .and_then(|t| catostv_core::playback::Source::from_window(&t.app_id))
+                    && catfyn::player_volume(cmd, source)
+                {
                     return;
                 }
                 if appliance && hidden {
-                    let _ = compositor::shell_over_app(&mut SystemRunner, true);
                     let _ = tx.send(Msg::OverApp(cmd));
                     ctx.request_repaint();
+                    let _ = compositor::shell_over_app(&mut SystemRunner, true);
                     return;
                 }
             }
@@ -1378,6 +1400,10 @@ impl ShellApp {
         use catostv_core::screensaver::{self as ss, Pictures};
         if self.blank_since.is_some() {
             // Black screen: nothing behind it needs frames.
+            return;
+        }
+        if self.prefs.theme == prefs::Theme::Flat {
+            self.home_bg = None;
             return;
         }
         let want = self.prefs.home_background.clone();
@@ -1589,6 +1615,20 @@ impl ShellApp {
             return;
         }
         let window = self.window_pattern(app_id);
+        // Its player window, brought forward first while a video plays
+        // (CatTube's cattube-player): bringing the app's list over it hid
+        // the video, which went on playing behind. Named after the
+        // program (`cattube` -> `cattube-player`) or its window.
+        let players: Vec<String> = self
+            .apps
+            .iter()
+            .find(|a| a.id == app_id)
+            .and_then(|a| a.command.split_whitespace().next())
+            .and_then(|c| c.rsplit('/').next())
+            .map(|c| format!("{c}-player"))
+            .into_iter()
+            .chain(window.as_ref().map(|w| format!("{w}-player")))
+            .collect();
         let name = self
             .apps
             .iter()
@@ -1623,15 +1663,13 @@ impl ShellApp {
             // until Android has switched (Play Store flashed for a
             // second when SmartTube was opened from Recents, and the other
             // way round). Stay on CatosTV until Android reports the app in
-            // front, up to ANDROID_TOP_WAIT; then switch anyway.
-            // Reported in front is not drawn yet: Android's window still
-            // shows its home screen for a moment (CatosTV sends Android home
-            // when you leave an app), so the app gets a moment to draw its
-            // first picture before CatosTV steps aside.
+            // front. The launch helper waits for its first draw; also keep
+            // checking focus through the handover interval, since Android
+            // may still be finishing a preceding Home request.
             if let Some(pkg) = package.as_deref().filter(|_| android)
-                && wait_for_android_top(pkg, ANDROID_TOP_WAIT)
+                && !wait_for_android_top(pkg, ANDROID_TOP_WAIT)
             {
-                std::thread::sleep(ANDROID_FIRST_FRAME);
+                return Msg::AndroidDidNotStart(pkg.to_string());
             }
             // A blank frame first: what the window shows when it goes
             // behind the app is what flashes up when it next comes over it.
@@ -1646,7 +1684,12 @@ impl ShellApp {
                     // minimized or closed.
                     let _ = catostv_core::toplevel::raise_if_needed(&w);
                 } else {
-                    let _ = catostv_core::toplevel::activate(&w);
+                    let player = players
+                        .iter()
+                        .any(|p| catostv_core::toplevel::activate(p).unwrap_or(false));
+                    if !player {
+                        let _ = catostv_core::toplevel::activate(&w);
+                    }
                 }
             }
             match switched {
@@ -1685,8 +1728,11 @@ impl ShellApp {
         if id == android::SESSION_APP_ID {
             return Some("waydroid*".into());
         }
-        if id == catfyn::PLAYER_ID {
-            return Some(catfyn::PLAYER_ID.into());
+        if matches!(
+            id,
+            "catfyn-player" | "cattube-player" | "tv.catostv.cast" | "catostv-files-player"
+        ) {
+            return Some(id.into());
         }
         let app = self.apps.iter().find(|a| a.id == id)?;
         match &app.source {
@@ -1999,6 +2045,45 @@ impl ShellApp {
                     }
                 }
             }
+            Effect::ResumeNowPlaying(source) => {
+                let Some(item) = self
+                    .media
+                    .now_playing
+                    .iter()
+                    .find(|p| p.source == source)
+                    .cloned()
+                else {
+                    return;
+                };
+                let window = item.source.window().to_string();
+                self.foreground = Some(window.clone());
+                let watch = self.watch.clone();
+                let (_, ui) = self.jobs.sender();
+                self.jobs.spawn(move || {
+                    let exists = catostv_core::toplevel::list()
+                        .is_ok_and(|all| all.iter().any(|t| t.app_id == window));
+                    if !exists {
+                        return Msg::PlayerGone(source);
+                    }
+                    if item.paused {
+                        let _ = catostv_core::mpv::ipc_request(
+                            &env::runtime_dir().join(item.source.socket()),
+                            &[
+                                catostv_core::mpv::Arg::Str("set_property"),
+                                catostv_core::mpv::Arg::Str("pause"),
+                                catostv_core::mpv::Arg::Bool(false),
+                            ],
+                        );
+                    }
+                    wait_for_blank(&watch, &ui);
+                    if let Err(e) = compositor::show_app_workspace(&mut SystemRunner, true) {
+                        lock(&watch).blank = None;
+                        return Msg::Toast(e.to_string());
+                    }
+                    let _ = catostv_core::toplevel::activate(&window);
+                    Msg::AppShown
+                });
+            }
             Effect::Resume(i) => {
                 let Some(app) = self.apps.get(i).cloned() else {
                     return;
@@ -2274,9 +2359,12 @@ impl ShellApp {
             }
             Effect::VpnRemove(uuid) => self.job(move |r| catostv_core::vpn::remove(r, &uuid)),
             Effect::VpnFindFiles => {
-                let dirs = catostv_core::vpn::file_dirs(&self.home);
-                self.jobs
-                    .spawn(move || Msg::VpnFiles(catostv_core::vpn::find_files(&dirs)));
+                let home = self.home.clone();
+                self.jobs.spawn(move || {
+                    let _ = std::fs::create_dir_all(home.join("Downloads"));
+                    let dirs = catostv_core::vpn::file_dirs(&home);
+                    Msg::VpnFiles(catostv_core::vpn::find_files(&dirs))
+                });
             }
             Effect::VpnImport(path) => self.jobs.spawn(move || {
                 let scratch = catostv_core::env::runtime_dir();
@@ -2348,6 +2436,19 @@ impl ShellApp {
             }
             Effect::SetClock24(on) => {
                 self.prefs.clock_24h = on;
+                self.save_prefs(ctx);
+            }
+            Effect::SetCastEnabled(on) => {
+                let old = self.prefs.cast_enabled;
+                self.prefs.cast_enabled = on;
+                if let Err(e) = prefs::save(&self.prefs) {
+                    self.prefs.cast_enabled = old;
+                    self.show_toast(ctx, &format!("Could not save: {e}"));
+                }
+            }
+            Effect::SetTheme(choice) => {
+                theme::set_theme(choice);
+                self.prefs.theme = choice;
                 self.save_prefs(ctx);
             }
             Effect::SetScreensaver(on) => {
@@ -2725,6 +2826,12 @@ impl ShellApp {
                     "--script-opts=catfyn_osd-accent={r:02x}{g:02x}{b:02x}"
                 ));
                 argv.push(format!("--force-media-title={}", entry.name));
+                argv.push(format!(
+                    "--input-ipc-server={}",
+                    env::runtime_dir()
+                        .join(catostv_core::playback::Source::Player.socket())
+                        .display()
+                ));
                 argv.push("--".into());
                 argv.push(entry.path.clone());
                 let app = AppEntry {
@@ -3276,6 +3383,16 @@ impl ShellApp {
                 }
             }
             Msg::System(s, discovered) => self.on_snapshot(ctx, *s, discovered),
+            Msg::Playback(state) => {
+                self.playback_reading = false;
+                if state.is_empty() {
+                    self.shell.home_now_playing = false;
+                }
+                self.media.now_playing = state;
+            }
+            Msg::PlayerGone(source) => {
+                self.media.now_playing.retain(|p| p.source != source);
+            }
             Msg::WifiScan(r) => self.shell.on_wifi_scan(r),
             Msg::WifiConnect(ssid, r) => {
                 for e in self.shell.on_wifi_connect(&ssid, r) {
@@ -4094,6 +4211,19 @@ impl eframe::App for ShellApp {
         for msg in self.jobs.drain() {
             self.handle_message(ctx, msg);
         }
+        if self.shell.page == Page::Home {
+            if !self.playback_reading
+                && self
+                    .playback_at
+                    .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
+            {
+                self.playback_reading = true;
+                self.playback_at = Some(Instant::now());
+                self.jobs
+                    .spawn(|| Msg::Playback(catostv_core::playback::read(&env::runtime_dir())));
+            }
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
         let every = if self.busy() {
             FAST_REFRESH_SECS
         } else {
@@ -4349,6 +4479,9 @@ impl eframe::App for ShellApp {
         }
         // Over an app and nothing left to show: back to the app, or to
         // CatosTV when something there was opened.
+        if self.shell.volume.is_some() || self.shell.overlay().is_some() {
+            self.leaving = None;
+        }
         if let Some((page, media)) = self.over_app
             && self.leaving.is_none()
             && self.shell.volume.is_none()
@@ -4357,10 +4490,8 @@ impl eframe::App for ShellApp {
             let same = self.shell.page == page
                 && (self.shell.fin.is_some() || self.shell.files.is_some()) == media;
             let to_app = same && !std::mem::take(&mut self.leave_to_shell);
-            self.leaving = Some((to_app, 2));
-            if to_app {
-                lock(&self.watch).blank = Some(Instant::now());
-            } else {
+            self.leaving = Some((to_app, 2, Instant::now()));
+            if !to_app {
                 self.over_app = None;
             }
         }
@@ -4538,7 +4669,8 @@ impl eframe::App for ShellApp {
         }
         // The Home backdrop drifts slowly: keep frames coming while
         // Home is on screen; ~30 fps is plenty for slow light.
-        if self.prefs.home_background == "glow"
+        if self.prefs.theme != prefs::Theme::Flat
+            && self.prefs.home_background == "glow"
             && self.shell.page == catostv_core::shell::Page::Home
             && self.blank_since.is_none()
         {
@@ -4587,9 +4719,14 @@ impl eframe::App for ShellApp {
         self.sync_watch();
         // A couple of frames after leaving began (blank, or CatosTV drawn
         // in full again), the window moves.
-        if let Some((to_app, n)) = self.leaving {
-            if n > 0 {
-                self.leaving = Some((to_app, n - 1));
+        if let Some((to_app, n, since)) = self.leaving {
+            if to_app && since.elapsed().as_secs_f32() < catostv::motion::SHEET {
+                ctx.request_repaint();
+            } else if n > 0 {
+                if to_app && n == 2 {
+                    lock(&self.watch).blank = Some(Instant::now());
+                }
+                self.leaving = Some((to_app, n - 1, since));
                 ctx.request_repaint();
             } else {
                 self.leaving = None;
@@ -4685,14 +4822,20 @@ fn refit_full_screen(
 /// How long to wait for Android to report the opened app in front (a
 /// cold start of a big app such as YouTube takes several seconds).
 const ANDROID_TOP_WAIT: Duration = Duration::from_secs(12);
-/// Then how long the app gets to draw before CatosTV switches to it.
+/// Require continuous app focus after its first draw before revealing Android.
 const ANDROID_FIRST_FRAME: Duration = Duration::from_millis(500);
 
 /// Wait until `android-watch` reports `pkg` as Android's front app.
 fn wait_for_android_top(pkg: &str, budget: Duration) -> bool {
     let started = Instant::now();
+    let mut ready = android::LaunchReady::default();
     loop {
-        if android::read_top().as_deref() == Some(pkg) {
+        if ready.observe(
+            pkg,
+            android::read_top().as_deref(),
+            started.elapsed(),
+            ANDROID_FIRST_FRAME,
+        ) {
             return true;
         }
         if started.elapsed() >= budget {

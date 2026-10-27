@@ -566,11 +566,14 @@ end)
 -- the level filled from the bottom, the percent under it, and the output
 -- it plays on beside it (with a ‹ when Left can change it).
 render_volume = function(a)
+    local flat = vol.style == "flat"
+    local accent = vol.accent or ACCENT
     local w, h = 96, 420
     local x, y = W - 42 - w, 330
     local cx = x + w / 2
     a:new_event()
-    a:append("{\\an7\\pos(0,0)\\bord3\\shad0\\1c&H101018&\\1a&H28&\\3c&HFFFFFF&\\3a&H69&}")
+    a:append(flat and "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H242424&\\1a&H00&}"
+        or "{\\an7\\pos(0,0)\\bord3\\shad0\\1c&H101018&\\1a&H28&\\3c&HFFFFFF&\\3a&H69&}")
     a:draw_start()
     rect(a, x, y, w, h, w / 2)
     a:draw_stop()
@@ -578,9 +581,9 @@ render_volume = function(a)
     local my = y + 54
     a:new_event()
     if vol.muted then
-        a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c" .. ACCENT .. "\\1a&H00&}")
+        a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c" .. accent .. "\\1a&H00&}")
     else
-        a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&HED&}")
+        a:append(flat and "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H343434&\\1a&H00&}" or "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&HED&}")
     end
     a:draw_start()
     rect(a, cx - 33, my - 33, 66, 66, 33)
@@ -609,7 +612,7 @@ render_volume = function(a)
     -- The level.
     local tw, ty, th = 42, y + 105, 240
     a:new_event()
-    a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&HE9&}")
+    a:append(flat and "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H505050&\\1a&H00&}" or "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&HFFFFFF&\\1a&HE9&}")
     a:draw_start()
     rect(a, cx - tw / 2, ty, tw, th, tw / 2)
     a:draw_stop()
@@ -617,7 +620,7 @@ render_volume = function(a)
         local fh = math.max(th * math.min(vol.pct, 100) / 100, tw)
         a:new_event()
         a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c" ..
-            (vol.muted and "&H8C8C8C&" or ACCENT) .. "\\1a&H00&}")
+            (vol.muted and "&H8C8C8C&" or accent) .. "\\1a&H00&}")
         a:draw_start()
         rect(a, cx - tw / 2, ty + th - fh, tw, fh, tw / 2)
         a:draw_stop()
@@ -632,20 +635,21 @@ render_volume = function(a)
         local left = x - 18 - cw
         local ly = y + h - 37
         a:new_event()
-        a:append("{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H101018&\\1a&H28&}")
+        a:append(flat and "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H242424&\\1a&H00&}" or "{\\an7\\pos(0,0)\\bord0\\shad0\\1c&H101018&\\1a&H28&}")
         a:draw_start()
         rect(a, left, y + h - 75, cw, 75, 37)
         a:draw_stop()
         local tx = left + 26
         if vol.more then
             a:new_event()
-            a:append(string.format("{\\an4\\pos(%d,%d)\\bord0\\shad0\\fs30\\1c&HFFFFFF&\\1a&H70&}‹", tx, ly))
+            a:append(string.format("{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\fs30\\1c&HFFFFFF&\\1a&H70&}‹", tx, ly))
             tx = tx + 30
         end
         a:new_event()
-        a:append(string.format("{\\an4\\pos(%d,%d)\\bord0\\shad0\\fs22\\1c&HFFFFFF&\\1a&H30&}%s", tx, ly, name))
+        a:append(string.format("{\\an4\\pos(%.1f,%.1f)\\bord0\\shad0\\fs22\\1c&HFFFFFF&\\1a&H30&}%s", tx, ly, name))
     end
 end
+
 
 -- ------------------------------------------------------------ loading
 
@@ -706,16 +710,21 @@ local function vol_arm()
     vol_timer = mp.add_timeout(3, vol_hide)
 end
 
-mp.register_script_message("catfyn-volume", function(pct, muted, output, more)
+local function volume_message(pct, muted, output, more, style, accent)
     vol = {
-        pct = tonumber(pct) or 0,
+        pct = math.floor(math.max(0, math.min(100, tonumber(pct) or 0)) + 0.5),
+        style = style or "glassy",
+        accent = accent and ass_rgb(accent) or ACCENT,
         muted = muted == "yes",
         output = output or "",
         more = more == "yes",
     }
     vol_arm()
     render()
-end)
+end
+mp.register_script_message("catfyn-volume", volume_message)
+mp.register_script_message("catostv-volume", volume_message)
+mp.set_property("user-data/catostv/volume-osd", "yes")
 
 -- The shell changes the volume (and answers with `catfyn-volume`).
 local function ctl(cmd)

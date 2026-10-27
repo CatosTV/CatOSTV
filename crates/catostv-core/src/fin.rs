@@ -39,6 +39,7 @@ pub struct Media {
     /// Why Home has no rows when it should have some ("Your Jellyfin
     /// server at … isn't answering"); `None` when there is nothing to say.
     pub home_note: Option<String>,
+    pub now_playing: Vec<crate::playback::NowPlaying>,
 }
 
 /// What Home says when no media server answered.
@@ -109,6 +110,7 @@ pub static NO_MEDIA: Media = Media {
     },
     home: Vec::new(),
     home_note: None,
+    now_playing: Vec::new(),
 };
 
 /// Poster grid columns in a library.

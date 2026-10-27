@@ -106,6 +106,7 @@ pub fn mpv_argv(url: &str, socket: &Path, start_paused: bool) -> Vec<String> {
     v.push(format!("--title={TITLE}"));
     v.push(format!("--wayland-app-id={APP_ID}"));
     v.push(format!("--input-ipc-server={}", socket.display()));
+    v.push("--script=~/.config/catostv/catfyn-osd.lua".into());
     if start_paused {
         v.push("--pause".into());
     }

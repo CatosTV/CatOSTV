@@ -1,4 +1,4 @@
-//! Interface preferences you can change from Settings → Customization.
+//! Interface and session preferences you can change from Settings.
 //!
 //! Stored as a trivial `key = value` file at `~/.config/catostv/ui.conf`
 //! (unknown keys and junk lines are ignored, so a hand edit can never stop
@@ -23,6 +23,44 @@ pub const ACCENTS: &[(&str, &str)] = &[
 
 pub const DEFAULT_ACCENT: &str = "violet";
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Theme {
+    #[default]
+    Glassy,
+    Flat,
+}
+
+impl Theme {
+    pub fn from_key(key: &str) -> Self {
+        if key == "flat" {
+            Self::Flat
+        } else {
+            Self::Glassy
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Glassy => "glassy",
+            Self::Flat => "flat",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Glassy => "Glassy",
+            Self::Flat => "Flat",
+        }
+    }
+
+    pub fn other(self) -> Self {
+        match self {
+            Self::Glassy => Self::Flat,
+            Self::Flat => Self::Glassy,
+        }
+    }
+}
+
 fn parse_code(s: &str) -> Option<u16> {
     let code = match s.strip_prefix("0x") {
         Some(h) => u16::from_str_radix(h, 16).ok()?,
@@ -33,12 +71,15 @@ fn parse_code(s: &str) -> Option<u16> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiPrefs {
+    pub theme: Theme,
     /// One of [`ACCENTS`] (names). Unknown values fall back to the default.
     pub accent: String,
     /// The one-time key guide has been shown on this TV.
     pub key_guide_seen: bool,
     /// Clock shows 24-hour time (`false` → 12-hour with AM/PM).
     pub clock_24h: bool,
+    /// Offer this TV as a DLNA / YouTube DIAL receiver on the LAN.
+    pub cast_enabled: bool,
     /// HDR output (experimental). Not persisted across reboots: the shell
     /// derives it from [`hdr_flag_path`] at start, and `catostv-session`
     /// starts labwc with the Vulkan renderer and `<hdr>yes</hdr>` only
@@ -121,9 +162,11 @@ pub fn cycle_countdown(current: u32, delta: i32) -> u32 {
 impl Default for UiPrefs {
     fn default() -> Self {
         Self {
+            theme: Theme::default(),
             accent: DEFAULT_ACCENT.into(),
             key_guide_seen: false,
             clock_24h: true,
+            cast_enabled: true,
             hdr: false,
             pad_nav: true,
             pad_nintendo: false,
@@ -223,9 +266,11 @@ impl UiPrefs {
             };
             let v = v.trim().trim_matches('"');
             match k.trim() {
+                "theme" => p.theme = Theme::from_key(v),
                 "accent" if ACCENTS.iter().any(|(n, _)| *n == v) => p.accent = v.into(),
                 "key_guide_seen" => p.key_guide_seen = v == "true",
                 "clock_24h" => p.clock_24h = v != "false",
+                "cast_enabled" => p.cast_enabled = v != "false",
                 "hdr" => p.hdr = v == "true",
                 "pad_nav" => p.pad_nav = v != "false",
                 "pad_nintendo" => p.pad_nintendo = v == "true",
@@ -293,6 +338,8 @@ impl UiPrefs {
             self.pad_nintendo
         );
         s.push_str(&format!("android_variant = {}\n", self.android_variant));
+        s.push_str(&format!("theme = {}\n", self.theme.key()));
+        s.push_str(&format!("cast_enabled = {}\n", self.cast_enabled));
         s.push_str(&format!("home_background = {}\n", self.home_background));
         s.push_str(&format!(
             "fin_autoplay = {}\nfin_countdown = {}\n",
@@ -384,10 +431,16 @@ mod tests {
 
     #[test]
     fn round_trip_and_junk() {
+        assert_eq!(UiPrefs::from_conf("accent = teal\n").theme, Theme::Glassy);
+        assert_eq!(UiPrefs::from_conf("theme = unknown\n").theme, Theme::Glassy);
+        assert!(UiPrefs::from_conf("").cast_enabled);
+        assert!(UiPrefs::from_conf("cast_enabled = junk\n").cast_enabled);
         let p = UiPrefs {
+            theme: Theme::Flat,
             accent: "teal".into(),
             key_guide_seen: true,
             clock_24h: false,
+            cast_enabled: false,
             hdr: true,
             pad_nav: false,
             pad_nintendo: true,

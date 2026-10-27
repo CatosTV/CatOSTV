@@ -26,6 +26,29 @@ pub const SHOW_APP_KEYBIND: &str = "W-A-F12";
 pub const OVER_APP_KEYBIND: &str = "W-A-F9";
 pub const LEAVE_APP_KEYBIND: &str = "W-A-F10";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AndroidRecovery {
+    Shell,
+    App,
+}
+
+/// Android may open a window on its own, even while the shell still draws.
+pub fn android_recovery(
+    android_activated: bool,
+    shell_expected: bool,
+    android_expected: bool,
+) -> Option<AndroidRecovery> {
+    if !android_activated {
+        None
+    } else if shell_expected {
+        Some(AndroidRecovery::Shell)
+    } else if !android_expected {
+        Some(AndroidRecovery::App)
+    } else {
+        None
+    }
+}
+
 fn chord(key: &str) -> Cmd {
     Cmd::new("wtype").args([
         "-M", "logo", "-M", "alt", "-k", key, "-m", "alt", "-m", "logo",
@@ -71,6 +94,17 @@ pub fn shell_off_app(r: &mut dyn Runner, appliance: bool) -> Result<()> {
 mod tests {
     use super::*;
     use crate::process::fake::FakeRunner;
+
+    #[test]
+    fn android_yields_to_the_requested_screen() {
+        use AndroidRecovery::{App, Shell};
+        assert_eq!(android_recovery(true, true, false), Some(Shell));
+        // The last app may still be Android after returning to Home.
+        assert_eq!(android_recovery(true, true, true), Some(Shell));
+        assert_eq!(android_recovery(true, false, false), Some(App));
+        assert_eq!(android_recovery(true, false, true), None);
+        assert_eq!(android_recovery(false, true, false), None);
+    }
 
     #[test]
     fn android_windows_never_switch_the_desktop() {

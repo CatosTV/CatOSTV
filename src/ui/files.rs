@@ -111,8 +111,38 @@ pub fn draw(c: &C, f: &Files, images: &Images, now: f64) {
     }
 
     draw_places(c, f, images);
-    draw_list(c, f, images, now);
-    draw_menu(c, f);
+    let key = f.current_dir().map(|e| e.path.clone());
+    let enter = c.entrance("files-directory", key, crate::motion::PAGE);
+    let list = c.translated(0.0, 12.0 * (1.0 - enter)).opacity(enter);
+    draw_list(&list, f, images, now);
+    let open = c.anim_ease(
+        "files-menu-visible",
+        if f.menu.is_some() { 1.0 } else { 0.0 },
+        crate::motion::SHEET,
+    );
+    let shown = c.remember("files-menu", |old: Option<Option<FilesMenu>>| {
+        f.menu.clone().or_else(|| old.flatten())
+    });
+    if let Some(menu) = shown.filter(|_| open > 0.001) {
+        c.opacity(open).scrim();
+        c.hit(c.screen, Target::Outside);
+        let layer = c
+            .translated(0.0, 16.0 * (1.0 - open))
+            .opacity(open)
+            .without_scrim();
+        let layer = if f.menu.is_some() {
+            layer
+        } else {
+            layer.passive()
+        };
+        if f.menu.is_some() {
+            draw_menu(&layer, f);
+        } else {
+            let mut closing = f.clone();
+            closing.menu = Some(menu);
+            draw_menu(&layer, &closing);
+        }
+    }
 }
 
 fn draw_places(c: &C, f: &Files, images: &Images) {

@@ -72,8 +72,16 @@ impl FinPics<'_> {
     }
 
     pub fn get(&self, c: &C, url: &str) -> Option<TextureId> {
+        self.get_sized(c, url, 1600)
+    }
+
+    pub fn get_full(&self, c: &C, url: &str) -> Option<TextureId> {
+        self.get_sized(c, url, 3840)
+    }
+
+    fn get_sized(&self, c: &C, url: &str, max_side: u32) -> Option<TextureId> {
         match self.cache.get(url) {
-            Some(Some(path)) => self.images.get(&c.ctx, path),
+            Some(Some(path)) => self.images.get_art(&c.ctx, path, max_side),
             Some(None) => None,
             None => {
                 let mut w = self.wanted.borrow_mut();
@@ -133,9 +141,13 @@ fn focus_t(c: &C, id: impl std::hash::Hash + std::fmt::Debug, focused: bool) -> 
 /// (one mesh each: the stepped fills used before drew a visible seam).
 ///
 fn backdrop(c: &C, pics: &FinPics, server: &str, it: Option<&Item>) {
+    if theme::flat() {
+        c.fill(c.screen, 0.0, theme::surface(0));
+        return;
+    }
     let dark = theme::BG_BOTTOM;
     let url = it.and_then(|i| backdrop_url(server, i));
-    let tex = url.as_deref().and_then(|u| pics.get(c, u));
+    let tex = url.as_deref().and_then(|u| pics.get_full(c, u));
     // Remember the last art that was actually drawn, to fade from it.
     let now = c.ctx.input(|i| i.time);
     let shown: (Option<String>, Option<String>, f64) = c.remember("fin-bd", |old| {
@@ -158,11 +170,11 @@ fn backdrop(c: &C, pics: &FinPics, server: &str, it: Option<&Item>) {
         .1
         .as_deref()
         .filter(|_| k < 1.0)
-        .and_then(|prev| pics.get(c, prev))
+        .and_then(|prev| pics.get_full(c, prev))
     {
         c.image(full, t, Color32::WHITE);
     }
-    if let Some(t) = shown.0.as_deref().and_then(|cur| pics.get(c, cur)) {
+    if let Some(t) = shown.0.as_deref().and_then(|cur| pics.get_full(c, cur)) {
         // A slow, barely-there drift so the picture breathes.
         let drift = ((now * 0.08).sin() * 6.0) as f32;
         c.image(
@@ -336,10 +348,7 @@ fn header(
         let halves = backend_switch(
             c,
             "fin-hdr",
-            1216.0 - w - 12.0 - switch_w,
-            y + 2.0,
-            switch_w,
-            48.0,
+            c.r(1216.0 - w - 12.0 - switch_w, y + 2.0, switch_w, 48.0),
             a.backend,
             st,
         );
@@ -497,6 +506,22 @@ fn hero_text_with(c: &C, it: &Item, x: f32, y: f32, w: f32, now_k: f32, action_c
 }
 
 pub fn draw(c: &C, f: &Fin, accounts: &Accounts, prefs: &UiPrefs, pics: &FinPics, now: f64) {
+    let identity = f.screen().map(|screen| {
+        let id = match screen {
+            Screen::Library { lib, .. } => lib.id.as_str(),
+            Screen::Series { series, .. } => series.id.as_str(),
+            Screen::Details { item, .. } => item.id.as_str(),
+            _ => "",
+        };
+        (
+            std::mem::discriminant(screen),
+            id.to_string(),
+            f.stack.len(),
+        )
+    });
+    let k = c.entrance("fin-screen", identity, crate::motion::PAGE);
+    let content = c.translated(0.0, 12.0 * (1.0 - k)).opacity(k);
+    let c = &content;
     let server = accounts.active().map(|a| a.server.as_str()).unwrap_or("");
     match f.screen() {
         Some(Screen::Browse) | None => draw_browse(c, f, accounts, pics, server, now),
@@ -731,17 +756,9 @@ fn is_wide(r: &fin::Row) -> bool {
 
 /// The Jellyfin | Plex switch: a glass pill whose accent half slides to
 /// the chosen one. Returns the two halves' rects.
-fn backend_switch(
-    c: &C,
-    id: &str,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    on: Backend,
-    t: f32,
-) -> [Rect; 2] {
-    let outer = c.r(x, y, w, h);
+fn backend_switch(c: &C, id: &str, outer: Rect, on: Backend, t: f32) -> [Rect; 2] {
+    let (x, y) = c.to_design(outer.min);
+    let (w, h) = c.dsize(outer);
     c.glass(outer, h / 2.0);
     if t > 0.01 {
         c.outline(outer, h / 2.0, 1.5, theme::accent_a((170.0 * t) as u8));
@@ -801,7 +818,7 @@ fn draw_connect(
         Weight::Semibold,
     );
     let t = focus_t(c, "fin-switch", index == 0);
-    let halves = backend_switch(c, "fin-connect", 490.0, 222.0, 300.0, 50.0, backend, t);
+    let halves = backend_switch(c, "fin-connect", c.r(490.0, 222.0, 300.0, 50.0), backend, t);
     for h in halves {
         c.hit(h, Target::Fin(0, 0));
     }
@@ -1523,7 +1540,27 @@ fn draw_settings(
             disabled: !prefs.fin_autoplay,
         },
     );
-    if let Some((i, opt)) = menu {
+    let open = c.anim_ease(
+        "fin-account-visible",
+        if menu.is_some() { 1.0 } else { 0.0 },
+        crate::motion::SHEET,
+    );
+    let shown = c.remember("fin-account-menu", |old: Option<Option<(usize, usize)>>| {
+        menu.or_else(|| old.flatten())
+    });
+    if let Some((i, opt)) = shown.filter(|_| open > 0.001) {
+        c.opacity(open).scrim();
+        c.hit(c.screen, Target::Outside);
+        let layer = c
+            .translated(0.0, 16.0 * (1.0 - open))
+            .opacity(open)
+            .without_scrim();
+        let layer = if menu.is_some() {
+            layer
+        } else {
+            layer.passive()
+        };
+        let c = &layer;
         let m = widgets::modal(c, 480.0, 300.0);
         let (mx, my) = c.to_design(m.min);
         let name = accounts
@@ -1638,10 +1675,10 @@ pub fn home_rows(
                 w,
                 h,
                 t,
-                widgets::HOME_LIFT,
+                widgets::home_lift(),
                 it.title(),
             );
-            let grown = widgets::lifted_by(&list, list.r(x, top, w, h), t, widgets::HOME_LIFT);
+            let grown = widgets::lifted_by(&list, list.r(x, top, w, h), t, widgets::home_lift());
             let (gx, gy) = list.to_design(grown.min);
             let (gw, gh) = list.dsize(grown);
             card_state(&list, it, gx, gy, gw, gh);

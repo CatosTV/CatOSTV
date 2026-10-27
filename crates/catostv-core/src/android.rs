@@ -817,6 +817,29 @@ pub fn tv_launch_cmd(pkg: &str) -> Result<Cmd> {
 /// catostv-android-watch (`/run/catostv/android-top`, one package name).
 pub const TOP_PATH: &str = "/run/catostv/android-top";
 
+/// Focus must stay on the requested app before its shared window is shown.
+#[derive(Default)]
+pub struct LaunchReady {
+    since: Option<Duration>,
+}
+
+impl LaunchReady {
+    pub fn observe(
+        &mut self,
+        package: &str,
+        top: Option<&str>,
+        elapsed: Duration,
+        stable: Duration,
+    ) -> bool {
+        if top != Some(package) {
+            self.since = None;
+            return false;
+        }
+        let since = *self.since.get_or_insert(elapsed);
+        elapsed.saturating_sub(since) >= stable
+    }
+}
+
 pub fn read_top() -> Option<String> {
     let s = std::fs::read_to_string(TOP_PATH).ok()?;
     let s = s.trim();
@@ -1657,6 +1680,24 @@ pub fn removable_apks(r: &mut dyn Runner) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn launch_waits_for_continuous_app_focus() {
+        let mut ready = LaunchReady::default();
+        let stable = Duration::from_millis(500);
+        let app = "org.example.video";
+        let mut at = |ms, top| ready.observe(app, top, Duration::from_millis(ms), stable);
+        assert!(!at(0, None));
+        assert!(!at(100, Some(app)));
+        assert!(!at(400, Some(app)));
+        // Android can announce the app before returning briefly to Home.
+        assert!(!at(500, Some("org.lineageos.tv.launcher")));
+        assert!(!at(600, Some(app)));
+        assert!(!at(1099, Some(app)));
+        assert!(at(1100, Some(app)));
+        assert!(!at(1200, None));
+        assert!(!at(1300, Some(app)));
+    }
 
     #[test]
     fn hung_notice_parses() {
@@ -2647,7 +2688,7 @@ NAME="sr0" KNAME="sr0" PATH="/dev/sr0" PKNAME="" TYPE="rom" SIZE="1073741312" RO
         // the launcher's own intent, so a running app's task comes
         // to the front as it was (a bare `am start -n` stacked a new splash
         // screen on SmartTube's player and its decoder deadlocked).
-        assert!(launch.contains("am start -a android.intent.action.MAIN -c \"$category\""));
+        assert!(launch.contains("am start -W -a android.intent.action.MAIN -c \"$category\""));
         assert!(launch.contains("-f 0x10200000 -n \"$comp\""));
         assert!(launch.contains("category=android.intent.category.LAUNCHER"));
         // Never close a dumpsys pipe early: system_server then throws a

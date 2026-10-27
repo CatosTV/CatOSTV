@@ -875,6 +875,7 @@ pub enum Target {
     FilesPlace(usize),
     /// Home's media rows: tile `col` of row `row`.
     HomeMedia(usize, usize),
+    NowPlaying(crate::playback::Source),
 }
 
 /// Side effects requested by the state machine. The GUI performs them.
@@ -890,6 +891,7 @@ pub enum Effect {
     },
     /// Bring the running app to the front.
     Resume(usize),
+    ResumeNowPlaying(crate::playback::Source),
     Close(usize),
     /// Close, then launch again once it has exited.
     Restart(usize),
@@ -972,7 +974,9 @@ pub enum Effect {
     SetSink(u32),
     ApplyHdmiProfile,
     SetAccent(String),
+    SetTheme(prefs::Theme),
     SetClock24(bool),
+    SetCastEnabled(bool),
     /// Settings → Catfyn.
     SetFinAutoplay(bool),
     SetFinCountdown(u32),
@@ -1119,6 +1123,8 @@ pub struct Shell {
     files_pending: Vec<crate::files::FilesEffect>,
     /// Home: focus is in the media rows under the apps: (row, column).
     pub home_media: Option<(usize, usize)>,
+    pub home_now_playing: bool,
+    pub home_player: Option<crate::playback::Source>,
     /// Settings → Apps filter text.
     pub apps_filter: String,
     pub overlays: Vec<Overlay>,
@@ -1224,6 +1230,8 @@ impl Shell {
             files_pending: Vec::new(),
             search_media: (String::new(), Vec::new()),
             home_media: None,
+            home_now_playing: false,
+            home_player: None,
             apps_filter: String::new(),
             overlays: Vec::new(),
             wifi_scan: Scan::Idle,
@@ -1352,6 +1360,7 @@ impl Shell {
         self.fin = None;
         self.files = None;
         self.home_media = None;
+        self.home_now_playing = false;
         self.overlays.clear();
         self.page = Page::Home;
         self.top_focus = false;
@@ -1363,6 +1372,7 @@ impl Shell {
         self.fin = None;
         self.files = None;
         self.home_media = None;
+        self.home_now_playing = false;
         self.page = page;
         self.top_focus = false;
         self.top_index = top_index_of(page);
@@ -1478,6 +1488,17 @@ impl Shell {
     /// Keep every index inside its list after apps/system state changed.
     pub fn clamp(&mut self, ctx: &ShellContext) {
         let n_apps = ctx.apps.len();
+        if ctx.media.now_playing.is_empty() {
+            self.home_now_playing = false;
+        }
+        if !ctx
+            .media
+            .now_playing
+            .iter()
+            .any(|p| Some(p.source) == self.home_player)
+        {
+            self.home_player = ctx.media.now_playing.first().map(|p| p.source);
+        }
         self.rail_index = self.rail_index.min(n_apps.saturating_sub(1));
         // A picked-up app is put down when Home is left or covered.
         if self.page != Page::Home || self.top_focus || n_apps == 0 || !self.overlays.is_empty() {
@@ -1838,11 +1859,22 @@ impl Shell {
             };
         }
         match target {
+            Target::NowPlaying(source)
+                if self.page == Page::Home
+                    && ctx.media.now_playing.iter().any(|p| p.source == source)
+                    && self.home_media.is_none() =>
+            {
+                self.top_focus = false;
+                self.home_now_playing = true;
+                self.home_player = Some(source);
+                true
+            }
             Target::HomeMedia(r, i)
                 if self.page == Page::Home && ctx.media.item(r, i).is_some() =>
             {
                 self.top_focus = false;
                 self.home_media = Some((r, i));
+                self.home_now_playing = false;
                 true
             }
             Target::Outside => overlay_open,
@@ -1894,6 +1926,7 @@ impl Shell {
             Target::Rail(i) if self.page == Page::Home && i < ctx.apps.len() => {
                 self.top_focus = false;
                 self.rail_index = i;
+                self.home_now_playing = false;
                 true
             }
             Target::RecentCard(i) | Target::RecentClose(i)
@@ -1991,7 +2024,11 @@ impl Shell {
                 }
                 self.top_index = i;
             }
-            Action::Down => self.top_focus = false,
+            Action::Down => {
+                self.top_focus = false;
+                self.home_now_playing =
+                    self.page == Page::Home && !ctx.media.now_playing.is_empty();
+            }
             Action::Back => {
                 if self.page == Page::Recents && ctx.running().is_empty() {
                     self.go_home();
@@ -2056,6 +2093,39 @@ impl Shell {
 
     fn handle_home(&mut self, action: Action, ctx: &ShellContext) -> Vec<Effect> {
         let n_apps = ctx.apps.len();
+        let has_player = !ctx.media.now_playing.is_empty();
+        if self.home_now_playing && has_player {
+            match action {
+                Action::Ok => {
+                    if let Some(source) = self.home_player {
+                        return vec![Effect::ResumeNowPlaying(source)];
+                    }
+                }
+                Action::Left | Action::Right => {
+                    let index = ctx
+                        .media
+                        .now_playing
+                        .iter()
+                        .position(|p| Some(p.source) == self.home_player)
+                        .unwrap_or(0);
+                    let next = if action == Action::Left {
+                        index.saturating_sub(1)
+                    } else {
+                        (index + 1).min(ctx.media.now_playing.len() - 1)
+                    };
+                    self.home_player = Some(ctx.media.now_playing[next].source);
+                }
+                Action::Up => {
+                    self.home_now_playing = false;
+                    self.top_focus = true;
+                    self.top_index = 0;
+                }
+                Action::Down | Action::Back => self.home_now_playing = false,
+                _ => {}
+            }
+            return vec![];
+        }
+        self.home_now_playing = false;
         if self.moving {
             return self.handle_moving(action, ctx);
         }
@@ -2102,6 +2172,7 @@ impl Shell {
         match action {
             Action::Left => self.rail_index = self.rail_index.saturating_sub(1),
             Action::Right => self.rail_index = step(self.rail_index, 1, n_apps),
+            Action::Up if has_player => self.home_now_playing = true,
             Action::Up => {
                 self.top_focus = true;
                 self.top_index = 0;
@@ -2382,6 +2453,7 @@ impl Shell {
             RowId::Accent => Some(vec![Effect::SetAccent(
                 prefs::cycle_accent(&ctx.prefs.accent, delta).to_string(),
             )]),
+            RowId::Theme => Some(vec![Effect::SetTheme(ctx.prefs.theme.other())]),
             RowId::ClockFormat => Some(vec![Effect::SetClock24(!ctx.prefs.clock_24h)]),
             RowId::HomeBackground => Some(vec![Effect::SetHomeBackground(
                 prefs::cycle_home_background(&ctx.prefs.home_background, delta).to_string(),
@@ -2637,6 +2709,7 @@ impl Shell {
                 None => vec![],
             },
             RowId::Mute => vec![Effect::ToggleMute],
+            RowId::CastReceiver => vec![Effect::SetCastEnabled(!ctx.prefs.cast_enabled)],
             RowId::Screensaver => vec![Effect::SetScreensaver(!ctx.prefs.screensaver)],
             RowId::PadNav => vec![Effect::SetPadNav(!ctx.prefs.pad_nav)],
             RowId::Controller(i) => match ctx.sys.controllers.get(i) {

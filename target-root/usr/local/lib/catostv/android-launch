@@ -54,5 +54,6 @@ waydroid shell -- settings put global policy_control 'immersive.status=*' 2>/dev
 # the front as it was. A bare `am start -n` made Android stack a new splash
 # screen on SmartTube's playing player; SmartTube rebuilt its screens and
 # its video decoder deadlocked in the restart.
-exec waydroid shell -- am start -a android.intent.action.MAIN -c "$category" \
+# Wait for the activity's first draw before the shell reveals this window.
+exec waydroid shell -- am start -W -a android.intent.action.MAIN -c "$category" \
   -f 0x10200000 -n "$comp"

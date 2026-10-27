@@ -5,19 +5,19 @@
 # changed; CATOSTV_SUDO_PASSWORD if you changed it, CATOSTV_DEPLOY_USER for
 # another login).
 #
-#   ./scripts/deploy.sh 192.168.1.56              build release binaries, push, restart CatosTV
-#   ./scripts/deploy.sh 192.168.1.56 --no-build   push what is in target/release
-#   ./scripts/deploy.sh 192.168.1.56 --session    also restart the whole TV session
+#   ./scripts/deploy.sh 192.168.1.88              build release binaries, push, restart CatosTV
+#   ./scripts/deploy.sh 192.168.1.88 --no-build   push what is in target/release
+#   ./scripts/deploy.sh 192.168.1.88 --session    also restart the whole TV session
 #                                                (needed after autostart / rc.xml changes)
-#   ./scripts/deploy.sh 192.168.1.56 --bins-only  binaries only, leave the overlay alone
-#   ./scripts/deploy.sh 192.168.1.56 --no-packages  do not install missing packages
-#   ./scripts/deploy.sh 192.168.1.56 --android-image DIR
+#   ./scripts/deploy.sh 192.168.1.88 --bins-only  binaries only, leave the overlay alone
+#   ./scripts/deploy.sh 192.168.1.88 --no-packages  do not install missing packages
+#   ./scripts/deploy.sh 192.168.1.88 --android-image DIR
 #                                                also copy a CatosTV-built Android TV
 #                                                image (DIR/system.img, vendor.img,
 #                                                BUILD.txt from scripts/android-image/
 #                                                build.sh) to the TV and reset Android
 #                                                so Settings → Android installs it
-#   ./scripts/deploy.sh 192.168.1.56 --android-image stock
+#   ./scripts/deploy.sh 192.168.1.88 --android-image stock
 #                                                drop that image, back to the
 #                                                downloaded one (also a fresh setup)
 #

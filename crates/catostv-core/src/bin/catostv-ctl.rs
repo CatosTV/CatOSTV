@@ -4,6 +4,10 @@
 //! Used by labwc key bindings (Home, Control Center, power key, volume).
 //! Exit codes: 0 sent, 1 shell not reachable / volume failed, 2 usage error.
 //!
+//! `raise <window>` brings that window (its Wayland app id) to the front,
+//! straight through the window manager: CatTube's player uses it to put
+//! CatTube's list over a video that keeps playing, and back again.
+//!
 //! `volume-up`, `volume-down` and `mute` go to the shell, which shows its
 //! volume panel (over apps too). Without a shell they are handled here:
 //! `wpctl`, and the level as a notification drawn by mako.
@@ -73,8 +77,21 @@ fn main() {
     let arg = std::env::args().nth(1).unwrap_or_else(|| "home".into());
     if matches!(arg.as_str(), "-h" | "--help" | "help") {
         println!("{}", ShellCommand::usage());
+        println!("raise <window>  bring that window to the front");
         println!("socket: {}", ipc::socket_path().display());
         return;
+    }
+    if arg == "raise" {
+        let Some(window) = std::env::args().nth(2).filter(|w| !w.is_empty()) else {
+            eprintln!("usage: catostv-ctl raise <window>");
+            std::process::exit(2);
+        };
+        match catostv_core::toplevel::activate(&window) {
+            Ok(true) => return,
+            Ok(false) => eprintln!("catostv-ctl: no window {window}"),
+            Err(e) => eprintln!("catostv-ctl: {e}"),
+        }
+        std::process::exit(1);
     }
     let Some(cmd) = ShellCommand::parse(&arg) else {
         eprintln!("{}", ShellCommand::usage());

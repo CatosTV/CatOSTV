@@ -14,6 +14,7 @@
 //! the mouse, every clickable rectangle is registered with [`Canvas::hit`];
 //! the app hit-tests the pointer against last frame's list.
 
+use crate::motion;
 use crate::theme::{self, Rgb, Weight};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontFamily, FontId, Mesh, Painter, Pos2, Rect, Shadow,
@@ -35,6 +36,8 @@ pub struct Canvas<H: Copy = ()> {
     pub s: f32,
     pub screen: Rect,
     hits: Rc<RefCell<Vec<(Rect, H)>>>,
+    interactive: bool,
+    draw_scrim: bool,
 }
 
 impl<H: Copy> Canvas<H> {
@@ -56,6 +59,8 @@ impl<H: Copy> Canvas<H> {
             s,
             screen,
             hits: Rc::new(RefCell::new(Vec::new())),
+            interactive: true,
+            draw_scrim: true,
         }
     }
 
@@ -98,11 +103,40 @@ impl<H: Copy> Canvas<H> {
         c
     }
 
+    /// Move presentation and pointer targets together, in design units.
+    pub fn translated(&self, x: f32, y: f32) -> Self {
+        let mut c = self.clone();
+        c.origin += vec2(self.len(x), self.len(y));
+        c
+    }
+
+    pub fn opacity(&self, alpha: f32) -> Self {
+        let mut c = self.clone();
+        c.painter.multiply_opacity(alpha.clamp(0.0, 1.0));
+        c
+    }
+
+    /// Outgoing surfaces are visible briefly but can no longer be clicked.
+    pub fn passive(&self) -> Self {
+        let mut c = self.clone();
+        c.interactive = false;
+        c
+    }
+
+    /// Animated dialogs share one stationary scrim beneath their contents.
+    pub fn without_scrim(&self) -> Self {
+        let mut c = self.clone();
+        c.draw_scrim = false;
+        c
+    }
+
     // ---------------- pointer ----------------
 
     /// Register a clickable rect (later registrations are on top).
     pub fn hit(&self, rect: Rect, target: H) {
-        self.hits.borrow_mut().push((rect, target));
+        if self.interactive {
+            self.hits.borrow_mut().push((rect, target));
+        }
     }
 
     /// The hit list of this frame.
@@ -127,6 +161,9 @@ impl<H: Copy> Canvas<H> {
 
     /// Soft drop shadow / glow under a rounded rect.
     pub fn shadow(&self, rect: Rect, radius: f32, offset_y: f32, blur: f32, color: Color32) {
+        if theme::flat() {
+            return;
+        }
         // egui feathers a shadow by offsetting the outline inwards by half
         // the blur: when that is more than the element's half-height (or
         // more than the corner radius) the inner path folds over and
@@ -149,6 +186,10 @@ impl<H: Copy> Canvas<H> {
     /// behind it, a milky layer, a brighter top half and a hairline edge
     /// that catches the light.
     pub fn glass(&self, rect: Rect, radius: f32) {
+        if theme::flat() {
+            self.fill(rect, radius.min(28.0), theme::surface(1));
+            return;
+        }
         self.shadow(rect, radius, 18.0, 52.0, theme::rgba(theme::BLACK, 80));
         self.fill(rect, radius, theme::rgba(theme::BG_TOP, 96));
         self.fill(rect, radius, theme::glass());
@@ -158,6 +199,9 @@ impl<H: Copy> Canvas<H> {
     /// The light-catching edge of frosted glass: a soft lighter band in the
     /// upper half and a hairline all round.
     pub fn frost_edge(&self, rect: Rect, radius: f32, k: f32) {
+        if theme::flat() {
+            return;
+        }
         let a = |v: f32| (v * k).clamp(0.0, 255.0) as u8;
         self.rounded_gradient(rect, radius, theme::WHITE, a(16.0), 0);
         self.outline(rect, radius, 1.0, theme::rgba(theme::WHITE, a(26.0)));
@@ -165,6 +209,10 @@ impl<H: Copy> Canvas<H> {
 
     /// A darker, more opaque glass for overlays that must read over content.
     pub fn sheet(&self, rect: Rect, radius: f32) {
+        if theme::flat() {
+            self.fill(rect, radius.min(28.0), theme::surface(3));
+            return;
+        }
         self.shadow(rect, radius, 24.0, 64.0, theme::rgba(theme::BLACK, 150));
         self.fill(rect, radius, theme::rgba(theme::PANEL, 248));
         self.outline(rect, radius, 1.0, theme::border_hi());
@@ -215,6 +263,9 @@ impl<H: Copy> Canvas<H> {
     /// in many fine rings, so the light has no visible edge or banding
     /// (the old five-ring glow looked "toy-like").
     pub fn glow(&self, x: f32, y: f32, radius: f32, color: Rgb, alpha: u8) {
+        if theme::flat() {
+            return;
+        }
         self.glow_ellipse(x, y, radius, radius, 0.0, color, alpha);
     }
 
@@ -231,6 +282,9 @@ impl<H: Copy> Canvas<H> {
         color: Rgb,
         alpha: u8,
     ) {
+        if theme::flat() {
+            return;
+        }
         let c = self.p(x, y);
         let (rx, ry) = (self.len(rx), self.len(ry));
         let (sa, ca) = angle.sin_cos();
@@ -403,11 +457,31 @@ impl<H: Copy> Canvas<H> {
         t
     }
 
-    /// Animate towards `target` with a short ease-out (0.18 s), keyed by
-    /// `id` (focus, the gliding highlight and scrolling all move
-    /// this way, quick start, soft landing, no overshoot).
+    /// Shared focus and scrolling: a short spring without overshoot.
+    /// Repeated input preserves velocity instead of restarting the curve.
     pub fn anim(&self, id: impl std::hash::Hash + std::fmt::Debug, target: f32) -> f32 {
-        self.anim_ease(id, target, 0.18)
+        self.spring(("shared", id), target, motion::FOCUS, 1.0).0
+    }
+
+    /// Animate only when the screen's identity changes, never on key repeats.
+    pub fn entrance<K: Clone + PartialEq + Send + Sync + 'static>(
+        &self,
+        id: impl std::hash::Hash + std::fmt::Debug,
+        key: K,
+        seconds: f32,
+    ) -> f32 {
+        let now = self.ctx.input(|i| i.time);
+        let id = egui::Id::new(("entrance", id));
+        let value = self.ctx.data_mut(|d| {
+            let entry = d.get_temp_mut_or_insert_with(id, || {
+                motion::Entrance::settled(key.clone(), now, seconds)
+            });
+            entry.sample(key, now, seconds)
+        });
+        if value < 1.0 {
+            self.ctx.request_repaint();
+        }
+        value
     }
 
     /// [`Self::anim`] over `secs`: cubic ease-out from wherever the value
@@ -453,27 +527,9 @@ impl<H: Copy> Canvas<H> {
     ) -> (f32, f32) {
         let id = egui::Id::new(("spring", id));
         let now = self.ctx.input(|i| i.time);
-        let k = (std::f32::consts::TAU / response.max(0.05)).powi(2);
-        let c = 2.0 * damping * k.sqrt();
         let (x, v, moving) = self.ctx.data_mut(|d| {
-            let e: &mut (f32, f32, f64) = d.get_temp_mut_or_insert_with(id, || (target, 0.0, now));
-            // After a pause (it was resting, nothing was drawn) it moves
-            // on from where it rested, one frame at a time.
-            let gap = now - e.2;
-            let mut dt = if gap > 0.1 { 1.0 / 60.0 } else { gap as f32 };
-            e.2 = now;
-            while dt > 0.0 {
-                let h = dt.min(1.0 / 240.0);
-                e.1 += (-k * (e.0 - target) - c * e.1) * h;
-                e.0 += e.1 * h;
-                dt -= h;
-            }
-            let scale = target.abs().max(1.0);
-            let moving = (e.0 - target).abs() > 1e-3 * scale || e.1.abs() > 1e-2 * scale;
-            if !moving {
-                (e.0, e.1) = (target, 0.0);
-            }
-            (e.0, e.1, moving)
+            let e = d.get_temp_mut_or_insert_with(id, || motion::Spring::new(target, now));
+            e.sample(target, now, response, damping)
         });
         if moving {
             self.ctx.request_repaint();
@@ -496,6 +552,10 @@ impl<H: Copy> Canvas<H> {
     /// and turn slowly so Home is never a still picture.
     /// Periods are long and unrelated, so it never visibly loops.
     pub fn background_at(&self, tint: Option<Rgb>, glow: bool, t: f64) {
+        if theme::flat() {
+            self.fill(self.screen, 0.0, theme::surface(0));
+            return;
+        }
         self.vgradient(
             self.screen,
             theme::rgb(theme::BG_TOP),
@@ -586,7 +646,9 @@ impl<H: Copy> Canvas<H> {
 
     /// Dim everything behind a modal overlay.
     pub fn scrim(&self) {
-        self.painter.rect_filled(self.screen, 0.0, theme::scrim());
+        if self.draw_scrim {
+            self.painter.rect_filled(self.screen, 0.0, theme::scrim());
+        }
     }
 
     /// A rounded rect filled with a top-to-bottom gradient (sheens on glass).
@@ -692,6 +754,9 @@ impl<H: Copy> Canvas<H> {
     /// dithered when it is quantised). `sigma` and `offset_y` in design
     /// units; `color` carries the shadow's colour and strength.
     pub fn soft_shadow(&self, rect: Rect, radius: f32, sigma: f32, offset_y: f32, color: Color32) {
+        if theme::flat() {
+            return;
+        }
         if color.a() == 0 {
             return;
         }
@@ -733,7 +798,7 @@ impl<H: Copy> Canvas<H> {
     /// down the corners (the 1-px inner highlight of focused glass).
     pub fn top_highlight(&self, rect: Rect, radius: f32, color: Color32) {
         use std::f32::consts::FRAC_PI_2;
-        if color.a() == 0 {
+        if color.a() == 0 || theme::flat() {
             return;
         }
         let w = (self.s * 0.45).max(1.0);
@@ -794,8 +859,7 @@ impl<H: Copy> Canvas<H> {
 
 /// Cubic ease-out: fast start, soft landing, never past 1.
 pub fn ease_out(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    1.0 - (1.0 - t).powi(3)
+    motion::ease_out(t)
 }
 
 /// The blurred rounded-rect texture behind [`Canvas::soft_shadow`]: white
@@ -886,4 +950,48 @@ fn box_blur(src: &[f32], dst: &mut [f32], n: usize, r: usize, horizontal: bool) 
 /// Convenience for `Vec2` in design units (used by layout code).
 pub fn dv(x: f32, y: f32) -> Vec2 {
     vec2(x, y)
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::*;
+
+    fn frame(ctx: &egui::Context, time: f64, mut draw: impl FnMut(Canvas<u8>)) {
+        ctx.run_ui(
+            egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 720.0))),
+                ..Default::default()
+            },
+            |ui| draw(Canvas::new(ui, 0)),
+        )
+        .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn real_frames_keep_entrance_state_until_content_changes() {
+        let ctx = egui::Context::default();
+        let mut value = 0.0;
+        frame(&ctx, 0.0, |c| value = c.entrance("page", 0, motion::PAGE));
+        assert_eq!(value, 1.0);
+        frame(&ctx, 0.1, |c| value = c.entrance("page", 1, motion::PAGE));
+        assert_eq!(value, 0.0);
+        frame(&ctx, 0.22, |c| value = c.entrance("page", 1, motion::PAGE));
+        assert!(value > 0.5 && value < 1.0);
+        frame(&ctx, 0.4, |c| value = c.entrance("page", 1, motion::PAGE));
+        assert_eq!(value, 1.0);
+    }
+
+    #[test]
+    fn moving_hit_targets_follow_the_surface_and_outgoing_ones_are_passive() {
+        let ctx = egui::Context::default();
+        frame(&ctx, 0.0, |c| {
+            let layer = c.translated(24.0, 16.0).opacity(0.5);
+            layer.hit(layer.r(100.0, 120.0, 80.0, 40.0), 1);
+            layer.passive().hit(layer.r(100.0, 120.0, 80.0, 40.0), 2);
+            let hits = c.take_hits();
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0], (c.r(124.0, 136.0, 80.0, 40.0), 1));
+        });
+    }
 }

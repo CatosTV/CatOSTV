@@ -1,11 +1,8 @@
 //! Shared visual tokens and global egui setup for shell and installer.
 //!
-//! Design direction: **dark glass**. A deep
-//! obsidian backdrop lit by soft colour glows; translucent "glass"
-//! surfaces with hairline borders; pill-shaped controls; focus = a lift,
-//! brighter glass, a bright specular ring and a coloured bloom underneath;
-//! one user-selectable accent colour (Settings → Customization) for selection,
-//! progress and blooms. Calm, label-first copy, no marketing sentences.
+//! Glassy uses translucent panels and soft light; Flat uses opaque,
+//! accent-tinted containers. Both share typography, controls and the
+//! selected accent (Settings → Customization).
 //!
 //! Colours are built with [`rgba`] from `(r, g, b)` tuples. Never derive a
 //! new colour from `Color32::r()/g()/b()` of a translucent colour: egui
@@ -13,9 +10,37 @@
 
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub type Rgb = (u8, u8, u8);
+
+static FLAT: AtomicBool = AtomicBool::new(false);
+
+pub fn set_theme(choice: catostv_core::prefs::Theme) {
+    FLAT.store(
+        choice == catostv_core::prefs::Theme::Flat,
+        Ordering::Relaxed,
+    );
+}
+
+pub fn flat() -> bool {
+    FLAT.load(Ordering::Relaxed)
+}
+
+pub fn blend(a: Rgb, b: Rgb, amount: f32) -> Rgb {
+    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * amount).round() as u8;
+    (mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2))
+}
+
+/// Opaque, accent-tinted containers, from the page to raised controls.
+pub fn surface(level: u8) -> Color32 {
+    let tone = [16, 22, 28, 34, 40][usize::from(level.min(4))];
+    rgb(blend((tone, tone, tone), accent_rgb(), 0.08))
+}
+
+pub fn primary_container() -> Color32 {
+    rgb(blend((24, 24, 24), accent_rgb(), 0.32))
+}
 
 /// Unmultiplied colour from an RGB tuple and alpha.
 pub fn rgba(c: Rgb, a: u8) -> Color32 {
@@ -44,22 +69,37 @@ pub fn text() -> Color32 {
 }
 /// Secondary text (labels, values).
 pub fn text2() -> Color32 {
+    if flat() {
+        return rgb(blend(INK, accent_rgb(), 0.15));
+    }
     rgba(INK, 165)
 }
 /// Tertiary text (hints, disabled).
 pub fn text3() -> Color32 {
+    if flat() {
+        return rgb(blend((150, 150, 150), accent_rgb(), 0.12));
+    }
     rgba(INK, 105)
 }
 /// Glass surface fill (panels).
 pub fn glass() -> Color32 {
+    if flat() {
+        return surface(2);
+    }
     rgba(WHITE, 15)
 }
 /// Raised glass (rows, tiles at rest).
 pub fn glass_hi() -> Color32 {
+    if flat() {
+        return surface(3);
+    }
     rgba(WHITE, 22)
 }
 /// Focused glass.
 pub fn glass_focus() -> Color32 {
+    if flat() {
+        return primary_container();
+    }
     rgba(WHITE, 44)
 }
 /// Bright edge of a focused element ("specular ring").

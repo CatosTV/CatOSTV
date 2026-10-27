@@ -1,14 +1,13 @@
 //! Shared TV components drawn on a [`Canvas`]. All sizes in design units.
 //!
-//! Focus language: the focused element lifts
-//! ~5 %, its glass brightens, it gets a bright specular ring and a soft
-//! coloured bloom underneath (the accent, or the app's colour on app
-//! tiles). Everything else keeps a quiet hairline. Controls are pills;
-//! cards are rounded squircles. Motion is a 0.18 s ease.
+//! Shared layout and motion for Glassy and Flat. Glassy focus uses a soft
+//! shadow and sheen; Flat uses opaque tonal fills and an accent outline.
+//! Controls are pills; cards lift as focus moves with a damped spring.
 
 use crate::canvas::Canvas;
 use crate::icons;
 use crate::images::Images;
+use crate::motion;
 use crate::theme::{self, Weight};
 use catostv_core::osk::{KeyKind, Osk, ROW_UNITS};
 use catostv_core::settings::{AppView, RowKind};
@@ -29,12 +28,21 @@ use eframe::egui::{Align2, Color32, Rect};
 //   [`focus_lift`] (a soft shadow) before the tile and [`focus_sheen`]
 //   (a white 12 % → 0 % sheen and a hairline) after its fill. Unfocused
 //   tiles stay flat.
-// * Motion: `Canvas::anim` eases out over 0.18 s; the scale and the
-//   gliding row highlight move together.
+// * Motion: `Canvas::anim` preserves velocity as focus changes; the
+//   scale and the gliding row highlight move together.
 
 /// Focus inside a row / button / key / chip / card (see the module notes).
 pub fn focus_pill<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
     if t <= 0.01 {
+        return;
+    }
+    if theme::flat() {
+        c.fill(
+            rect,
+            radius,
+            mix(theme::surface(2), theme::primary_container(), t),
+        );
+        c.outline(rect, radius, 2.0, theme::accent_a((255.0 * t) as u8));
         return;
     }
     c.rounded_gradient(
@@ -50,7 +58,7 @@ pub fn focus_pill<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
 /// Colour between `a` and `b` (t = 0 → a, 1 → b).
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
-    Color32::from_rgba_unmultiplied(
+    Color32::from_rgba_premultiplied(
         lerp(a.r(), b.r(), t),
         lerp(a.g(), b.g(), t),
         lerp(a.b(), b.b(), t),
@@ -62,6 +70,10 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 /// accent glow while focused (`t` = 1) and quiet frosted glass otherwise,
 /// so moving up from the rows into the bar is obvious.
 pub fn bar_pill<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
+    if theme::flat() {
+        c.fill(rect, radius, mix(theme::surface(3), theme::accent(), t));
+        return;
+    }
     if t > 0.01 {
         c.soft_shadow(rect, radius, 18.0, 2.0, theme::accent_a((130.0 * t) as u8));
     }
@@ -89,6 +101,10 @@ pub fn lifted<H: Copy>(c: &Canvas<H>, rect: Rect, t: f32) -> Rect {
 pub const LIFT: f32 = 0.06;
 pub const HOME_LIFT: f32 = 0.14;
 
+pub fn home_lift() -> f32 {
+    if theme::flat() { 0.045 } else { HOME_LIFT }
+}
+
 /// [`lifted`], growing by `grow` (×1.14 for 0.14) when focused.
 pub fn lifted_by<H: Copy>(c: &Canvas<H>, rect: Rect, t: f32, grow: f32) -> Rect {
     rect.scale_from_center(1.0 + grow * t)
@@ -97,7 +113,7 @@ pub fn lifted_by<H: Copy>(c: &Canvas<H>, rect: Rect, t: f32, grow: f32) -> Rect 
 
 /// The soft shadow under a focused tile (draw before the tile).
 pub fn focus_lift<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
-    if t <= 0.01 {
+    if t <= 0.01 || theme::flat() {
         return;
     }
     c.soft_shadow(
@@ -114,7 +130,7 @@ pub fn focus_lift<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
 /// rail. A real Gaussian (`Canvas::soft_shadow` in colour), no rings; it
 /// eases in and out with the focus. Draw before the tile.
 pub fn home_glow<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32, tint: theme::Rgb) {
-    if t <= 0.01 {
+    if t <= 0.01 || theme::flat() {
         return;
     }
     c.soft_shadow(
@@ -129,6 +145,10 @@ pub fn home_glow<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32, tint: 
 /// The light on a focused tile (draw after its fill).
 pub fn focus_sheen<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
     if t <= 0.01 {
+        return;
+    }
+    if theme::flat() {
+        c.outline(rect, radius, 2.0, theme::accent_a((255.0 * t) as u8));
         return;
     }
     c.rounded_gradient(rect, radius, theme::WHITE, (31.0 * t) as u8, 0);
@@ -157,6 +177,11 @@ pub fn lighten(c: theme::Rgb, k: f32) -> theme::Rgb {
 
 /// A glass card: a quiet pane and hairline; focus is [`focus_pill`].
 pub fn card<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
+    if theme::flat() {
+        c.fill(rect, radius, theme::surface(2));
+        focus_pill(c, rect, radius, t);
+        return;
+    }
     c.fill(rect, radius, theme::rgba(theme::WHITE, 14));
     c.outline(rect, radius, 1.0, theme::rgba(theme::WHITE, 20));
     focus_pill(c, rect, radius, t);
@@ -180,8 +205,18 @@ pub fn chip<H: Copy>(c: &Canvas<H>, x: f32, y: f32, label: &str, dot: Option<the
     let tw = c.text_width(label, 13.0, Weight::Medium);
     let w = tw + if dot.is_some() { 38.0 } else { 26.0 };
     let r = c.r(x, y, w, 28.0);
-    c.fill(r, 14.0, theme::rgba(theme::WHITE, 18));
-    c.outline(r, 14.0, 1.0, theme::border());
+    c.fill(
+        r,
+        14.0,
+        if theme::flat() {
+            theme::surface(3)
+        } else {
+            theme::rgba(theme::WHITE, 18)
+        },
+    );
+    if !theme::flat() {
+        c.outline(r, 14.0, 1.0, theme::border());
+    }
     let mut tx = x + 13.0;
     if let Some(d) = dot {
         c.circle(x + 15.0, y + 14.0, 4.0, theme::rgb(d));
@@ -208,7 +243,20 @@ pub fn chip_width<H: Copy>(c: &Canvas<H>, label: &str, dot: bool) -> f32 {
 /// with dark text; focus = [`focus_pill`].
 pub fn filter_chip<H: Copy>(c: &Canvas<H>, rect: Rect, label: &str, selected: bool, t: f32) {
     let r = rect.height() / c.s / 2.0;
-    if selected {
+    if theme::flat() {
+        c.fill(
+            rect,
+            r,
+            if selected {
+                theme::primary_container()
+            } else {
+                theme::surface(2)
+            },
+        );
+        if t > 0.01 {
+            c.outline(rect, r, 2.0, theme::accent_a((255.0 * t) as u8));
+        }
+    } else if selected {
         c.fill(rect, r, theme::rgba(theme::INK, 245));
         c.top_highlight(rect, r, theme::rgba(theme::WHITE, (150.0 * t) as u8));
     } else {
@@ -228,7 +276,9 @@ pub fn filter_chip<H: Copy>(c: &Canvas<H>, rect: Rect, label: &str, selected: bo
                 Weight::Medium
             },
         ),
-        if selected {
+        if theme::flat() {
+            theme::text()
+        } else if selected {
             theme::rgb((12, 14, 22))
         } else if t > 0.5 {
             theme::text()
@@ -257,7 +307,16 @@ pub fn icon_badge<H: Copy>(
         c.circle(cx, cy, r, theme::accent());
         icons::draw(c, icon, cx, cy, r * 0.95, theme::on_accent());
     } else {
-        c.circle(cx, cy, r, theme::rgba(theme::WHITE, lerp(16, 34, t)));
+        c.circle(
+            cx,
+            cy,
+            r,
+            if theme::flat() {
+                mix(theme::surface(3), theme::primary_container(), t)
+            } else {
+                theme::rgba(theme::WHITE, lerp(16, 34, t))
+            },
+        );
         icons::draw(
             c,
             icon,
@@ -342,8 +401,16 @@ pub fn app_tile_lift<H: Copy>(
     let tint = theme::app_rgb(&app.entry.accent);
     focus_lift(c, rect, radius, t);
     // Frosted glass tinted with the app's own colour.
-    c.fill(rect, radius, theme::rgba(theme::BG_TOP, 175));
-    c.fill(rect, radius, theme::rgba(tint, (34.0 + 26.0 * t) as u8));
+    if theme::flat() {
+        c.fill(
+            rect,
+            radius,
+            mix(theme::surface(2), theme::primary_container(), t),
+        );
+    } else {
+        c.fill(rect, radius, theme::rgba(theme::BG_TOP, 175));
+        c.fill(rect, radius, theme::rgba(tint, (34.0 + 26.0 * t) as u8));
+    }
     c.frost_edge(rect, radius, 1.0);
     focus_sheen(c, rect, radius, t);
     let alpha = if app.installed { 255 } else { 110 };
@@ -365,12 +432,17 @@ pub fn app_tile_lift<H: Copy>(
     } else {
         theme::text2()
     };
+    let label_size = if theme::flat() && w >= 210.0 {
+        18.0
+    } else {
+        15.0
+    };
     c.text(
         x + w / 2.0,
         y + h + 12.0 + 4.0 * t,
         Align2::CENTER_TOP,
-        &c.fit(&app.entry.name, w + 10.0, 15.0, Weight::Medium),
-        15.0,
+        &c.fit(&app.entry.name, w + 10.0, label_size, Weight::Medium),
+        label_size,
         ink,
         Weight::Medium,
     );
@@ -385,38 +457,68 @@ pub enum ButtonStyle {
 
 pub fn button<H: Copy>(c: &Canvas<H>, rect: Rect, label: &str, style: ButtonStyle, t: f32) {
     let radius = rect.height() / c.s / 2.0;
-    let (fill, ink) = match style {
-        // Like Danger: a tint at rest, solid when focused, so a column of
-        // them (Sleep, Restart) shows which one is picked.
-        ButtonStyle::Primary => (
-            theme::rgba(theme::accent_rgb(), lerp(40, 255, t)),
-            if t > 0.5 {
-                theme::on_accent()
-            } else {
-                theme::accent()
-            },
-        ),
-        ButtonStyle::Secondary => (
-            theme::rgba(theme::WHITE, lerp(12, 44, t)),
-            if t > 0.5 {
-                theme::text()
-            } else {
-                theme::text2()
-            },
-        ),
-        ButtonStyle::Danger => (
-            theme::rgba(theme::DANGER, lerp(40, 255, t)),
-            if t > 0.5 {
-                theme::rgb((24, 8, 8))
-            } else {
-                theme::rgb(theme::DANGER)
-            },
-        ),
+    let (fill, ink) = if theme::flat() {
+        match style {
+            ButtonStyle::Primary => (
+                mix(theme::primary_container(), theme::accent(), t),
+                if t > 0.5 {
+                    theme::on_accent()
+                } else {
+                    theme::text()
+                },
+            ),
+            ButtonStyle::Secondary => (
+                mix(theme::surface(3), theme::primary_container(), t),
+                theme::text(),
+            ),
+            ButtonStyle::Danger => (
+                mix(theme::surface(3), theme::rgb(theme::DANGER), t),
+                if t > 0.5 {
+                    theme::rgb((24, 8, 8))
+                } else {
+                    theme::rgb(theme::DANGER)
+                },
+            ),
+        }
+    } else {
+        match style {
+            // Like Danger: a tint at rest, solid when focused, so a column of
+            // them (Sleep, Restart) shows which one is picked.
+            ButtonStyle::Primary => (
+                theme::rgba(theme::accent_rgb(), lerp(40, 255, t)),
+                if t > 0.5 {
+                    theme::on_accent()
+                } else {
+                    theme::accent()
+                },
+            ),
+            ButtonStyle::Secondary => (
+                theme::rgba(theme::WHITE, lerp(12, 44, t)),
+                if t > 0.5 {
+                    theme::text()
+                } else {
+                    theme::text2()
+                },
+            ),
+            ButtonStyle::Danger => (
+                theme::rgba(theme::DANGER, lerp(40, 255, t)),
+                if t > 0.5 {
+                    theme::rgb((24, 8, 8))
+                } else {
+                    theme::rgb(theme::DANGER)
+                },
+            ),
+        }
     };
     // Focus stays inside the pill: the filled styles brighten and
     // get the frosted band and a light edge; Secondary is glass focus.
     c.fill(rect, radius, fill);
     match style {
+        _ if theme::flat() => {
+            if t > 0.01 {
+                c.outline(rect, radius, 2.0, theme::accent_a((255.0 * t) as u8));
+            }
+        }
         ButtonStyle::Secondary => {
             c.outline(rect, radius, 1.0, theme::rgba(theme::WHITE, 40));
             focus_pill(c, rect, radius, t);
@@ -574,13 +676,31 @@ pub fn tab_bar<H: Copy>(
 }
 
 /// iOS/Material-style switch. `None` draws a neutral unknown state.
-pub fn toggle<H: Copy>(c: &Canvas<H>, x: f32, y: f32, on: Option<bool>) {
+pub fn toggle<H: Copy>(
+    c: &Canvas<H>,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    x: f32,
+    y: f32,
+    on: Option<bool>,
+) {
     let track = c.r(x, y, 44.0, 26.0);
-    let (fill, knob_x) = match on {
-        Some(true) => (theme::accent(), x + 31.0),
-        Some(false) => (theme::rgba(theme::WHITE, 40), x + 13.0),
-        None => (theme::rgba(theme::WHITE, 20), x + 22.0),
+    let target = match on {
+        Some(true) => 1.0,
+        Some(false) => 0.0,
+        None => 0.5,
     };
+    let k = c.anim_ease(("toggle", id), target, motion::CONTROL);
+    let rest = if theme::flat() {
+        theme::surface(4)
+    } else {
+        theme::rgba(theme::WHITE, 40)
+    };
+    let fill = if on.is_none() {
+        rest
+    } else {
+        mix(rest, theme::accent(), k)
+    };
+    let knob_x = x + 13.0 + 18.0 * k;
     if on == Some(true) {
         c.shadow(track, 13.0, 0.0, 14.0, theme::accent_a(90));
     }
@@ -589,9 +709,17 @@ pub fn toggle<H: Copy>(c: &Canvas<H>, x: f32, y: f32, on: Option<bool>) {
 }
 
 /// Horizontal level bar (volume, picture fit, progress).
-pub fn level<H: Copy>(c: &Canvas<H>, x: f32, y: f32, w: f32, value: f32, color: Color32) {
+pub fn level<H: Copy>(
+    c: &Canvas<H>,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    x: f32,
+    y: f32,
+    w: f32,
+    value: f32,
+    color: Color32,
+) {
     c.fill(c.r(x, y, w, 6.0), 3.0, theme::rgba(theme::WHITE, 30));
-    let v = value.clamp(0.0, 1.0);
+    let v = c.anim_ease(("level", id), value.clamp(0.0, 1.0), motion::CONTROL);
     if v > 0.0 {
         c.fill(c.r(x, y, (w * v).max(6.0), 6.0), 3.0, color);
     }
@@ -628,9 +756,9 @@ pub fn list_row<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32) {
 }
 
 /// A row whose focus is drawn by the list (one highlight that glides from
-/// row to row, see [`glass_focus`]): `t` still brightens its text.
+/// row to row, see [`glass_focus`]). Flat draws focus over its opaque fill.
 pub fn list_row_under_highlight<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32) {
-    list_row_focus(c, rect, row, t, false);
+    list_row_focus(c, rect, row, t, theme::flat());
 }
 
 fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own_focus: bool) {
@@ -643,8 +771,18 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
     let radius = ROW_RADIUS;
     // Resting glass: a faint pane and hairline (no outer glow, no
     // lift; the focus stays inside the row and the panel).
-    c.fill(rect, radius, theme::rgba(theme::WHITE, 12));
-    c.outline(rect, radius, 1.0, theme::rgba(theme::WHITE, 14));
+    c.fill(
+        rect,
+        radius,
+        if theme::flat() {
+            theme::surface(2)
+        } else {
+            theme::rgba(theme::WHITE, 12)
+        },
+    );
+    if !theme::flat() {
+        c.outline(rect, radius, 1.0, theme::rgba(theme::WHITE, 14));
+    }
     if own_focus {
         focus_pill(c, rect, radius, t);
     }
@@ -725,11 +863,12 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
         );
     };
     match row.kind {
-        Some(RowKind::Toggle(on)) => toggle(c, rx - 44.0, cy - 13.0, on),
+        Some(RowKind::Toggle(on)) => toggle(c, row.title, rx - 44.0, cy - 13.0, on),
         Some(RowKind::Slider(v)) => {
             value_text(c, rx, theme::text2());
             level(
                 c,
+                row.title,
                 rx - 200.0,
                 cy - 3.0,
                 130.0,
@@ -822,9 +961,13 @@ fn heading_row<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow) {
 fn primary_row<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32) {
     let radius = ROW_RADIUS;
     let accent = theme::accent_rgb();
-    c.fill(rect, radius, theme::rgba(theme::BG_TOP, 120));
-    c.fill(rect, radius, theme::rgba(accent, lerp(46, 92, t)));
-    c.frost_edge(rect, radius, 1.0 + t);
+    if theme::flat() {
+        c.fill(rect, radius, theme::primary_container());
+    } else {
+        c.fill(rect, radius, theme::rgba(theme::BG_TOP, 120));
+        c.fill(rect, radius, theme::rgba(accent, lerp(46, 92, t)));
+        c.frost_edge(rect, radius, 1.0 + t);
+    }
     c.outline(
         rect,
         radius,
@@ -908,12 +1051,16 @@ pub fn text_field<H: Copy>(
     if focused {
         c.shadow(rect, radius, 0.0, 30.0, theme::accent_a(55));
     }
-    c.fill(rect, radius, theme::rgba(theme::BLACK, 70));
-    c.fill(
-        rect,
-        radius,
-        theme::rgba(theme::WHITE, if focused { 16 } else { 10 }),
-    );
+    if theme::flat() {
+        c.fill(rect, radius, theme::surface(3));
+    } else {
+        c.fill(rect, radius, theme::rgba(theme::BLACK, 70));
+        c.fill(
+            rect,
+            radius,
+            theme::rgba(theme::WHITE, if focused { 16 } else { 10 }),
+        );
+    }
     c.outline(
         rect,
         radius,
@@ -1010,7 +1157,15 @@ pub fn keys<H: Copy>(
             let r = key_h / 2.0;
             let special = !matches!(key.kind, KeyKind::Char(_));
             let done = key.kind == KeyKind::Done;
-            let fill = if done {
+            let fill = if theme::flat() {
+                if done {
+                    theme::primary_container()
+                } else if special {
+                    theme::surface(2)
+                } else {
+                    theme::surface(3)
+                }
+            } else if done {
                 theme::accent_a(70)
             } else if special {
                 theme::rgba(theme::WHITE, 12)
@@ -1091,7 +1246,11 @@ pub fn keyboard_height() -> f32 {
 /// travelling sine wave in the accent, the rest a flat track ending in a
 /// small stop dot. `now` (seconds) moves the wave.
 pub fn progress_bar<H: Copy>(c: &Canvas<H>, x: f32, y: f32, w: f32, fraction: f32, now: f64) {
-    let f = fraction.clamp(0.0, 1.0);
+    let f = c.anim_ease(
+        ("progress", x.to_bits(), y.to_bits()),
+        fraction.clamp(0.0, 1.0),
+        motion::CONTROL,
+    );
     let cy = y + 4.0;
     let stroke = 4.0;
     let amp = 3.0;

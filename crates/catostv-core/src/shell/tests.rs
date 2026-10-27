@@ -84,6 +84,80 @@ fn press(s: &mut Shell, f: &Fixture, actions: &[Action]) -> Vec<Effect> {
     all
 }
 
+#[test]
+fn cast_receiver_switch_uses_saved_choice_instead_of_daemon_presence() {
+    let mut f = Fixture::new();
+    let mut s = Shell::new();
+    open_settings(&mut s, &f, Category::Connect);
+    s.settings_rows_focus = true;
+    s.settings_row = 0;
+    let rows = s.settings_rows(&f.ctx());
+    assert_eq!(rows[0].id, RowId::CastReceiver);
+    assert_eq!(rows[0].kind, RowKind::Toggle(Some(true)));
+    assert_eq!(
+        press(&mut s, &f, &[Action::Ok]),
+        vec![Effect::SetCastEnabled(false)]
+    );
+    assert!(s.overlay().is_none());
+    f.prefs.cast_enabled = false;
+    f.sys.cast_running = true;
+    assert_eq!(
+        s.settings_rows(&f.ctx())[0].kind,
+        RowKind::Toggle(Some(false))
+    );
+    assert_eq!(
+        press(&mut s, &f, &[Action::Ok]),
+        vec![Effect::SetCastEnabled(true)]
+    );
+}
+
+#[test]
+fn theme_changes_only_while_the_choice_is_being_edited() {
+    let mut f = Fixture::new();
+    let mut s = Shell::new();
+    s.open_page(Page::Settings);
+    s.settings_cat = Category::ALL
+        .iter()
+        .position(|c| *c == Category::Customization)
+        .unwrap();
+    s.settings_rows_focus = true;
+    s.settings_row = settings::rows(Category::Customization, &f.ctx())
+        .iter()
+        .position(|r| r.id == RowId::Theme)
+        .unwrap();
+    assert!(press(&mut s, &f, &[Action::Ok]).is_empty());
+    assert!(s.settings_editing.is_some());
+    assert_eq!(
+        press(&mut s, &f, &[Action::Right]),
+        vec![Effect::SetTheme(prefs::Theme::Flat)]
+    );
+    f.prefs.theme = prefs::Theme::Flat;
+    assert!(
+        settings::rows(Category::Customization, &f.ctx())
+            .iter()
+            .find(|r| r.id == RowId::HomeBackground)
+            .unwrap()
+            .disabled
+    );
+    assert_eq!(
+        press(&mut s, &f, &[Action::Left]),
+        vec![Effect::SetTheme(prefs::Theme::Glassy)]
+    );
+    f.prefs.theme = prefs::Theme::Glassy;
+    assert!(
+        !settings::rows(Category::Customization, &f.ctx())
+            .iter()
+            .find(|r| r.id == RowId::HomeBackground)
+            .unwrap()
+            .disabled
+    );
+    assert!(press(&mut s, &f, &[Action::Back]).is_empty());
+    assert!(s.settings_editing.is_none());
+    assert_eq!(f.prefs.accent, prefs::DEFAULT_ACCENT);
+    assert!(press(&mut s, &f, &[Action::Left]).is_empty());
+    assert!(!s.settings_rows_focus);
+}
+
 fn cat_index(c: Category) -> usize {
     Category::ALL.iter().position(|x| *x == c).unwrap()
 }
@@ -307,6 +381,10 @@ fn settings_sliders_choices_and_soon_rows() {
 
     // Accent: OK, then Left/Right move the ring, OK picks.
     open_settings(&mut s, &f, Category::Customization);
+    s.settings_row = settings::rows(Category::Customization, &f.ctx())
+        .iter()
+        .position(|r| r.id == RowId::Accent)
+        .unwrap();
     assert_eq!(press(&mut s, &f, &[Ok, Right]), vec![]);
     assert_eq!(
         press(&mut s, &f, &[Ok]),
@@ -323,8 +401,12 @@ fn settings_sliders_choices_and_soon_rows() {
     // Customization: OK, then Left/Right change the clock format and the
     // Home background.
     open_settings(&mut s, &f, Category::Customization);
+    s.settings_row = settings::rows(Category::Customization, &f.ctx())
+        .iter()
+        .position(|r| r.id == RowId::ClockFormat)
+        .unwrap();
     assert_eq!(
-        press(&mut s, &f, &[Down, Ok, Right]),
+        press(&mut s, &f, &[Ok, Right]),
         vec![Effect::SetClock24(false)]
     );
     assert_eq!(
@@ -993,7 +1075,14 @@ fn pointer_hover_focuses_and_click_activates() {
     );
     assert!(s.settings_rows_focus);
     // A click on the accent row only focuses it (no colour jump).
-    assert_eq!(s.pointer(Target::SettingsRow(0), true, &f.ctx()), vec![]);
+    let accent = settings::rows(Category::Customization, &f.ctx())
+        .iter()
+        .position(|r| r.id == RowId::Accent)
+        .unwrap();
+    assert_eq!(
+        s.pointer(Target::SettingsRow(accent), true, &f.ctx()),
+        vec![]
+    );
     // On-screen keyboard keys.
     s.handle_ipc(ShellCommand::Search);
     s.pointer(Target::SearchKey(1, 0), true, &f.ctx());
@@ -1676,7 +1765,11 @@ fn screensaver_options_grey_out_while_it_is_off() {
     let mut f = Fixture::new();
     let mut s = Shell::new();
     open_settings(&mut s, &f, Category::Customization);
-    press(&mut s, &f, &[Down, Down, Down, Down]);
+    s.settings_row = settings::rows(Category::Customization, &f.ctx())
+        .iter()
+        .position(|r| r.id == RowId::SaverPictures)
+        .unwrap();
+    let pictures_row = s.settings_row;
     assert_eq!(
         press(&mut s, &f, &[Ok, Right]),
         vec![Effect::SetSaverPictures("photos".into())]
@@ -1686,7 +1779,7 @@ fn screensaver_options_grey_out_while_it_is_off() {
     assert!(press(&mut s, &f, &[Ok]).is_empty());
     // Still passed over to the next row.
     press(&mut s, &f, &[Down]);
-    assert_eq!(s.settings_row, 5);
+    assert_eq!(s.settings_row, pictures_row + 1);
 }
 
 #[test]
@@ -1876,4 +1969,139 @@ fn quick_settings_vpn_panel() {
     // Last row: Add a VPN.
     assert_eq!(press(&mut s, &f, &[Down, Ok]), vec![Effect::VpnFindFiles]);
     assert!(matches!(s.overlay(), Some(Overlay::VpnAdd { .. })));
+}
+
+#[test]
+fn home_player_focus_returns_to_apps_and_recovers_when_playback_ends() {
+    for theme in [prefs::Theme::Flat, prefs::Theme::Glassy] {
+        let mut f = Fixture::new();
+        f.prefs.theme = theme;
+        f.media.now_playing = vec![crate::playback::NowPlaying {
+            source: crate::playback::Source::CatTube,
+            title: "Video".into(),
+            paused: true,
+            position: 30.0,
+            duration: Some(120.0),
+            artwork: Vec::new(),
+        }];
+        f.media.home = vec![crate::fin::Row {
+            title: "Continue watching".into(),
+            items: vec![crate::jellyfin::Item::default()],
+            libraries: false,
+        }];
+        let mut s = Shell::new();
+        s.rail_index = 2;
+        press(&mut s, &f, &[Up]);
+        assert!(s.home_now_playing && !s.top_focus);
+        assert_eq!(
+            press(&mut s, &f, &[Ok]),
+            vec![Effect::ResumeNowPlaying(crate::playback::Source::CatTube)]
+        );
+        press(&mut s, &f, &[Down]);
+        assert!(!s.home_now_playing);
+        assert_eq!(s.rail_index, 2);
+        press(&mut s, &f, &[Up, Up]);
+        assert!(s.top_focus);
+        press(&mut s, &f, &[Down]);
+        assert!(s.home_now_playing && !s.top_focus);
+        press(&mut s, &f, &[Back, Down]);
+        assert_eq!(s.home_media, Some((0, 0)));
+        assert!(!s.home_now_playing);
+        assert!(
+            s.pointer(
+                Target::NowPlaying(crate::playback::Source::CatTube),
+                true,
+                &f.ctx()
+            )
+            .is_empty()
+        );
+        assert_eq!(s.home_media, Some((0, 0)));
+        press(&mut s, &f, &[Up]);
+        assert_eq!(
+            s.pointer(
+                Target::NowPlaying(crate::playback::Source::CatTube),
+                true,
+                &f.ctx()
+            ),
+            vec![Effect::ResumeNowPlaying(crate::playback::Source::CatTube)]
+        );
+        assert!(s.home_now_playing && !s.top_focus);
+        f.media.now_playing.clear();
+        s.clamp(&f.ctx());
+        assert!(!s.home_now_playing);
+        assert!(
+            s.pointer(
+                Target::NowPlaying(crate::playback::Source::CatTube),
+                true,
+                &f.ctx()
+            )
+            .is_empty()
+        );
+        s.pointer(Target::Rail(3), false, &f.ctx());
+        assert_eq!(s.rail_index, 3);
+        press(&mut s, &f, &[Up]);
+        assert!(s.top_focus && !s.home_now_playing);
+    }
+}
+
+#[test]
+fn home_players_scroll_resume_by_source_and_keep_selection_when_list_changes() {
+    use crate::playback::{NowPlaying, Source};
+    for theme in [prefs::Theme::Flat, prefs::Theme::Glassy] {
+        let mut f = Fixture::new();
+        f.prefs.theme = theme;
+        let player = |source| NowPlaying {
+            source,
+            title: "Same title".into(),
+            paused: true,
+            position: 12.5,
+            duration: Some(120.0),
+            artwork: Vec::new(),
+        };
+        f.media.now_playing = vec![
+            player(Source::CatTube),
+            player(Source::Catfyn),
+            player(Source::Player),
+        ];
+        let mut s = Shell::new();
+        press(&mut s, &f, &[Up, Right, Ok]);
+        assert_eq!(s.home_player, Some(Source::Catfyn));
+        assert_eq!(
+            press(&mut s, &f, &[Ok]),
+            vec![Effect::ResumeNowPlaying(Source::Catfyn)]
+        );
+        f.media.now_playing.swap(0, 1);
+        s.clamp(&f.ctx());
+        assert_eq!(s.home_player, Some(Source::Catfyn));
+        f.media.now_playing.retain(|p| p.source != Source::CatTube);
+        assert_eq!(
+            press(&mut s, &f, &[Ok]),
+            vec![Effect::ResumeNowPlaying(Source::Catfyn)]
+        );
+        assert_eq!(
+            press(&mut s, &f, &[Right, Right, Ok]),
+            vec![Effect::ResumeNowPlaying(Source::Player)]
+        );
+        press(&mut s, &f, &[Down]);
+        assert_eq!(
+            s.pointer(Target::NowPlaying(Source::Catfyn), true, &f.ctx()),
+            vec![Effect::ResumeNowPlaying(Source::Catfyn)]
+        );
+        f.media.now_playing.retain(|p| p.source != Source::Catfyn);
+        s.clamp(&f.ctx());
+        assert_eq!(s.home_player, Some(Source::Player));
+        assert!(s.home_now_playing);
+        assert!(
+            s.pointer(Target::NowPlaying(Source::Catfyn), true, &f.ctx())
+                .is_empty()
+        );
+        assert_eq!(
+            press(&mut s, &f, &[Left, Ok]),
+            vec![Effect::ResumeNowPlaying(Source::Player)]
+        );
+        f.media.now_playing.clear();
+        s.clamp(&f.ctx());
+        assert_eq!(s.home_player, None);
+        assert!(!s.home_now_playing);
+    }
 }

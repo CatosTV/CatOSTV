@@ -239,6 +239,7 @@ pub enum RowId {
     AudioOutput,
     HdmiAudio,
     Accent,
+    Theme,
     ClockFormat,
     Screensaver,
     SaverPictures,
@@ -626,6 +627,13 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
         }
         Category::Customization => vec![
             row(
+                RowId::Theme,
+                "Theme",
+                "",
+                ctx.prefs.theme.label(),
+                RowKind::Choice,
+            ),
+            row(
                 RowId::Accent,
                 "Accent colour",
                 "",
@@ -649,7 +657,8 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                 "Behind Home and the other pages",
                 crate::prefs::home_background_label(&ctx.prefs.home_background),
                 RowKind::Choice,
-            ),
+            )
+            .disabled_if(ctx.prefs.theme == prefs::Theme::Flat),
             row(
                 RowId::Screensaver,
                 "Screensaver",
@@ -729,8 +738,8 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                     RowId::CastReceiver,
                     "Cast to this TV",
                     "DLNA and YouTube",
-                    if sys.cast_running { "On" } else { "Off" },
-                    RowKind::Info,
+                    "",
+                    RowKind::Toggle(Some(ctx.prefs.cast_enabled)),
                 ),
                 match &sys.remote {
                     Some(r) => row(

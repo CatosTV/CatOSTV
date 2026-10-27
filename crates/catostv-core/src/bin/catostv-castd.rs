@@ -9,7 +9,9 @@
 //!
 //! Usage: catostv-castd [--name <friendly name>] [--port N] [--no-dial] [--no-dlna]
 
-use catostv_core::{compositor, dial, dlna, env, http, mpv, process::SystemRunner, signal, ssdp};
+use catostv_core::{
+    compositor, dial, dlna, env, http, mpv, prefs, process::SystemRunner, signal, ssdp,
+};
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,6 +97,14 @@ fn main() {
         eprintln!("catostv-castd: cannot handle SIGTERM ({e}); byebye will be skipped");
     }
 
+    // Stay supervised while disabled, without a listener or SSDP socket.
+    while !prefs::load().cast_enabled {
+        if signal::termination_requested() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
     let uuid = dlna::load_or_create_uuid(&dlna::uuid_path()).unwrap_or_else(|e| {
         eprintln!("catostv-castd: cannot persist the device id ({e}); using a temporary one");
         http::uuid_v4().unwrap_or_else(|_| "00000000-0000-4000-8000-000000000000".into())
@@ -164,6 +174,9 @@ fn main() {
 
     let (h_dlna, h_dial) = (dlna_ctx.clone(), dial_ctx.clone());
     let handler: Arc<http::Handler> = Arc::new(move |req: &http::Request| {
+        if !prefs::load().cast_enabled {
+            return http::Response::status_only(503);
+        }
         if let Some(d) = &h_dlna
             && let Some(resp) = dlna::handle_http(req, d)
         {
@@ -243,7 +256,7 @@ fn main() {
         if dial_ctx.is_some() { "on" } else { "off" },
     );
 
-    while !signal::termination_requested() {
+    while !signal::termination_requested() && prefs::load().cast_enabled {
         thread::sleep(Duration::from_millis(200));
     }
     eprintln!("catostv-castd: stopping");

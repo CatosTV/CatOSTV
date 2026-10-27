@@ -525,21 +525,38 @@ fn segments(device: &str, a: &Account, item: &Item) -> Option<String> {
     }
 }
 
-/// A volume key while a film plays: change the volume and have the
-/// player's control bar draw the panel (`catfyn-volume PCT MUTED OUTPUT
-/// MORE`, see catfyn-osd.lua). `volume-outputs` is not handled here (the
+/// A volume key while native video plays: change the volume and have its
+/// control bar draw the panel (`catostv-volume`, see the player Lua).
+/// `volume-outputs` is not handled here (the
 /// list is the shell's own). False when the player does not answer: the
 /// shell's panel shows instead.
-pub fn player_volume(cmd: catostv_core::ipc::ShellCommand) -> bool {
+pub fn player_volume(
+    cmd: catostv_core::ipc::ShellCommand,
+    source: catostv_core::playback::Source,
+) -> bool {
     use catostv_core::audio;
     use catostv_core::ipc::ShellCommand;
     use catostv_core::volume_panel::{STEP, sink_label};
     // One change at a time, so quick presses land in order.
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let socket = jf::player_socket();
+    if !matches!(
+        cmd,
+        ShellCommand::VolumeUp | ShellCommand::VolumeDown | ShellCommand::Mute
+    ) {
+        return false;
+    }
+    let socket = catostv_core::env::runtime_dir().join(source.socket());
     // The player answers first: the volume changes only once.
-    if mpv::ipc_request(&socket, &[Arg::Str("client_name")]).is_err() {
+    if !mpv::ipc_request(
+        &socket,
+        &[
+            Arg::Str("get_property"),
+            Arg::Str("user-data/catostv/volume-osd"),
+        ],
+    )
+    .is_ok_and(|v| v.as_str() == Some("yes"))
+    {
         return false;
     }
     let mut r = SystemRunner;
@@ -550,7 +567,7 @@ pub fn player_volume(cmd: catostv_core::ipc::ShellCommand) -> bool {
         _ => return false,
     };
     let Ok(v) = state else {
-        return false;
+        return true;
     };
     let sinks = audio::sinks(&mut r).unwrap_or_default();
     let output = sinks
@@ -559,16 +576,23 @@ pub fn player_volume(cmd: catostv_core::ipc::ShellCommand) -> bool {
         .map(|i| sink_label(&sinks, i))
         .unwrap_or_default();
     let yes_no = |b: bool| if b { "yes" } else { "no" };
+    let (r, g, b) = crate::theme::accent_rgb();
+    let accent = format!("{r:02x}{g:02x}{b:02x}");
     let _ = mpv::ipc_request(
         &socket,
         &[
-            Arg::Str("script-message-to"),
-            Arg::Str("catfyn_osd"),
-            Arg::Str("catfyn-volume"),
+            Arg::Str("script-message"),
+            Arg::Str("catostv-volume"),
             Arg::Str(&v.percent.to_string()),
             Arg::Str(yes_no(v.muted)),
             Arg::Str(&output),
             Arg::Str(yes_no(sinks.len() > 1)),
+            Arg::Str(if crate::theme::flat() {
+                "flat"
+            } else {
+                "glassy"
+            }),
+            Arg::Str(&accent),
         ],
     );
     true
@@ -741,6 +765,25 @@ pub fn spawn_reporter(
                         Arg::Str("catfyn_osd"),
                         Arg::Str("catfyn-subs"),
                         Arg::Str(&names.join(";")),
+                    ]);
+                }
+                if let Ok(path) = conn.command(&[Arg::Str("get_property"), Arg::Str("path")])
+                    && let Some(path) = path.as_str()
+                {
+                    let art_item = Item {
+                        server: a.server.clone(),
+                        backend: a.backend,
+                        ..item.clone()
+                    };
+                    let metadata = format!(
+                        "{{\"path\":{},\"url\":{}}}",
+                        mpv::json_string(path),
+                        mpv::json_string(&jf::wide_url(&art_item))
+                    );
+                    let _ = conn.command(&[
+                        Arg::Str("set_property"),
+                        Arg::Str("user-data/catostv/now-playing"),
+                        Arg::Str(&metadata),
                     ]);
                 }
                 send(&item, Report::Start, last.0, last.1);

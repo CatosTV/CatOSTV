@@ -27,6 +27,9 @@ pub fn draw(c: &C, f: &Installer, now: f64) {
     draw_sidebar(c, f);
     let main = c.r(320.0, 32.0, 928.0, 656.0);
     c.glass(main, 28.0);
+    let enter = c.entrance("installer-step", f.step, crate::motion::PAGE);
+    let content = c.translated(0.0, 14.0 * (1.0 - enter)).opacity(enter);
+    let c = &content;
     match f.step {
         Step::Welcome => draw_welcome(c, f, now),
         Step::Keyboard => draw_keyboard(c, f),

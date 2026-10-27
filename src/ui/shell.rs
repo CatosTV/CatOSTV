@@ -8,6 +8,7 @@
 use crate::canvas::Canvas;
 use crate::icons;
 use crate::images::Images;
+use crate::motion;
 use crate::theme::{self, Weight};
 use crate::widgets::{self, ButtonStyle, ListRow};
 use catostv_core::installer::Scan;
@@ -98,10 +99,7 @@ pub fn draw(c: &C, v: &ShellView) {
     }
     let s = v.shell;
     if v.over_app {
-        if let Some(o) = s.overlay() {
-            c.hit(c.screen, Target::Outside);
-            draw_overlay(c, v, o);
-        }
+        draw_animated_overlay(c, v);
         if let Some((text, alpha)) = v.toast {
             widgets::toast(c, text, alpha);
         }
@@ -124,44 +122,45 @@ pub fn draw(c: &C, v: &ShellView) {
     // Same clock on every page (no jump when leaving Home); only Home
     // keeps frames coming, so elsewhere the light simply holds still.
     backdrop(c, v, tint);
-    // Page transitions: the new page rises a little and fades in.
-    let ease = 1.0 - (1.0 - v.page_t).powi(3);
     let fin_open = s.fin.is_some() || s.files.is_some();
+    let key = (
+        s.page,
+        s.store_details.as_ref().map(|(id, _)| id.clone()),
+        fin_open,
+        v.ctx.prefs.theme,
+    );
+    let enter = c.entrance("shell-content", key, motion::PAGE);
+    let content = c.translated(0.0, 14.0 * (1.0 - enter)).opacity(enter);
     if let Some(f) = &s.fin {
         let pics = crate::ui::fin::FinPics {
             images: v.images,
             cache: v.fin_cache,
             wanted: v.fin_wanted,
         };
-        crate::ui::fin::draw(c, f, &v.ctx.media.accounts, v.ctx.prefs, &pics, v.now);
+        crate::ui::fin::draw(
+            &content,
+            f,
+            &v.ctx.media.accounts,
+            v.ctx.prefs,
+            &pics,
+            v.now,
+        );
     } else if let Some(f) = &s.files {
-        crate::ui::files::draw(c, f, v.images, v.now);
+        crate::ui::files::draw(&content, f, v.images, v.now);
     } else {
         match s.page {
-            Page::Home => draw_home(c, v),
-            Page::Recents => draw_recents(c, v),
-            Page::Apps => draw_apps(c, v),
-            Page::Store => draw_store(c, v),
-            Page::Search => draw_search(c, v),
-            Page::Settings => draw_settings(c, v),
+            Page::Home => draw_home(&content, v),
+            Page::Recents => draw_recents(&content, v),
+            Page::Apps => draw_apps(&content, v),
+            Page::Store => draw_store(&content, v),
+            Page::Search => draw_search(&content, v),
+            Page::Settings => draw_settings(&content, v),
         }
-    }
-    if ease < 0.999 && !fin_open {
-        // Fade the page content in from the backdrop colour (the top bar is
-        // drawn after this, so it stays put while pages change beneath it).
-        c.fill(
-            c.screen,
-            0.0,
-            theme::rgba(theme::BG_TOP, (210.0 * (1.0 - ease)) as u8),
-        );
     }
     if s.page != Page::Settings && !fin_open {
         draw_top_bar(c, v);
     }
-    if let Some(o) = s.overlay() {
-        c.hit(c.screen, Target::Outside);
-        draw_overlay(c, v, o);
-    }
+    draw_animated_overlay(c, v);
     if let Some((id, secs, k)) = v.launch_splash {
         draw_launch_splash(c, v, id, secs, k);
     }
@@ -175,9 +174,59 @@ pub fn draw(c: &C, v: &ShellView) {
     draw_volume_panel(c, v);
 }
 
+fn draw_animated_overlay(c: &C, v: &ShellView) {
+    let current = v.shell.overlay();
+    let shown = c.remember("last-overlay", |old: Option<Option<Overlay>>| {
+        current.cloned().or_else(|| old.flatten())
+    });
+    let open = c.anim_ease(
+        "overlay-visible",
+        if current.is_some() { 1.0 } else { 0.0 },
+        motion::SHEET,
+    );
+    if open < 0.001 {
+        return;
+    }
+    let Some(overlay) = shown else { return };
+    let enter = c.entrance(
+        "overlay-kind",
+        std::mem::discriminant(&overlay),
+        motion::SHEET,
+    );
+    let k = open.min(enter);
+    // Keep the scrim still when one panel opens another.
+    c.opacity(open).scrim();
+    c.hit(c.screen, Target::Outside);
+    let side = matches!(
+        overlay,
+        Overlay::Quick { .. }
+            | Overlay::QuickNetwork { .. }
+            | Overlay::QuickBluetooth { .. }
+            | Overlay::QuickVpn { .. }
+            | Overlay::Ethernet { .. }
+    );
+    let panel = c
+        .translated(
+            if side { 28.0 * (1.0 - k) } else { 0.0 },
+            if side { 0.0 } else { 16.0 * (1.0 - k) },
+        )
+        .opacity(k)
+        .without_scrim();
+    let panel = if current.is_some() {
+        panel
+    } else {
+        panel.passive()
+    };
+    draw_overlay(&panel, v, &overlay);
+}
+
 /// Behind every page: the drifting glow, or softly blurred pictures that
 /// change slowly, dimmed so the interface reads on any of them.
 fn backdrop(c: &C, v: &ShellView, tint: Option<theme::Rgb>) {
+    if theme::flat() {
+        c.background_at(None, false, v.now);
+        return;
+    }
     use crate::ui::saver::slide_for;
     let Some(show) = v.home_bg.filter(|s| s.cur.is_some()) else {
         c.background_at(tint, true, v.now);
@@ -422,18 +471,40 @@ fn draw_top_bar(c: &C, v: &ShellView) {
 /// the focus.
 fn draw_volume_panel(c: &C, v: &ShellView) {
     use catostv_core::volume_panel::{sink_icon, sink_label};
-    let Some(panel) = &v.shell.volume else {
+    let open = c.anim_ease(
+        "volume-visible",
+        if v.shell.volume.is_some() { 1.0 } else { 0.0 },
+        motion::SHEET,
+    );
+    let shown = c.remember(
+        "last-volume",
+        |old: Option<Option<catostv_core::volume_panel::VolumePanel>>| {
+            v.shell.volume.clone().or_else(|| old.flatten())
+        },
+    );
+    let Some(panel) = shown.filter(|_| open > 0.001) else {
         return;
     };
+    let c = c.opacity(open);
+    let c = if v.shell.volume.is_some() {
+        c
+    } else {
+        c.passive()
+    };
+    let c = &c;
     let vol = v.ctx.sys.volume.unwrap_or_default();
     let sinks = &v.ctx.sys.sinks;
-    let ease = 1.0 - (1.0 - v.volume_t.clamp(0.0, 1.0)).powi(3);
+    let ease = (1.0 - (1.0 - v.volume_t.clamp(0.0, 1.0)).powi(3)).min(open);
     let (w, h) = (64.0, 280.0);
     let x = 1280.0 - 28.0 - w + (1.0 - ease) * (w + 440.0);
     let y = 220.0;
     let cx = x + w / 2.0;
     let pill = c.r(x, y, w, h);
-    c.sheet(pill, w / 2.0);
+    if theme::flat() {
+        c.fill(pill, w / 2.0, theme::surface(3));
+    } else {
+        c.sheet(pill, w / 2.0);
+    }
     let list_open = panel.outputs.is_some();
     let ring = c.anim("volume-ring", if list_open { 0.0 } else { 1.0 });
     if ring > 0.01 {
@@ -441,7 +512,11 @@ fn draw_volume_panel(c: &C, v: &ShellView) {
             widgets::grow(pill, 0.0),
             w / 2.0,
             2.0,
-            theme::rgba(theme::WHITE, (150.0 * ring) as u8),
+            if theme::flat() {
+                theme::accent_a((85.0 * ring) as u8)
+            } else {
+                theme::rgba(theme::WHITE, (150.0 * ring) as u8)
+            },
         );
     }
 
@@ -450,7 +525,16 @@ fn draw_volume_panel(c: &C, v: &ShellView) {
     if vol.muted {
         c.circle(cx, my, 22.0, theme::accent());
     } else {
-        c.circle(cx, my, 22.0, theme::rgba(theme::WHITE, 18));
+        c.circle(
+            cx,
+            my,
+            22.0,
+            if theme::flat() {
+                theme::primary_container()
+            } else {
+                theme::rgba(theme::WHITE, 18)
+            },
+        );
     }
     icons::draw(
         c,
@@ -470,7 +554,11 @@ fn draw_volume_panel(c: &C, v: &ShellView) {
     c.fill(
         c.r(cx - tw / 2.0, ty, tw, th),
         tw / 2.0,
-        theme::rgba(theme::WHITE, 22),
+        if theme::flat() {
+            theme::surface(4)
+        } else {
+            theme::rgba(theme::WHITE, 22)
+        },
     );
     let k = c.anim("volume-level", vol.percent as f32 / 100.0);
     if k > 0.005 {
@@ -538,7 +626,16 @@ fn draw_volume_panel(c: &C, v: &ShellView) {
     let ly = (y + h - lh).max(40.0);
     let list = c.r(lx, ly, lw, lh);
     c.sheet(list, 28.0);
-    c.outline(list, 28.0, 2.0, theme::rgba(theme::WHITE, 150));
+    c.outline(
+        list,
+        28.0,
+        2.0,
+        if theme::flat() {
+            theme::accent_a(85)
+        } else {
+            theme::rgba(theme::WHITE, 150)
+        },
+    );
     c.text(
         lx + 24.0,
         ly + 34.0,
@@ -631,8 +728,167 @@ fn draw_launch_splash(c: &C, v: &ShellView, id: &str, secs: f32, fade: f32) {
     }
 }
 
+fn home_now_playing(
+    c: &C,
+    v: &ShellView,
+    item: &catostv_core::playback::NowPlaying,
+    focused: bool,
+    width: f32,
+) {
+    let t = focus_t(c, ("home-player-focus", item.source.app()), focused);
+    let rect = c.r(64.0, 122.0, width, 220.0);
+    if theme::flat() {
+        c.fill(
+            rect,
+            28.0,
+            widgets::mix(theme::surface(2), theme::primary_container(), t),
+        );
+    } else {
+        c.glass(rect, 28.0);
+        c.fill(rect, 28.0, theme::accent_a((24.0 * t) as u8));
+    }
+    if t > 0.001 {
+        c.outline(rect, 28.0, 2.5, theme::accent_a((255.0 * t) as u8));
+    }
+    let picture = c.r(84.0, 142.0, 304.0, 171.0);
+    c.fill(
+        picture,
+        18.0,
+        if theme::flat() {
+            theme::surface(3)
+        } else {
+            theme::glass_hi()
+        },
+    );
+    let pics = crate::ui::fin::FinPics {
+        images: v.images,
+        cache: v.fin_cache,
+        wanted: v.fin_wanted,
+    };
+    let artwork = item
+        .artwork
+        .iter()
+        .filter_map(|url| pics.get(c, url).map(|tex| (url, tex)))
+        .next();
+    if let Some((url, tex)) = artwork {
+        c.image_rounded_uv(
+            picture,
+            18.0,
+            tex,
+            crate::ui::fin::cover(pics.size(url), 304.0, 171.0),
+            Color32::WHITE,
+        );
+    } else {
+        icons::draw(c, item.source.icon(), 236.0, 227.5, 76.0, theme::accent());
+    }
+    let label = format!("Now playing  ·  {}", item.source.label());
+    c.text(
+        416.0,
+        160.0,
+        Align2::LEFT_CENTER,
+        &label,
+        15.0,
+        theme::text2(),
+        Weight::Semibold,
+    );
+    let title = c.clipped(416.0, 178.0, width - 384.0, 66.0);
+    let title_width = if width < 1152.0 {
+        width - 432.0
+    } else {
+        width - 384.0
+    };
+    title.text(
+        416.0,
+        206.0,
+        Align2::LEFT_CENTER,
+        &title.fit(&item.title, title_width, 30.0, Weight::Semibold),
+        30.0,
+        theme::text(),
+        Weight::Semibold,
+    );
+    let time = match item.duration {
+        Some(d) => format!(
+            "{} / {}",
+            catostv_core::playback::clock(item.position),
+            catostv_core::playback::clock(d)
+        ),
+        None => catostv_core::playback::clock(item.position),
+    };
+    let detail = if item.paused {
+        format!("Paused  ·  {time}")
+    } else {
+        time
+    };
+    c.text(
+        416.0,
+        265.0,
+        Align2::LEFT_CENTER,
+        &detail,
+        16.0,
+        theme::text2(),
+        Weight::Medium,
+    );
+    if let Some(f) = item.fraction() {
+        let f = c.anim(
+            ("home-playback-progress", item.source.app(), &item.title),
+            f,
+        );
+        c.fill(
+            c.r(416.0, 302.0, width - 582.0, 4.0),
+            2.0,
+            if theme::flat() {
+                theme::surface(4)
+            } else {
+                theme::glass_hi()
+            },
+        );
+        c.fill(
+            c.r(416.0, 302.0, (width - 582.0) * f, 4.0),
+            2.0,
+            theme::accent(),
+        );
+    }
+    let button = c.r(width - 132.0, 276.0, 164.0, 44.0);
+    c.fill(
+        button,
+        22.0,
+        widgets::mix(
+            if theme::flat() {
+                theme::surface(3)
+            } else {
+                theme::glass_hi()
+            },
+            theme::accent(),
+            t,
+        ),
+    );
+    c.text(
+        width - 50.0,
+        298.0,
+        Align2::CENTER_CENTER,
+        if item.paused {
+            "Resume video"
+        } else {
+            "Return to video"
+        },
+        15.0,
+        widgets::mix(theme::text(), theme::on_accent(), t),
+        Weight::Semibold,
+    );
+    if v.ctx
+        .media
+        .now_playing
+        .iter()
+        .any(|p| p.source == item.source)
+        && v.shell.home_media.is_none()
+    {
+        c.hit(rect, Target::NowPlaying(item.source));
+    }
+}
+
 fn draw_home(c: &C, v: &ShellView) {
     let s = v.shell;
+    let flat = theme::flat();
     let apps = v.ctx.apps;
     let ease = |x: f32| {
         let x = x.clamp(0.0, 1.0);
@@ -660,16 +916,32 @@ fn draw_home(c: &C, v: &ShellView) {
     };
     let in_media = s.home_media.is_some() && !media.is_empty();
     let shift = c.anim("home-shift", if in_media { 1.0 } else { 0.0 });
-    if let Some(it) = s.home_media.and_then(|(r, i)| v.ctx.media.item(r, i)) {
+    let player_t = c.anim(
+        "home-has-player",
+        if !v.ctx.media.now_playing.is_empty() {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    if let Some(it) = s
+        .home_media
+        .and_then(|(r, i)| v.ctx.media.item(r, i))
+        .filter(|_| !flat)
+    {
         crate::ui::fin::home_backdrop(c, &pics, server, it);
         crate::ui::fin::home_hero(c, it);
     }
     // Hero: the focused app, large. No marketing copy, no "X is running"
     // banner and no "Android" / "Store app" label
     // an app is an app.
-    if shift < 0.5
+    if !flat
+        && shift < 0.5
+        && player_t < 0.999
         && let Some(app) = apps.get(s.rail_index)
     {
+        let hero = c.opacity(1.0 - player_t);
+        let c = &hero;
         let k = ease(c.appear(("hero", &app.entry.id), 0.35));
         let name = c.fit(&app.entry.name, 760.0, 58.0, Weight::Semibold);
         c.text(
@@ -707,8 +979,12 @@ fn draw_home(c: &C, v: &ShellView) {
         let card = c.r(946.0, 118.0 - 26.0 * lift, 220.0, 220.0);
         let tint = theme::app_rgb(&app.entry.accent);
         c.shadow(card, 52.0, 18.0 + 10.0 * lift, 60.0, theme::rgba(tint, 80));
-        c.fill(card, 52.0, theme::rgba(theme::BG_TOP, 150));
-        c.fill(card, 52.0, theme::rgba(tint, 52));
+        if theme::flat() {
+            c.fill(card, 48.0, theme::surface(2));
+        } else {
+            c.fill(card, 52.0, theme::rgba(theme::BG_TOP, 150));
+            c.fill(card, 52.0, theme::rgba(tint, 52));
+        }
         c.frost_edge(card, 52.0, 1.6);
         widgets::app_icon(
             c,
@@ -721,16 +997,93 @@ fn draw_home(c: &C, v: &ShellView) {
         );
     }
 
-    let up = 540.0 * shift;
-    widgets::section(c, 64.0, 384.0 - up, "Apps");
-    let (tw, th, gap) = (208.0, 117.0, 24.0);
+    if player_t > 0.001 && shift < 0.999 {
+        let retained = c.remember(
+            "home-playing-item",
+            |old: Option<Vec<catostv_core::playback::NowPlaying>>| {
+                if v.ctx.media.now_playing.is_empty() {
+                    old.unwrap_or_default()
+                } else {
+                    v.ctx.media.now_playing.clone()
+                }
+            },
+        );
+        let width = if retained.len() > 1 { 900.0 } else { 1152.0 };
+        let selected = retained
+            .iter()
+            .position(|p| Some(p.source) == s.home_player)
+            .unwrap_or(0);
+        let step = width + 24.0;
+        let max_scroll = (retained.len() as f32 * step - 24.0 - 1152.0).max(0.0);
+        let (scroll, _) = c.spring(
+            "home-players-scroll",
+            (selected as f32 * step).min(max_scroll),
+            0.5,
+            0.86,
+        );
+        let rail = c.clipped(0.0, 94.0, 1280.0, 280.0);
+        for (index, item) in retained.iter().enumerate() {
+            let x = index as f32 * step - scroll;
+            if x + 64.0 + width < 0.0 || x + 64.0 > 1280.0 {
+                continue;
+            }
+            let layer = rail.opacity(player_t * (1.0 - shift)).translated(
+                x,
+                16.0 * (1.0 - player_t) - if flat { 660.0 } else { 540.0 } * shift,
+            );
+            home_now_playing(
+                &layer,
+                v,
+                item,
+                index == selected && s.home_now_playing && !s.top_focus && s.overlay().is_none(),
+                width,
+            );
+        }
+    }
+    let up = if flat { 660.0 } else { 540.0 } * shift;
+    let heading_y = if flat {
+        293.25 + 108.0 * player_t
+    } else {
+        384.0
+    };
+    if flat {
+        c.text(
+            64.0,
+            heading_y - up,
+            Align2::LEFT_CENTER,
+            "Apps",
+            21.0,
+            theme::text2(),
+            Weight::Semibold,
+        );
+    } else {
+        widgets::section(c, 64.0, heading_y - up, "Apps");
+    }
+    let (tw, th, gap) = if flat {
+        (216.0, 216.0 * 9.0 / 16.0, 24.0)
+    } else {
+        (208.0, 117.0, 24.0)
+    };
     let step = tw + gap;
     let visible = 5usize;
-    let row_y = 446.0;
-    let rail_focus = s.overlay().is_none() && !s.top_focus && !in_media;
+    let row_y = if flat {
+        345.25 + 108.0 * player_t
+    } else {
+        446.0
+    };
+    let row_x = if flat {
+        let n = apps.len().clamp(1, visible) as f32;
+        (1280.0 - n * tw - (n - 1.0) * gap) / 2.0
+    } else {
+        64.0
+    };
+    let rail_focus = s.overlay().is_none() && !s.top_focus && !in_media && !s.home_now_playing;
     let moving = s.moving && rail_focus;
     // The row runs to the screen's edge, so the next app peeks in there.
-    let rail = c.clipped(0.0, 90.0, 1280.0, 630.0);
+    let rail = c
+        .clipped(0.0, 90.0, 1280.0, 630.0)
+        .opacity(if flat { 1.0 - shift } else { 1.0 });
+    let grow = widgets::home_lift();
     let first = s.rail_index.saturating_sub(visible - 1) as f32;
     let (scroll, _) = c.spring("rail-scroll", first * step, 0.5, 0.86);
     let time = c.ctx.input(|i| i.time) as f32;
@@ -738,8 +1091,8 @@ fn draw_home(c: &C, v: &ShellView) {
     // its neighbours glide out of its way.
     let slot = |i: usize, app: &AppView| {
         let push = match rail_focus.then_some(s.rail_index) {
-            Some(f) if i < f => -tw * 0.08,
-            Some(f) if i > f => tw * 0.08,
+            Some(f) if i < f => -tw * grow * 0.57,
+            Some(f) if i > f => tw * grow * 0.57,
             _ => 0.0,
         };
         let damping = if moving { 0.7 } else { 0.86 };
@@ -757,7 +1110,7 @@ fn draw_home(c: &C, v: &ShellView) {
     for i in order {
         let app = &apps[i];
         let (sx, _) = slot(i, app);
-        let x = 64.0 + sx - scroll;
+        let x = row_x + sx - scroll;
         if x < -tw || x > 1280.0 {
             continue;
         }
@@ -783,31 +1136,18 @@ fn draw_home(c: &C, v: &ShellView) {
         let (t, _) = c.spring(("rail-t", &app.entry.id), target, 0.42, 0.62);
         if held {
             c.ctx.request_repaint();
-            widgets::focus_lift(
-                &rail,
-                widgets::lifted_by(&rail, rect, t, widgets::HOME_LIFT),
-                22.0,
-                1.0,
-            );
+            widgets::focus_lift(&rail, widgets::lifted_by(&rail, rect, t, grow), 22.0, 1.0);
         }
         widgets::home_glow(
             &rail,
-            widgets::lifted_by(&rail, rect, t, widgets::HOME_LIFT),
+            widgets::lifted_by(&rail, rect, t, grow),
             22.0,
             t.min(1.0),
             theme::app_rgb(&app.entry.accent),
         );
-        widgets::app_tile_lift(
-            &rail,
-            v.images,
-            rect,
-            app,
-            t,
-            bounce_of(app),
-            widgets::HOME_LIFT,
-        );
+        widgets::app_tile_lift(&rail, v.images, rect, app, t, bounce_of(app), grow);
         if held {
-            let big = widgets::lifted_by(&rail, rect, t, widgets::HOME_LIFT);
+            let big = widgets::lifted_by(&rail, rect, t, grow);
             let (bx, by) = rail.to_design(big.min);
             let (bw, bh) = rail.dsize(big);
             let (k, _) = c.spring("rail-arrows", 1.0, 0.3, 1.0);
@@ -820,15 +1160,23 @@ fn draw_home(c: &C, v: &ShellView) {
             }
         }
         if !in_media {
-            c.hit(c.r(x, row_y, tw, th + 36.0), Target::Rail(i));
+            c.hit(c.r(x, y, tw, th + 36.0), Target::Rail(i));
         }
     }
     if moving {
-        move_hint(c, 1244.0, 386.0 - up);
+        move_hint(c, 1244.0, heading_y + 2.0 - up);
     }
     if !media.is_empty() {
         let focus = if in_media { s.home_media } else { None };
-        crate::ui::fin::home_rows(c, &pics, server, media, focus, 628.0 - 278.0 * shift);
+        let y = if flat {
+            // Show the heading and thumbnail tops as a cue to browse down.
+            650.0 - 462.0 * shift
+        } else {
+            628.0 - 278.0 * shift
+        };
+        if y < 734.0 {
+            crate::ui::fin::home_rows(c, &pics, server, media, focus, y);
+        }
     }
     // No rows because the media server is not answering: say so where
     // they would be.
@@ -837,7 +1185,7 @@ fn draw_home(c: &C, v: &ShellView) {
     {
         c.text(
             64.0,
-            648.0,
+            if flat { 626.0 } else { 648.0 },
             Align2::LEFT_CENTER,
             &c.fit(note, 1150.0, 16.0, Weight::Regular),
             16.0,
@@ -848,7 +1196,7 @@ fn draw_home(c: &C, v: &ShellView) {
     if apps.is_empty() {
         c.text(
             64.0,
-            470.0,
+            if flat { 370.0 } else { 470.0 },
             Align2::LEFT_TOP,
             "Nothing here yet. Find apps in the Store",
             17.0,
@@ -929,7 +1277,7 @@ fn draw_recents(c: &C, v: &ShellView) {
 
     // Backdrop: the focused app's preview, blurred; else its colour as a
     // big soft light.
-    if let Some(&i) = running.get(card_i) {
+    if let Some(&i) = running.get(card_i).filter(|_| !theme::flat()) {
         let a = &ctx.apps[i];
         let fade = c.appear(("recents-bg", &a.entry.id), 0.4);
         if let Some((_, Some(blur))) = thumb(&a.entry.id) {
@@ -1350,6 +1698,11 @@ fn draw_store(c: &C, v: &ShellView) {
         y += 46.0;
     }
 
+    let enter = c.entrance("store-section", s.store_cat, motion::PAGE);
+    let content = c
+        .translated(0.0, 10.0 * (1.0 - enter))
+        .opacity(0.35 + 0.65 * enter);
+    let c = &content;
     let x0 = 280.0;
     let cat = s.current_store_cat();
     let items = s.store_items(v.ctx);
@@ -1671,7 +2024,7 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::PictureFit => "tv",
         R::Volume | R::AudioOutput | R::HdmiAudio => "speaker",
         R::Mute => "muted",
-        R::Accent => "palette",
+        R::Accent | R::Theme => "palette",
         R::App(_) => return None,
         R::AppSearch => "search",
         R::UpdateApps => "download",
@@ -1758,7 +2111,15 @@ fn draw_settings(c: &C, v: &ShellView) {
         // The open category keeps a quiet pane; focus is glass, inside
         // the pill.
         if selected {
-            c.fill(rect, CAT_H / 2.0, theme::rgba(theme::WHITE, 18));
+            c.fill(
+                rect,
+                CAT_H / 2.0,
+                if theme::flat() {
+                    theme::primary_container()
+                } else {
+                    theme::rgba(theme::WHITE, 18)
+                },
+            );
         }
         widgets::focus_pill(c, rect, CAT_H / 2.0, t);
         c.hit(rect, Target::SettingsCat(i));
@@ -1803,6 +2164,11 @@ fn draw_settings(c: &C, v: &ShellView) {
         },
     );
     let cat = s.current_category();
+    let enter = c.entrance("settings-category", s.settings_cat, motion::PAGE);
+    let content = c
+        .translated(0.0, 10.0 * (1.0 - enter))
+        .opacity(0.35 + 0.65 * enter);
+    let c = &content;
     widgets::title(c, 384.0, 60.0, cat.title(), 28.0);
     if let Some((label, dot)) = category_status(cat, v.ctx) {
         let label = c.fit(&label, 300.0, 13.0, Weight::Medium);
@@ -1824,7 +2190,7 @@ fn draw_settings(c: &C, v: &ShellView) {
     let list = c.clipped(356.0, top - 8.0, 860.0, 682.0 - (top - 8.0));
     // One focus highlight that glides from row to row, drawn under
     // the rows' text; it fades when focus leaves the list.
-    if rows_on > 0.01 && !rows.is_empty() {
+    if rows_on > 0.01 && !rows.is_empty() && !theme::flat() {
         let at = c.anim(
             ("settings-highlight", cat.title()),
             s.settings_row.min(rows.len() - 1) as f32 * step,
@@ -2127,19 +2493,27 @@ fn draw_power(c: &C, index: usize) {
         if t > 0.01 {
             c.soft_shadow(rect, 20.0, 20.0, 2.0, theme::rgba(tint, (110.0 * t) as u8));
         }
-        c.fill(
-            rect,
-            20.0,
-            theme::rgba(theme::WHITE, (14.0 * (1.0 - t)) as u8),
-        );
-        c.fill(rect, 20.0, theme::rgba(tint, (255.0 * t) as u8));
-        c.outline(
-            rect,
-            20.0,
-            1.0,
-            theme::rgba(theme::WHITE, (18.0 * (1.0 - t)) as u8),
-        );
-        widgets::focus_pill(c, rect, 20.0, t * 0.6);
+        if theme::flat() {
+            c.fill(
+                rect,
+                20.0,
+                widgets::mix(theme::surface(2), theme::rgb(tint), t),
+            );
+        } else {
+            c.fill(
+                rect,
+                20.0,
+                theme::rgba(theme::WHITE, (14.0 * (1.0 - t)) as u8),
+            );
+            c.fill(rect, 20.0, theme::rgba(tint, (255.0 * t) as u8));
+            c.outline(
+                rect,
+                20.0,
+                1.0,
+                theme::rgba(theme::WHITE, (18.0 * (1.0 - t)) as u8),
+            );
+            widgets::focus_pill(c, rect, 20.0, t * 0.6);
+        }
         let (rx, ry) = c.to_design(rect.min);
         let (rw, _) = c.dsize(rect);
         let cx = rx + rw / 2.0;
@@ -2232,7 +2606,7 @@ fn modal_list(
 ) {
     let first = index.saturating_sub(visible - 1);
     // One highlight gliding between rows, like Settings.
-    if index < rows.len() && rows[index].kind != Some(RowKind::Primary) {
+    if index < rows.len() && rows[index].kind != Some(RowKind::Primary) && !theme::flat() {
         let at = c.anim((id, "highlight"), (index - first) as f32 * 60.0);
         widgets::focus_pill(c, c.r(x, y + at, w, 52.0), widgets::ROW_RADIUS, 1.0);
     }
@@ -2408,6 +2782,7 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                 );
                 widgets::level(
                     c,
+                    "quick-volume",
                     920.0,
                     vy + 25.0,
                     240.0,
@@ -2830,7 +3205,7 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
             let status = match &s.vpn_files {
                 Scan::Busy => "Looking for VPN files…".to_string(),
                 Scan::Done(f) if f.is_empty() => {
-                    "No VPN files found. Put your provider's WireGuard (.conf) or OpenVPN (.ovpn) file on a USB stick, or send it from your phone".into()
+                    "Put your .conf or .ovpn file in Downloads, then reopen Add a VPN".into()
                 }
                 _ => "Pick the file your VPN provider gave you".into(),
             };

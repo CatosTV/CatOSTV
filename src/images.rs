@@ -8,7 +8,7 @@
 
 use catostv_core::icon_theme;
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 /// Catfyn backdrops) are scaled down by box averaging (screenshots
 /// were silently dropped by the old 1024 px limit).
 const MAX_SIDE: u32 = 1600;
+const TEXTURE_BUDGET: usize = 256 * 1024 * 1024;
 /// Pictures bigger than this many bytes are decoded on a worker thread, so
 /// scrolling through posters never stalls a frame.
 const ASYNC_BYTES: u64 = 192 * 1024;
@@ -28,6 +29,8 @@ type Decoded = Arc<Mutex<HashMap<String, Option<ColorImage>>>>;
 #[derive(Default)]
 pub struct Images {
     cache: RefCell<HashMap<String, Option<TextureHandle>>>,
+    touched: RefCell<HashMap<String, u64>>,
+    clock: Cell<u64>,
     /// SVGs being rasterised right now (shared with the worker threads).
     pending: Arc<Mutex<HashSet<String>>>,
     /// Big PNGs decoded by worker threads, waiting to become textures.
@@ -50,7 +53,63 @@ impl Images {
     /// Texture for a PNG (or SVG) file, loading it on first use. An SVG
     /// returns `None` until its PNG has been rendered in the background.
     pub fn get(&self, ctx: &egui::Context, path: &str) -> Option<egui::TextureId> {
-        if let Some(entry) = self.cache.borrow().get(path) {
+        self.get_inner(ctx, path, MAX_SIDE, false)
+    }
+
+    /// Artwork always decodes on a worker. Full-screen art keeps its 4K pixels;
+    /// small cards use a smaller texture from the same cached source file.
+    pub fn get_art(
+        &self,
+        ctx: &egui::Context,
+        path: &str,
+        max_side: u32,
+    ) -> Option<egui::TextureId> {
+        self.get_inner(ctx, path, max_side.clamp(1, 3840), true)
+    }
+
+    fn touch(&self, key: &str) {
+        let tick = self.clock.get().wrapping_add(1);
+        self.clock.set(tick);
+        self.touched.borrow_mut().insert(key.to_string(), tick);
+    }
+
+    fn cache_texture(&self, key: String, tex: Option<TextureHandle>, budget: usize) {
+        self.touch(&key);
+        let mut cache = self.cache.borrow_mut();
+        cache.insert(key.clone(), tex);
+        let mut touched = self.touched.borrow_mut();
+        let bytes = |entry: &Option<TextureHandle>| {
+            entry.as_ref().map_or(0, |t| {
+                let [w, h] = t.size();
+                w * h * 4
+            })
+        };
+        while cache.values().map(bytes).sum::<usize>() > budget {
+            let oldest = cache
+                .iter()
+                .filter(|(k, v)| **k != key && v.is_some())
+                .min_by_key(|(k, _)| touched.get(*k).copied().unwrap_or(0))
+                .map(|(k, _)| k.clone());
+            let Some(oldest) = oldest else { break };
+            cache.remove(&oldest);
+            touched.remove(&oldest);
+        }
+    }
+
+    fn get_inner(
+        &self,
+        ctx: &egui::Context,
+        path: &str,
+        max_side: u32,
+        force_async: bool,
+    ) -> Option<egui::TextureId> {
+        let key = if max_side == MAX_SIDE {
+            path.to_string()
+        } else {
+            format!("{path}#texture-{max_side}")
+        };
+        self.touch(&key);
+        if let Some(entry) = self.cache.borrow().get(&key) {
             return entry.as_ref().map(|t| t.id());
         }
         let file = if path.ends_with(".svg") {
@@ -68,25 +127,27 @@ impl Images {
             .decoded
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(path);
+            .remove(&key);
         let img = match ready {
             Some(img) => img,
-            None if std::fs::metadata(&file).is_ok_and(|m| m.len() > ASYNC_BYTES) => {
-                self.decode_later(ctx, path, file);
+            None if force_async
+                || std::fs::metadata(&file).is_ok_and(|m| m.len() > ASYNC_BYTES) =>
+            {
+                self.decode_later(ctx, &key, file, max_side);
                 return None;
             }
-            None => load_png(&file),
+            None => load_png(&file, max_side),
         };
-        let tex = img.map(|img| ctx.load_texture(path, img, TextureOptions::LINEAR));
+        let tex = img.map(|img| ctx.load_texture(&key, img, TextureOptions::LINEAR));
         let id = tex.as_ref().map(|t| t.id());
-        self.cache.borrow_mut().insert(path.to_string(), tex);
+        self.cache_texture(key, tex, TEXTURE_BUDGET);
         id
     }
 
-    fn decode_later(&self, ctx: &egui::Context, path: &str, file: String) {
+    fn decode_later(&self, ctx: &egui::Context, path: &str, file: String, max_side: u32) {
         {
             let mut p = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-            if !p.insert(path.to_string()) {
+            if p.len() >= 2 || !p.insert(path.to_string()) {
                 return;
             }
         }
@@ -94,11 +155,16 @@ impl Images {
         let ctx = ctx.clone();
         let path = path.to_string();
         std::thread::spawn(move || {
-            let img = load_png(&file);
-            decoded
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(path.clone(), img);
+            let img = load_png(&file, max_side);
+            {
+                let mut ready = decoded.lock().unwrap_or_else(|e| e.into_inner());
+                if ready.len() >= 4
+                    && let Some(old) = ready.keys().next().cloned()
+                {
+                    ready.remove(&old);
+                }
+                ready.insert(path.clone(), img);
+            }
             pending
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -144,12 +210,18 @@ impl Images {
 
     /// Forget one file (it changed on disk, e.g. a new Recents thumbnail).
     pub fn forget(&self, path: &str) {
-        self.cache.borrow_mut().remove(path);
+        self.cache
+            .borrow_mut()
+            .retain(|key, _| key != path && !key.starts_with(&format!("{path}#texture-")));
+        self.touched
+            .borrow_mut()
+            .retain(|key, _| key != path && !key.starts_with(&format!("{path}#texture-")));
     }
 
     /// Forget everything (after apps were installed/removed).
     pub fn clear(&self) {
         self.cache.borrow_mut().clear();
+        self.touched.borrow_mut().clear();
     }
 }
 
@@ -210,7 +282,7 @@ pub fn box_blur(w: usize, h: usize, px: &mut [u8], r: usize) {
     pass(&tmp, px, h, w, &|x, y| (y * w + x) * 4);
 }
 
-fn load_png(path: &str) -> Option<ColorImage> {
+fn load_png(path: &str, max_side: u32) -> Option<ColorImage> {
     if !path.ends_with(".png") {
         return None;
     }
@@ -220,7 +292,7 @@ fn load_png(path: &str) -> Option<ColorImage> {
     if w == 0 || h == 0 || w > DECODE_LIMIT || h > DECODE_LIMIT {
         return None;
     }
-    let (w, h, px) = shrink(w, h, img.as_raw().to_vec(), MAX_SIDE);
+    let (w, h, px) = shrink(w, h, img.as_raw().to_vec(), max_side);
     Some(ColorImage::from_rgba_unmultiplied(
         [w as usize, h as usize],
         &px,
@@ -281,5 +353,46 @@ mod tests {
         assert_eq!((w, h), (2, 1));
         assert_eq!(&out[0..4], &[255, 255, 255, 255]);
         assert_eq!(&out[4..8], &[0, 0, 0, 0]);
+    }
+}
+
+#[cfg(test)]
+mod artwork_cache_tests {
+    use super::*;
+
+    #[test]
+    fn texture_cache_evicts_old_images_and_keeps_recently_used_art() {
+        let images = Images::new();
+        let ctx = egui::Context::default();
+        let texture = |name| {
+            ctx.load_texture(
+                name,
+                ColorImage::from_rgba_unmultiplied([2, 2], &[255; 16]),
+                TextureOptions::LINEAR,
+            )
+        };
+        images.cache_texture("a".into(), Some(texture("a")), 32);
+        images.cache_texture("b".into(), Some(texture("b")), 32);
+        images.touch("a");
+        images.cache_texture("c".into(), Some(texture("c")), 32);
+        let cache = images.cache.borrow();
+        assert!(cache.contains_key("a") && cache.contains_key("c"));
+        assert!(!cache.contains_key("b"));
+    }
+
+    #[test]
+    fn full_art_keeps_4k_width_while_cards_use_smaller_textures() {
+        let path = std::env::temp_dir().join(format!(
+            "{}-4k-{}.png",
+            env!("CARGO_PKG_NAME"),
+            std::process::id()
+        ));
+        let pixels = vec![150u8; 3840 * 16 * 4];
+        image::save_buffer(&path, &pixels, 3840, 16, image::ExtendedColorType::Rgba8).unwrap();
+        let full = load_png(path.to_str().unwrap(), 3840).unwrap();
+        let small = load_png(path.to_str().unwrap(), 1600).unwrap();
+        assert_eq!(full.size, [3840, 16]);
+        assert!(small.size[0] <= 1600);
+        std::fs::remove_file(path).unwrap();
     }
 }

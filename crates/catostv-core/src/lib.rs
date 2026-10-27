@@ -65,6 +65,7 @@ pub mod fin;
 pub mod flatpak;
 pub mod icon_theme;
 pub mod jellyfin;
+pub mod playback;
 pub mod plex;
 pub mod sysinfo;
 

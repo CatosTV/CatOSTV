@@ -629,9 +629,9 @@ pub fn poster_url(it: &Item) -> String {
             } else {
                 &it.thumb
             };
-            crate::plex::image_url(&it.server, path, 300, 450, 0)
+            crate::plex::image_url(&it.server, path, 2160, 3240, 0)
         }
-        Backend::Jellyfin => image_url(&it.server, &it.id, "Primary", 300),
+        Backend::Jellyfin => image_url(&it.server, &it.id, "Primary", 2160),
     }
 }
 
@@ -647,12 +647,12 @@ pub fn wide_url(it: &Item) -> String {
             } else {
                 &it.art
             };
-            crate::plex::image_url(&it.server, path, 480, 270, 0)
+            crate::plex::image_url(&it.server, path, 3840, 2160, 0)
         }
         Backend::Jellyfin => match (it.kind(), &it.backdrop_item) {
-            (Kind::Episode, _) if it.has_primary => image_url(&it.server, &it.id, "Primary", 480),
-            (_, Some(b)) => image_url(&it.server, b, "Backdrop", 480),
-            _ => image_url(&it.server, &it.id, "Primary", 480),
+            (Kind::Episode, _) if it.has_primary => image_url(&it.server, &it.id, "Primary", 3840),
+            (_, Some(b)) => image_url(&it.server, b, "Backdrop", 3840),
+            _ => image_url(&it.server, &it.id, "Primary", 3840),
         },
     }
 }
@@ -667,12 +667,14 @@ pub fn backdrop_url(it: &Item, blur: u32) -> Option<String> {
     match it.backend {
         // No backdrop art: the item's own picture, softened a little more.
         Backend::Plex => match (it.art.is_empty(), it.thumb.is_empty()) {
-            (false, _) => Some(crate::plex::image_url(&it.server, &it.art, 1280, 720, blur)),
+            (false, _) => Some(crate::plex::image_url(
+                &it.server, &it.art, 3840, 2160, blur,
+            )),
             (true, false) => Some(crate::plex::image_url(
                 &it.server,
                 &it.thumb,
-                640,
-                360,
+                3840,
+                2160,
                 blur * 2,
             )),
             _ => None,
@@ -680,15 +682,15 @@ pub fn backdrop_url(it: &Item, blur: u32) -> Option<String> {
         Backend::Jellyfin => it
             .backdrop_item
             .as_ref()
-            .map(|b| image_url_blurred(&it.server, b, "Backdrop", 1280, blur)),
+            .map(|b| image_url_blurred(&it.server, b, "Backdrop", 3840, blur)),
     }
 }
 
 /// The still or poster for the "Next episode" card.
 pub fn still_url(it: &Item) -> String {
     match it.backend {
-        Backend::Plex => crate::plex::image_url(&it.server, &it.thumb, 640, 360, 0),
-        Backend::Jellyfin => image_url(&it.server, &it.id, "Primary", 640),
+        Backend::Plex => crate::plex::image_url(&it.server, &it.thumb, 3840, 2160, 0),
+        Backend::Jellyfin => image_url(&it.server, &it.id, "Primary", 3840),
     }
 }
 
@@ -1747,5 +1749,33 @@ mod tests {
         );
         let one = parse_single_item(r#"{"Id":"ep6","Name":"Six","Type":"Episode"}"#).unwrap();
         assert_eq!(one.name, "Six");
+    }
+}
+
+#[cfg(test)]
+mod artwork_tests {
+    use super::*;
+
+    #[test]
+    fn shared_art_requests_4k_landscapes_and_high_resolution_posters() {
+        let mut item = Item {
+            id: "movie".into(),
+            server: "https://media.example".into(),
+            kind_raw: "Movie".into(),
+            backdrop_item: Some("movie".into()),
+            ..Item::default()
+        };
+        assert!(wide_url(&item).contains("Backdrop/0?maxWidth=3840"));
+        assert!(poster_url(&item).contains("maxWidth=2160"));
+        assert!(backdrop_url(&item, 6).unwrap().contains("maxWidth=3840"));
+        item.kind_raw = "Episode".into();
+        item.has_primary = true;
+        assert!(wide_url(&item).contains("/movie/Images/Primary?maxWidth=3840"));
+        assert!(still_url(&item).contains("maxWidth=3840"));
+        item.backend = Backend::Plex;
+        item.art = "/art".into();
+        item.thumb = "/thumb".into();
+        assert!(wide_url(&item).contains("width=3840&height=2160"));
+        assert!(poster_url(&item).contains("width=2160&height=3240"));
     }
 }
