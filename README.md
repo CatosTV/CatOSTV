@@ -8,23 +8,20 @@
 
 ![CatosTV Home](assets/screenshots/home.webp)
 
-I built CatosTV for my own living room. Google TV turned the screen I paid
-for with my hard-earned money into an ad billboard, so they can keep making
-money off me: rows of "recommended" things I never asked for, sponsored
-tiles, and a home screen that cares more about selling me something than
-letting me watch what I want. I wanted my TV back.
+I built CatosTV for my living room because I wanted a home screen for my
+apps, without sponsored tiles or rows of things I never asked to watch.
 
-CatosTV turns an ordinary PC (a mini PC, an old desktop or laptop) into a calm, fast
-TV box. You turn it on, you see your apps, you pick one, you watch. No ads,
-no account, no tracking, nothing you didn't install yourself. (The screensaver
-fetches pictures and local weather from public services; you can turn it off in
-Settings.)
+CatosTV turns a mini PC, desktop or laptop into a TV box. It boots straight
+into a full-screen interface you can use from the couch with a remote,
+keyboard or controller. Pick an app and watch.
 
-It's based on Arch Linux and it's a rolling release. You install it once,
-and from then on new versions come as updates, together with the Arch
-packages they were tested with. The whole interface (home screen,
-settings, installer, media player front end) is written from scratch in
-Rust.
+The home screen has no ads and CatosTV doesn't require an account. Apps
+and streaming services may require their own accounts. The optional
+screensaver fetches pictures and local weather from public services.
+
+It's based on Arch Linux, with the home screen, settings, installer and
+media interface written in Rust. Install once, then get signed updates
+from Settings, together with the Arch packages tested for that version.
 
 ## What you get
 
@@ -37,11 +34,16 @@ Rust.
 
 - A home screen you drive with a remote. Your apps in one row, big
   readable text, and everything reachable with arrows, OK and Back.
+- Choose Glassy or Flat in Settings, with your own accent colour. Now
+  playing cards let you return to a loaded video, with separate cards when
+  more than one player is open.
 - Android apps, natively. Set up Android TV once from Settings and your
   Android apps sit right next to everything else. They open full screen,
   the remote and controllers work in them, and Back on an app's first
   screen takes you home. See [ANDROID.md](ANDROID.md).
-- Catfyn, a built-in player for your own [Jellyfin](https://jellyfin.org)
+- [CatTube](https://github.com/coderastic/CatTube), a native YouTube app
+  with search, subscriptions, watch history, subtitles and phone control.
+- [Catfyn](https://github.com/coderastic/Catfyn), a built-in player for your own [Jellyfin](https://jellyfin.org)
   or [Plex](https://www.plex.tv) server (or both): continue watching, next
   episode with a countdown, subtitles.
 - Linux apps as well. Moonlight game streaming and a simple file browser are
@@ -54,7 +56,7 @@ Rust.
   Connect), or your TV's own remote over HDMI-CEC.
   One press on a keyboard, remote or controller wakes the TV from sleep.
 - Cast to it from phone apps that support DLNA, and use "link with TV" in
-  the YouTube app.
+  the YouTube app. Turn casting on or off in Settings.
 - Quick settings for Wi-Fi, Ethernet, Bluetooth, sound, sleep and power,
   one button away, even while an app is open.
 - Updates from Settings. They're signed, you choose when to install them,
@@ -62,19 +64,23 @@ Rust.
 
 ## Download
 
-Get the latest ISO from the [Releases](../../releases) page and write it to
+Get the latest ISO from the [Releases](https://github.com/CatosTV/CatOSTV/releases/latest) page and write it to
 a USB stick (8 GB or more) with [balenaEtcher](https://etcher.balena.io),
 [Ventoy](https://www.ventoy.net) or `dd`:
 
 ```bash
-sudo dd if=catostv-1.0.2-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+sudo dd if=catostv-VERSION-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
 ```
 
 You can check the download with the `.sha256` file next to it:
-`sha256sum -c catostv-1.0.2-x86_64.iso.sha256`.
+`sha256sum -c catostv-VERSION-x86_64.iso.sha256`. Replace `VERSION` with
+the downloaded version and `/dev/sdX` with the USB device you want to erase.
 
 You don't need a newer ISO when a new version comes out. The installer
 checks for updates before it starts and installs the newest version.
+
+The main branch can include changes that aren't in the latest ISO or
+update yet. Check the release notes for what's included in a download.
 
 ## What you need
 
@@ -83,8 +89,8 @@ checks for updates before it starts and installs the newest version.
 - A disk of 20 GB or more that CatosTV may erase completely. 64 GB or more
   is nicer if you plan to install many Android apps or games.
 - An internet connection while installing, over Ethernet or Wi-Fi.
-- A TV or monitor over HDMI. Intel, AMD and NVIDIA graphics all work, and
-  the installer picks the right drivers.
+- A TV or monitor over HDMI. The installer selects graphics drivers for
+  the hardware it detects.
 
 ## Quick start
 
@@ -112,6 +118,9 @@ rustup default stable
 
 ## Credits
 
+- Android TV images: [SupeChicken666](https://github.com/supechicken) and
+  [WayDroid-ATV](https://github.com/WayDroid-ATV/waydroid-builds), whose
+  images power CatosTV's Android TV setup.
 - Icons: [Papirus](https://github.com/PapirusDevelopmentTeam/papirus-icon-theme)
   icon theme (GPL-3.0).
 - Built on [Arch Linux](https://archlinux.org), with
