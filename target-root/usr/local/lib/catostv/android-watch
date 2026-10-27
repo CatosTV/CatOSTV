@@ -135,6 +135,22 @@ watchdog() {
       done
 }
 WD=""
+AW=""
+audio_watch() {
+  while true; do
+    # Keep each Android shell bounded so watcher restarts leave no loop behind.
+    # lxc-attach changes stdin permissions; supply a pipe, not the file.
+    cat /usr/share/catostv/android-audio.sh \
+      | timeout 12 lxc-attach "${LXC[@]}" "${ANDROID_ENV[@]}" -- /system/bin/sh -s -- --once
+    sleep 1
+  done
+}
+stop_audio_watch() {
+  [[ -n "$AW" ]] || return 0
+  pkill -P "$AW" 2>/dev/null || true
+  kill "$AW" 2>/dev/null || true
+  AW=""
+}
 stop_watchdog() {
   [[ -n "$WD" ]] || return 0
   pkill -P "$WD" 2>/dev/null || true
@@ -340,7 +356,7 @@ cap_android_pids() {
 }
 kernel_watch &
 KW=$!
-trap '[[ -n "$KW" ]] && { pkill -P "$KW" 2>/dev/null; kill "$KW" 2>/dev/null; }; stop_watchdog; stop_hung_watch; stop_front_events; rm -f "$OUT" "$OUT.tmp" "$OUT.ev" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp" "$STARTED"; exit' EXIT TERM INT
+trap '[[ -n "$KW" ]] && { pkill -P "$KW" 2>/dev/null; kill "$KW" 2>/dev/null; }; stop_watchdog; stop_audio_watch; stop_hung_watch; stop_front_events; rm -f "$OUT" "$OUT.tmp" "$OUT.ev" "$SF" "$SF.tmp" "$APPS" "$APPS.tmp" "$TASKS" "$TASKS.tmp" "$BOOTED" "$HUNG" "$HUNG.tmp" "$STUCK" "$STUCK.tmp" "$STARTED"; exit' EXIT TERM INT
 while true; do
   if [[ "$(lxc-info "${LXC[@]}" -sH 2>/dev/null)" != RUNNING ]]; then
     publish ""
@@ -352,12 +368,17 @@ while true; do
       rm -f "$SF" "$APPS"
     fi
     stop_hung_watch
+    stop_audio_watch
     stop_front_events
     resumed=""
     sleep 3
     continue
   fi
   cap_android_pids
+  if [[ -z "$AW" ]] || ! kill -0 "$AW" 2>/dev/null; then
+    audio_watch &
+    AW=$!
+  fi
   if [[ -z "$WD" ]] || ! kill -0 "$WD" 2>/dev/null; then
     watchdog &
     WD=$!

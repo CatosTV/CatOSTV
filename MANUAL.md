@@ -93,6 +93,9 @@ while the app is open, turns it on or off for that app for good.
 
 ## Android apps
 
+Use the main volume panel for Android apps too. Android's media volume is
+automatically kept at maximum, so volume and mute use the same control.
+
 Everything about Android (setup, Google Play or Aurora Store, installing
 APKs, fixing problems) is in **[the Android guide](ANDROID.md)**.
 
