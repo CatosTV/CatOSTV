@@ -2,7 +2,7 @@
   <img src="assets/logo.svg" width="96" alt="CatosTV">
 </p>
 
-# CatosTV
+# CatosTV &nbsp;&middot;&nbsp; [<img src="https://img.shields.io/badge/Telegram-Group-blue?style=flat-square&logo=telegram">](https://t.me/+0SUpfEJNYFhhNzZh)
 
 **A no-nonsense Linux distro made for TV screens.**
 
