@@ -1706,6 +1706,19 @@ pub fn removable_apks(r: &mut dyn Runner) -> Result<Vec<PathBuf>> {
 mod tests {
 
     #[test]
+    fn drawn_app_is_ready_without_a_hold_only_when_its_focus_matches() {
+        let mut ready = LaunchReady::default();
+        let app = "org.smarttube.stable";
+        let mut at = |ms, top| ready.observe(app, top, Duration::from_millis(ms), Duration::ZERO);
+        assert!(!at(0, Some("com.android.vending")));
+        assert!(!at(20, None));
+        assert!(!at(40, Some("org.lineageos.tv.launcher")));
+        assert!(at(60, Some(app)));
+        assert!(!at(80, Some("com.android.vending")));
+        assert!(at(100, Some(app)));
+    }
+
+    #[test]
     fn launch_waits_for_continuous_app_focus() {
         let mut ready = LaunchReady::default();
         let stable = Duration::from_millis(500);

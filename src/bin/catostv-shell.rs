@@ -1614,6 +1614,10 @@ impl ShellApp {
     /// (the desktop alone showed whichever app was on
     /// top, FreeTube instead of the Android app just opened).
     fn show_app(&self, app_id: &str) {
+        self.show_app_when_ready(app_id, ANDROID_FIRST_FRAME);
+    }
+
+    fn show_app_when_ready(&self, app_id: &str, android_stable: Duration) {
         if !self.appliance {
             return;
         }
@@ -1649,6 +1653,7 @@ impl ShellApp {
         let watch = self.watch.clone();
         let (_, ui) = self.jobs.sender();
         self.jobs.spawn(move || {
+            let started = Instant::now();
             // Android shows every app in Waydroid's one full-screen window
             // which takes seconds to appear on a cold start;
             // switching before it exists shows whatever else is on the app
@@ -1662,21 +1667,24 @@ impl ShellApp {
             {
                 return Msg::AndroidNoWindow(name);
             }
+            let window_ready = Instant::now();
             // That one window still shows the app that was in front before
             // until Android has switched (Play Store flashed for a
             // second when SmartTube was opened from Recents, and the other
             // way round). Stay on CatosTV until Android reports the app in
-            // front. The launch helper waits for its first draw; also keep
-            // checking focus through the handover interval, since Android
-            // may still be finishing a preceding Home request.
+            // front. Confirmed launches already waited for their first
+            // draw and preceding Home requests. Other reveal paths still
+            // require settled focus before showing the shared window.
             if let Some(pkg) = package.as_deref().filter(|_| android)
-                && !wait_for_android_top(pkg, ANDROID_TOP_WAIT)
+                && !wait_for_android_top(pkg, ANDROID_TOP_WAIT, android_stable)
             {
                 return Msg::AndroidDidNotStart(pkg.to_string());
             }
+            let focus_ready = Instant::now();
             // A blank frame first: what the window shows when it goes
             // behind the app is what flashes up when it next comes over it.
             wait_for_blank(&watch, &ui);
+            let blank_ready = Instant::now();
             let switched = compositor::show_app_workspace(&mut SystemRunner, true);
             if switched.is_err() {
                 lock(&watch).blank = None;
@@ -1694,6 +1702,15 @@ impl ShellApp {
                         let _ = catostv_core::toplevel::activate(&w);
                     }
                 }
+            }
+            if let Some(pkg) = package.as_deref().filter(|_| android) {
+                eprintln!(
+                    "catostv: {pkg} shown: window {} ms, focus {} ms, blank {} ms, switch {} ms",
+                    window_ready.duration_since(started).as_millis(),
+                    focus_ready.duration_since(window_ready).as_millis(),
+                    blank_ready.duration_since(focus_ready).as_millis(),
+                    blank_ready.elapsed().as_millis(),
+                );
             }
             match switched {
                 Ok(()) => Msg::AppShown,
@@ -3472,7 +3489,10 @@ impl ShellApp {
                     .map(|a| a.id.clone())
                     .or_else(|| Some(android::SESSION_APP_ID.to_string()));
                 let front = self.foreground.clone().unwrap_or_default();
-                self.show_app(&front);
+                // The launcher has waited for the first draw and earlier
+                // Home requests. Wait for its focus report without adding
+                // another half second after the app is ready.
+                self.show_app_when_ready(&front, Duration::ZERO);
             }
             Msg::Lifecycle(ev) => self.handle_lifecycle(ctx, ev),
             Msg::ApkDone(text) => {
@@ -4830,11 +4850,11 @@ fn refit_full_screen(
 /// How long to wait for Android to report the opened app in front (a
 /// cold start of a big app such as YouTube takes several seconds).
 const ANDROID_TOP_WAIT: Duration = Duration::from_secs(12);
-/// Require continuous app focus after its first draw before revealing Android.
+/// Settle focus for Android windows revealed without a confirmed launch.
 const ANDROID_FIRST_FRAME: Duration = Duration::from_millis(500);
 
 /// Wait until `android-watch` reports `pkg` as Android's front app.
-fn wait_for_android_top(pkg: &str, budget: Duration) -> bool {
+fn wait_for_android_top(pkg: &str, budget: Duration, stable: Duration) -> bool {
     let started = Instant::now();
     let mut ready = android::LaunchReady::default();
     loop {
@@ -4842,14 +4862,14 @@ fn wait_for_android_top(pkg: &str, budget: Duration) -> bool {
             pkg,
             android::read_top().as_deref(),
             started.elapsed(),
-            ANDROID_FIRST_FRAME,
+            stable,
         ) {
             return true;
         }
         if started.elapsed() >= budget {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
