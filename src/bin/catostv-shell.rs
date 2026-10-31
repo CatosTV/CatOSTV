@@ -319,7 +319,7 @@ fn spawn_app_watcher(
                 }
             }
             let events = lock(&manager).poll();
-            let (fg, android_front, appliance, hidden, fg_window, mouse) = {
+            let (fg, android_front, appliance, mut hidden, fg_window, mouse) = {
                 let w = lock(&watch);
                 (
                     w.foreground.clone(),
@@ -395,6 +395,11 @@ fn spawn_app_watcher(
                 lock(&watch).blank.is_none(),
                 android_front,
             );
+            // The requested Android window is already active. Route input
+            // to it now, without waiting for the render-idle timeout.
+            if android_front && android_on_top && recovery.is_none() {
+                hidden = true;
+            }
             if fg != front_app {
                 front_app = fg.clone();
                 last_window = None;
