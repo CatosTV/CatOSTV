@@ -2176,7 +2176,9 @@ impl ShellApp {
                     if let Some(dev) = cec::kernel_device() {
                         self.jobs.spawn(move || {
                             let _guard = lock(&VOLUME_LOCK);
-                            let _ = SystemRunner.run_ok(&cec::tv_volume_cmd(&dev, true));
+                            if let Err(e) = SystemRunner.run_ok(&cec::tv_volume_cmd(&dev, true)) {
+                                eprintln!("catostv-shell: TV volume: {e}");
+                            }
                             Msg::Nothing
                         });
                     }

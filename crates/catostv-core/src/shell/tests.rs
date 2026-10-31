@@ -371,8 +371,8 @@ fn settings_sliders_choices_and_soon_rows() {
     assert!(!s.settings_rows_focus);
     press(&mut s, &f, &[Right]);
     // OK starts changing it, Left/Right change it.
-    assert_eq!(press(&mut s, &f, &[Ok, Left]), vec![Effect::VolumeStep(-5)]);
-    assert_eq!(press(&mut s, &f, &[Right]), vec![Effect::VolumeStep(5)]);
+    assert_eq!(press(&mut s, &f, &[Ok, Left]), vec![Effect::VolumeStep(-1)]);
+    assert_eq!(press(&mut s, &f, &[Right]), vec![Effect::VolumeStep(1)]);
     assert_eq!(press(&mut s, &f, &[Down, Ok]), vec![Effect::ToggleMute]);
     press(&mut s, &f, &[Back]);
     assert!(!s.settings_rows_focus);
@@ -1103,8 +1103,8 @@ fn quick_settings_volume_row() {
     // 6 tiles in 3 rows of 2; Down from the last row reaches the volume row.
     press(&mut s, &f, &[Down, Down, Down]);
     assert!(matches!(s.overlay(), Some(Overlay::Quick { index }) if *index == QUICK_ITEMS.len()));
-    assert_eq!(press(&mut s, &f, &[Left]), vec![Effect::VolumeStep(-5)]);
-    assert_eq!(press(&mut s, &f, &[Right]), vec![Effect::VolumeStep(5)]);
+    assert_eq!(press(&mut s, &f, &[Left]), vec![Effect::VolumeStep(-1)]);
+    assert_eq!(press(&mut s, &f, &[Right]), vec![Effect::VolumeStep(1)]);
     assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::ToggleMute]);
     press(&mut s, &f, &[Up]);
     assert!(matches!(s.overlay(), Some(Overlay::Quick { index: 4 })));
@@ -1750,7 +1750,7 @@ fn volume_panel_takes_the_keys() {
     let f = Fixture::new();
     let mut s = Shell::new();
     s.volume = Some(crate::volume_panel::VolumePanel::default());
-    assert_eq!(press(&mut s, &f, &[Up]), vec![Effect::VolumeStep(5)]);
+    assert_eq!(press(&mut s, &f, &[Up]), vec![Effect::VolumeStep(1)]);
     assert_eq!(press(&mut s, &f, &[Ok]), vec![Effect::ToggleMute]);
     assert!(press(&mut s, &f, &[Back]).is_empty());
     assert!(s.volume.is_none());

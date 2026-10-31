@@ -6,7 +6,7 @@ use crate::audio::{Sink, SinkKind};
 use crate::input::Action;
 
 /// Volume change per key press, in percent.
-pub const STEP: i8 = 5;
+pub const STEP: i8 = crate::audio::VOLUME_STEP;
 /// How long the panel stays after the last key (seconds).
 pub const SHOW_SECS: f32 = 3.0;
 /// …and with the outputs list open.
@@ -130,8 +130,8 @@ mod tests {
     #[test]
     fn keys_change_the_level_and_mute() {
         let mut p = VolumePanel::default();
-        assert_eq!(p.handle(Action::Up, &sinks()), [PanelEffect::Step(5)]);
-        assert_eq!(p.handle(Action::Down, &sinks()), [PanelEffect::Step(-5)]);
+        assert_eq!(p.handle(Action::Up, &sinks()), [PanelEffect::Step(1)]);
+        assert_eq!(p.handle(Action::Down, &sinks()), [PanelEffect::Step(-1)]);
         assert_eq!(p.handle(Action::Ok, &sinks()), [PanelEffect::ToggleMute]);
         assert_eq!(p.handle(Action::Back, &sinks()), [PanelEffect::Close]);
     }

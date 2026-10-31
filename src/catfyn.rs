@@ -560,14 +560,19 @@ pub fn player_volume(
         return false;
     }
     let mut r = SystemRunner;
+    let device = catostv_core::cec::kernel_device();
     let state = match cmd {
-        ShellCommand::VolumeUp => audio::step(&mut r, STEP),
-        ShellCommand::VolumeDown => audio::step(&mut r, -STEP),
+        ShellCommand::VolumeUp => audio::step_with_tv(&mut r, STEP, device.as_deref()),
+        ShellCommand::VolumeDown => audio::step_with_tv(&mut r, -STEP, device.as_deref()),
         ShellCommand::Mute => audio::toggle_mute(&mut r),
         _ => return false,
     };
-    let Ok(v) = state else {
-        return true;
+    let v = match state {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("catostv-shell: player volume: {e}");
+            return true;
+        }
     };
     let sinks = audio::sinks(&mut r).unwrap_or_default();
     let output = sinks

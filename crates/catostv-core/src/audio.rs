@@ -16,6 +16,9 @@ use crate::process::{Cmd, Runner};
 
 const SINK: &str = "@DEFAULT_AUDIO_SINK@";
 
+/// Volume change per key press, in percentage points.
+pub const VOLUME_STEP: i8 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct VolumeState {
     /// 0–100 (CatosTV never boosts above 100 %).
@@ -52,6 +55,31 @@ pub fn step(r: &mut dyn Runner, delta: i8) -> Result<VolumeState> {
         r.run_ok(&Cmd::new("wpctl").args(["set-mute", SINK, "0"]))?;
     }
     get(r)
+}
+
+/// At maximum HDMI volume, another Up press turns up the TV itself.
+/// Read the current output here so native players and the shell's fallback
+/// use the same handoff, even while the shell's snapshots are paused.
+pub fn step_with_tv(
+    r: &mut dyn Runner,
+    delta: i8,
+    cec_device: Option<&str>,
+) -> Result<VolumeState> {
+    if delta > 0
+        && let Some(device) = cec_device
+    {
+        let v = get(r)?;
+        if v.percent >= 100
+            && !v.muted
+            && sinks(r)?
+                .iter()
+                .any(|s| s.is_default && s.kind == SinkKind::Hdmi)
+        {
+            r.run_ok(&crate::cec::tv_volume_cmd(device, true))?;
+            return Ok(v);
+        }
+    }
+    step(r, delta)
 }
 
 /// Set the volume to `percent` (0–100), unmuting too when `unmute`.
@@ -561,6 +589,117 @@ mod tests {
             vec!["set-volume", "@DEFAULT_AUDIO_SINK@", "0.95"]
         );
         assert_eq!(r.seen.len(), 2);
+    }
+
+    const HDMI_STATUS: &str = "Audio\n ├─ Sinks:\n │ * 42. TV HDMI [vol: 1.00]\n ├─ Sources:\n";
+
+    #[test]
+    fn reaching_maximum_then_up_hands_off_to_tv() {
+        let mut r = FakeRunner::new();
+        for reply in ["Volume: 0.99", "", "", "Volume: 1.00"] {
+            r.push(Output::ok(reply));
+        }
+        assert_eq!(
+            step_with_tv(&mut r, VOLUME_STEP, Some("/dev/cec0"))
+                .unwrap()
+                .percent,
+            100
+        );
+        assert!(r.seen.iter().all(|c| c.program == "wpctl"));
+        assert_eq!(r.seen[1].args[4], "1%+");
+
+        for _ in 0..2 {
+            for reply in ["Volume: 1.00", HDMI_STATUS, HDMI_STATUS, ""] {
+                r.push(Output::ok(reply));
+            }
+            assert_eq!(
+                step_with_tv(&mut r, VOLUME_STEP, Some("/dev/cec0")).unwrap(),
+                VolumeState {
+                    percent: 100,
+                    muted: false
+                }
+            );
+        }
+        let sent: Vec<_> = r.seen.iter().filter(|c| c.program == "cec-ctl").collect();
+        assert_eq!(sent.len(), 2, "one TV press per Up after reaching 100%");
+        assert!(
+            sent.iter()
+                .all(|c| **c == crate::cec::tv_volume_cmd("/dev/cec0", true))
+        );
+        assert_eq!(
+            r.seen
+                .iter()
+                .filter(|c| c.args.first().is_some_and(|a| a == "set-volume"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn tv_handoff_keeps_mute_other_outputs_and_down_local() {
+        for (before, status, delta, device) in [
+            ("Volume: 1.00 [MUTED]", None, 1, Some("/dev/cec0")),
+            (
+                "Volume: 1.00",
+                Some(
+                    "Audio\n ├─ Sinks:\n │ * 9. Bluetooth headphones [vol: 1.00]\n │ 42. TV HDMI [vol: 1.00]\n ├─ Sources:\n",
+                ),
+                1,
+                Some("/dev/cec0"),
+            ),
+            (
+                "Volume: 1.00",
+                Some("Audio\n ├─ Sinks:\n ├─ Sources:\n"),
+                1,
+                Some("/dev/cec0"),
+            ),
+            ("Volume: 1.00", None, -1, Some("/dev/cec0")),
+            ("Volume: 1.00", None, 1, None),
+        ] {
+            let mut r = FakeRunner::new();
+            if delta > 0 && device.is_some() {
+                r.push(Output::ok(before));
+                if let Some(status) = status {
+                    r.push(Output::ok(status));
+                    r.push(Output::ok(status));
+                }
+            }
+            r.push(Output::ok(""));
+            if delta > 0 {
+                r.push(Output::ok(""));
+            }
+            r.push(Output::ok(if delta > 0 {
+                "Volume: 1.00"
+            } else {
+                "Volume: 0.99"
+            }));
+            let v = step_with_tv(&mut r, delta, device).unwrap();
+            assert_eq!(v.percent, if delta > 0 { 100 } else { 99 });
+            assert!(!v.muted);
+            assert!(r.seen.iter().all(|c| c.program == "wpctl"));
+            let set = r
+                .seen
+                .iter()
+                .find(|c| c.args.first().is_some_and(|a| a == "set-volume"))
+                .unwrap();
+            assert_eq!(set.args[4], if delta > 0 { "1%+" } else { "1%-" });
+        }
+    }
+
+    #[test]
+    fn tv_volume_failure_is_reported() {
+        let mut r = FakeRunner::new();
+        for reply in ["Volume: 1.00", HDMI_STATUS, HDMI_STATUS] {
+            r.push(Output::ok(reply));
+        }
+        r.push(Output::failed(1, "CEC transmit failed"));
+        let err = step_with_tv(&mut r, 1, Some("/dev/cec0")).unwrap_err();
+        assert!(err.to_string().contains("CEC transmit failed"));
+        assert_eq!(
+            r.seen.len(),
+            4,
+            "no second adjustment after a failed TV command"
+        );
     }
 
     /// `wpctl status` as posted on bbs.archlinux.org topic 305641

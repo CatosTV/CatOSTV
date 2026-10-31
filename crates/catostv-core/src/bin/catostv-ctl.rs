@@ -26,9 +26,10 @@ fn volume_id_path() -> std::path::PathBuf {
 
 fn volume(arg: &str) -> Option<i32> {
     let mut r = SystemRunner;
+    let device = catostv_core::cec::kernel_device();
     let res = match arg {
-        "volume-up" => audio::step(&mut r, 5),
-        "volume-down" => audio::step(&mut r, -5),
+        "volume-up" => audio::step_with_tv(&mut r, audio::VOLUME_STEP, device.as_deref()),
+        "volume-down" => audio::step_with_tv(&mut r, -audio::VOLUME_STEP, device.as_deref()),
         "mute" => audio::toggle_mute(&mut r),
         _ => return None,
     };

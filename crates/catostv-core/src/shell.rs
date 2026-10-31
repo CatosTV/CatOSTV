@@ -44,7 +44,7 @@ use crate::settings::{self, Category, RowId, RowKind, ShellContext};
 pub const APPS_GRID_COLS: usize = 6;
 pub const STORE_COLS: usize = 5;
 pub const MAX_SEARCH_RESULTS: usize = 8;
-pub const VOLUME_STEP: i8 = 5;
+pub use crate::audio::VOLUME_STEP;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
