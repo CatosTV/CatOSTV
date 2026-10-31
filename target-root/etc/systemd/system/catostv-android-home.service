@@ -1,6 +1,6 @@
 # CatosTV: send Android to its home screen when you leave an Android app,
 # see /usr/local/lib/catostv/android-home. Started by the TV shell as
-#   systemctl --no-ask-password start --no-block catostv-android-home.service
+#   systemctl --no-ask-password start catostv-android-home.service
 # which /etc/polkit-1/rules.d/50-catostv-android.rules allows for the active
 # local `catostv` session (verb "start" only).
 

@@ -804,6 +804,8 @@ struct ShellApp {
     /// The Waydroid session was started by this shell instance (once, at
     /// start-up or right after setup) so Android apps open without delay.
     android_started: bool,
+    /// Home commands to finish before an app is brought forward again.
+    android_home: Vec<android::HomeRequest>,
     /// Android apps launched since the session started (shown as running,
     /// closable from Recents). Cleared when the Android session ends.
     android_running: Vec<String>,
@@ -1146,6 +1148,7 @@ impl ShellApp {
             foreground: None,
             pending_restart: HashSet::new(),
             android_started: false,
+            android_home: Vec::new(),
             android_running: Vec::new(),
             store_shots: HashMap::new(),
             launching: None,
@@ -1578,9 +1581,19 @@ impl ShellApp {
 
     /// You left an Android app for CatosTV: Android goes to its own home
     /// screen, so the app pauses (see android-home).
-    fn send_android_home(&self) {
+    fn send_android_home(&mut self) {
         if self.appliance && self.sys.android.session {
-            self.job(|r| r.run_ok(&android::home_cmd()).map(|_| ()));
+            let (sent, received) = std::sync::mpsc::channel();
+            self.android_home.push(received);
+            self.jobs.spawn(move || {
+                let result = SystemRunner.run_ok(&android::home_cmd()).map(|_| ());
+                let message = match &result {
+                    Ok(()) => Msg::Nothing,
+                    Err(e) => Msg::Toast(e.to_string()),
+                };
+                let _ = sent.send(result);
+                message
+            });
         }
     }
 
@@ -1867,12 +1880,18 @@ impl ShellApp {
             return;
         }
         let home = self.home.clone();
+        let home_requests = if matches!(task, AndroidTask::Launch(_) | AndroidTask::OpenAurora) {
+            std::mem::take(&mut self.android_home)
+        } else {
+            Vec::new()
+        };
         self.jobs.spawn(move || {
             let mut r = SystemRunner;
             let launch = |r: &mut dyn Runner, pkg: &str| -> Msg {
                 let result = android::open_app(
                     r,
                     pkg,
+                    &home_requests,
                     android::is_booted(),
                     android::read_top().as_deref(),
                     &mut std::thread::sleep,

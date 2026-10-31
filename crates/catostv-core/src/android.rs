@@ -815,23 +815,32 @@ pub fn tv_launch_cmd(pkg: &str) -> Result<Cmd> {
 
 /// Reopen an app without refreshing Android's app list or icons. A cold
 /// session still has to answer before its launcher can be used.
+/// Home requests must finish first; their last focus report can be stale.
 pub fn open_app(
     r: &mut dyn Runner,
     pkg: &str,
+    home_requests: &[HomeRequest],
     booted: bool,
     top: Option<&str>,
     sleep: &mut dyn FnMut(Duration),
 ) -> Result<()> {
     check_package(pkg)?;
+    for home in home_requests {
+        home.recv_timeout(WAYDROID_TIMEOUT)
+            .map_err(|_| Error::msg("Android Home did not finish"))??;
+    }
     if !booted {
         wait_until_ready(r, READY_TIMEOUT, sleep)?;
-    } else if top == Some(pkg) {
+    } else if home_requests.is_empty() && top == Some(pkg) {
         // Home can cover a playing app. Do not send its launcher intent
         // again: SmartTube can rebuild its player and deadlock its decoder.
         return Ok(());
     }
     r.run_ok(&tv_launch_cmd(pkg)?).map(|_| ())
 }
+
+/// Completion of a Home command dispatched by the shell.
+pub type HomeRequest = std::sync::mpsc::Receiver<Result<()>>;
 
 /// Which Android app is in front, published by the root service
 /// catostv-android-watch (`/run/catostv/android-top`, one package name).
@@ -1115,12 +1124,7 @@ pub const STOP_UNIT_PREFIX: &str = "catostv-android-stop@";
 /// Android app for CatosTV, so the app pauses as on a real Android TV.
 pub fn home_cmd() -> Cmd {
     Cmd::new("systemctl")
-        .args([
-            "--no-ask-password",
-            "start",
-            "--no-block",
-            "catostv-android-home.service",
-        ])
+        .args(["--no-ask-password", "start", "catostv-android-home.service"])
         .timeout(SLOW)
 }
 
@@ -2586,12 +2590,13 @@ NAME="sr0" KNAME="sr0" PATH="/dev/sr0" PKNAME="" TYPE="rom" SIZE="1073741312" RO
         let mut r = FakeRunner::new();
         let mut no_sleep = |_| panic!("a booted Android app must not wait for readiness");
         for pkg in ["org.smarttube.stable", "com.android.vending"] {
-            open_app(&mut r, pkg, true, Some(pkg), &mut no_sleep).unwrap();
+            open_app(&mut r, pkg, &[], true, Some(pkg), &mut no_sleep).unwrap();
             assert!(r.seen.is_empty());
         }
         open_app(
             &mut r,
             "org.smarttube.stable",
+            &[],
             true,
             Some("com.android.vending"),
             &mut no_sleep,
@@ -2609,6 +2614,7 @@ NAME="sr0" KNAME="sr0" PATH="/dev/sr0" PKNAME="" TYPE="rom" SIZE="1073741312" RO
         open_app(
             &mut r,
             "com.android.vending",
+            &[],
             false,
             Some("com.android.vending"),
             &mut |d| slept += d,
@@ -2624,19 +2630,79 @@ NAME="sr0" KNAME="sr0" PATH="/dev/sr0" PKNAME="" TYPE="rom" SIZE="1073741312" RO
     #[test]
     fn open_rejects_bad_packages_and_reports_launch_or_boot_failures() {
         let mut r = FakeRunner::new();
-        assert!(open_app(&mut r, "bad;rm", true, Some("bad;rm"), &mut |_| {}).is_err());
+        assert!(open_app(&mut r, "bad;rm", &[], true, Some("bad;rm"), &mut |_| {}).is_err());
         assert!(r.seen.is_empty());
         r.push(Output::failed(1, "Android launch failed"));
         assert!(
-            open_app(&mut r, "com.android.vending", true, None, &mut |_| {})
+            open_app(&mut r, "com.android.vending", &[], true, None, &mut |_| {})
                 .unwrap_err()
                 .message()
                 .contains("Android launch failed")
         );
         let mut r = FakeRunner::new();
-        let err = open_app(&mut r, "com.android.vending", false, None, &mut |_| {}).unwrap_err();
+        let err =
+            open_app(&mut r, "com.android.vending", &[], false, None, &mut |_| {}).unwrap_err();
         assert!(err.message().contains("Android is still starting"));
         assert!(r.seen.iter().all(|cmd| *cmd == list_apps_cmd()));
+    }
+
+    #[test]
+    fn reopen_waits_for_all_home_commands_and_ignores_the_old_front_app() {
+        use std::sync::mpsc;
+        let (first_sent, first) = mpsc::channel();
+        let (last_sent, last) = mpsc::channel();
+        let (finished, result) = mpsc::channel();
+        first_sent.send(Ok(())).unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut r = FakeRunner::new();
+            let opened = open_app(
+                &mut r,
+                "org.smarttube.stable",
+                &[first, last],
+                true,
+                Some("org.smarttube.stable"),
+                &mut |_| panic!("warm reopen must not poll app discovery"),
+            );
+            finished.send((opened, r.seen)).unwrap();
+        });
+        assert!(matches!(
+            result.recv_timeout(Duration::from_millis(30)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        last_sent.send(Ok(())).unwrap();
+        let (opened, seen) = result.recv_timeout(Duration::from_secs(2)).unwrap();
+        worker.join().unwrap();
+        opened.unwrap();
+        assert_eq!(seen, vec![tv_launch_cmd("org.smarttube.stable").unwrap()]);
+        assert_eq!(
+            home_cmd().args,
+            ["--no-ask-password", "start", "catostv-android-home.service"]
+        );
+    }
+
+    #[test]
+    fn unfinished_or_failed_home_does_not_open_an_app_over_it() {
+        use std::sync::mpsc;
+        for response in [Some(Err(Error::msg("Home failed"))), None] {
+            let (sent, pending) = mpsc::channel();
+            if let Some(response) = response {
+                sent.send(response).unwrap();
+            }
+            drop(sent);
+            let mut r = FakeRunner::new();
+            assert!(
+                open_app(
+                    &mut r,
+                    "com.android.vending",
+                    &[pending],
+                    true,
+                    Some("org.smarttube.stable"),
+                    &mut |_| {},
+                )
+                .is_err()
+            );
+            assert!(r.seen.is_empty());
+        }
     }
 
     #[test]
