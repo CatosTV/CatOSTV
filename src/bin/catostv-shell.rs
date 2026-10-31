@@ -1840,8 +1840,8 @@ impl ShellApp {
         true
     }
 
-    /// Run an Android task once Android has really booted (it answers
-    /// `waydroid app list`), on a background job. CatosTV stays in front
+    /// Run an Android task on a background job. Cold launches wait until
+    /// Android answers; warm launches use the boot watcher's status. CatosTV stays in front
     /// until the app has been launched (switching
     /// early showed whatever app was last on the app desktop).
     fn android(&mut self, ctx: &egui::Context, task: AndroidTask) {
@@ -1869,6 +1869,25 @@ impl ShellApp {
         let home = self.home.clone();
         self.jobs.spawn(move || {
             let mut r = SystemRunner;
+            let launch = |r: &mut dyn Runner, pkg: &str| -> Msg {
+                let result = android::open_app(
+                    r,
+                    pkg,
+                    android::is_booted(),
+                    android::read_top().as_deref(),
+                    &mut std::thread::sleep,
+                );
+                match result {
+                    Ok(()) => Msg::AndroidOpened(pkg.to_string()),
+                    Err(e) if e.to_string().contains("timed out") => Msg::Toast(
+                        "Android is not responding. Settings → Android → Reset Android".into(),
+                    ),
+                    Err(e) => Msg::Toast(e.to_string()),
+                }
+            };
+            if let AndroidTask::Launch(pkg) = &task {
+                return launch(&mut r, pkg);
+            }
             let mut sleep = |d: Duration| std::thread::sleep(d);
             let apps = match android::wait_until_ready(&mut r, android::READY_TIMEOUT, &mut sleep) {
                 Ok(apps) => apps,
@@ -1892,30 +1911,8 @@ impl ShellApp {
             if tv_changed {
                 eprintln!("catostv: Android icons updated ({} apps)", apps.len());
             }
-            let launch = |pkg: &str| -> Msg {
-                // Already Android's front app (CatosTV Home was over it):
-                // just show it. A fresh `am start` stacked a new splash on
-                // SmartTube's running player, and its decoder deadlocked
-                // in the restart.
-                if android::read_top().as_deref() == Some(pkg) {
-                    return Msg::AndroidOpened(pkg.to_string());
-                }
-                // Always through android-launch: it keeps Android in
-                // full-screen mode (`waydroid app launch` asks for the
-                // app's own window, which never opens on the Android TV 16
-                // image), falls back to the phone launcher entry,
-                // and records what was running before.
-                match android::tv_launch_cmd(pkg).and_then(|c| SystemRunner.run_ok(&c).map(|_| ()))
-                {
-                    Ok(()) => Msg::AndroidOpened(pkg.to_string()),
-                    Err(e) if e.to_string().contains("timed out") => Msg::Toast(
-                        "Android is not responding. Settings → Android → Reset Android".into(),
-                    ),
-                    Err(e) => Msg::Toast(e.to_string()),
-                }
-            };
             match task {
-                AndroidTask::Launch(pkg) => launch(&pkg),
+                AndroidTask::Launch(_) => unreachable!("launch handled before app refresh"),
                 AndroidTask::InstallApk(path) => {
                     // Through Android's package manager as root
                     // (Waydroid's own install service is broken on the TV
@@ -1937,7 +1934,7 @@ impl ShellApp {
                     }
                 }
                 AndroidTask::OpenAurora => match android::install_aurora_if_missing(&mut r) {
-                    Ok(_) => launch(android::AURORA_PACKAGE),
+                    Ok(_) => launch(&mut r, android::AURORA_PACKAGE),
                     Err(e) => Msg::Toast(e.to_string()),
                 },
                 // Installing it makes Waydroid write its .desktop file, so
