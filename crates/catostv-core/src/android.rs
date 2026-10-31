@@ -2790,6 +2790,31 @@ exit 0
                 .contains("/system/bin/am")
         );
         assert_eq!(run("org.example.video", "failed").status.code(), Some(7));
+        let home_script = t.path().join("home");
+        std::fs::write(
+            &home_script,
+            include_str!("../../../target-root/usr/local/lib/catostv/android-home"),
+        )
+        .unwrap();
+        for (case, status) in [("tv", 0), ("failed", 7)] {
+            std::fs::remove_file(&calls).unwrap();
+            let result = std::process::Command::new("bash")
+                .arg(&home_script)
+                .env(
+                    "PATH",
+                    format!("{}:{}", t.path().display(), std::env::var("PATH").unwrap()),
+                )
+                .env("LAUNCH_CALLS", &calls)
+                .env("LAUNCH_CASE", case)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.code(), Some(status));
+            let seen = std::fs::read_to_string(&calls).unwrap();
+            assert_eq!(seen.lines().count(), 1);
+            assert!(seen.contains(
+                "/system/bin/am start -W -a android.intent.action.MAIN -c android.intent.category.HOME -f 0x10200000"
+            ));
+        }
     }
 
     #[test]

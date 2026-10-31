@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CatosTV: send Android to its own home screen (run as root by
-# catostv-android-home.service; `waydroid shell` needs root). No input.
+# catostv-android-home.service; Android's activity manager needs root). No input.
 #
 # Android runs in one hidden full-screen window, so when you go back to
 # CatosTV, Android never learns you left: the app stays in front inside
@@ -10,4 +10,10 @@
 # the background, and Android's home screen is what sits under the next
 # app you open.
 set -euo pipefail
-exec waydroid shell -- input keyevent KEYCODE_HOME
+# Wait for the home screen itself. An injected Home key can be handled
+# after the next app opens, sending that app to the background again.
+exec lxc-attach -P /var/lib/waydroid/lxc -n waydroid --clear-env \
+  -v PATH=/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin \
+  -v ANDROID_ROOT=/system -v ANDROID_DATA=/data -- \
+  /system/bin/am start -W -a android.intent.action.MAIN \
+  -c android.intent.category.HOME -f 0x10200000
