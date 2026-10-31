@@ -93,6 +93,7 @@ pub fn mpv_argv(url: &str, socket: &Path, start_paused: bool) -> Vec<String> {
     let mut v: Vec<String> = [
         "mpv",
         "--fullscreen",
+        "--window-dragging=no",
         "--force-window=immediate",
         "--idle=no",
         "--keep-open=no",

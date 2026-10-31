@@ -934,6 +934,8 @@ mp.add_forced_key_binding("UP", "catfyn-up", on_up)
 mp.add_forced_key_binding("DOWN", "catfyn-down", on_down)
 mp.add_forced_key_binding("ESC", "catfyn-back", on_back)
 mp.add_forced_key_binding("BS", "catfyn-back-bs", on_back)
+-- mpv's default double-click binding takes the video out of full screen.
+mp.add_forced_key_binding("MBTN_LEFT_DBL", "catfyn-no-fullscreen", function() end)
 -- Media keys keep working through the input conf; the bar follows pause.
 mp.observe_property("pause", "native", function(_, paused)
     if paused then show() elseif shown then arm_hide() end
