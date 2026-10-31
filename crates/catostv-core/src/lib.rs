@@ -227,6 +227,24 @@ mod repo_consistency {
     }
 
     #[test]
+    fn cattube_staging_helper_is_shipped_and_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let helper = format!(
+            "{}/../../scripts/fetch-cattube.sh",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let metadata = std::fs::metadata(&helper)
+            .expect("the CatTube staging helper must be included with the build scripts");
+        assert!(metadata.is_file());
+        assert_ne!(metadata.permissions().mode() & 0o111, 0);
+        assert!(!repo_file("cattube.lock").is_empty());
+        for script in ["build-iso.sh", "deploy.sh", "make-update.sh"] {
+            assert!(repo_file(&format!("scripts/{script}")).contains("scripts/fetch-cattube.sh"));
+        }
+    }
+
+    #[test]
     fn session_daemons_are_supervised() {
         let autostart = repo_file("target-root/home/catostv/.config/labwc/autostart");
         for b in [
