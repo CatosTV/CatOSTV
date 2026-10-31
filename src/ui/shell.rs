@@ -2671,7 +2671,6 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
             if off > 0 {
                 let app = s.quick_app.clone().unwrap_or(QuickApp {
                     name: "App".into(),
-                    fullscreen: false,
                     mouse: None,
                 });
                 c.text(
@@ -2684,17 +2683,9 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                     Weight::Semibold,
                 );
                 let items = s.quick_app_items();
-                // Four buttons share the width three had.
-                let (step, w) = if items.len() > 3 {
-                    (90.0, 84.0)
-                } else {
-                    (120.0, 112.0)
-                };
+                let (step, w) = (184.0, 172.0);
                 for (k, item) in items.iter().enumerate() {
                     let (icon, label, on) = match item {
-                        QuickAppItem::BackToApp => ("back", "Back", false),
-                        QuickAppItem::Fullscreen if app.fullscreen => ("shrink", "Windowed", false),
-                        QuickAppItem::Fullscreen => ("expand", "Full screen", false),
                         QuickAppItem::Mouse => ("pointer", "Mouse", app.mouse == Some(true)),
                         QuickAppItem::Close => ("close", "Close", false),
                     };

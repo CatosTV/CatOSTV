@@ -1218,56 +1218,44 @@ fn hdr_confirm_keeps_or_turns_off() {
 fn quick_settings_over_an_app_return_to_it() {
     let f = Fixture::new();
     let mut s = Shell::new();
-    s.open_quick(true);
     s.quick_app = Some(QuickApp {
         name: "Jellyfin".into(),
-        fullscreen: false,
         mouse: None,
     });
-    assert!(matches!(s.overlay(), Some(Overlay::Quick { .. })));
-    // App controls first: Back to app · Full screen · Close.
-    assert_eq!(
-        press(&mut s, &f, &[Right, Ok]),
-        vec![
-            Effect::AppWindow(crate::toplevel::WindowAction::Fullscreen(true)),
-            Effect::ReturnToApp
-        ]
-    );
     s.open_quick(true);
+    assert!(matches!(s.overlay(), Some(Overlay::Quick { index: 1 })));
+    assert_eq!(s.quick_app_items(), vec![QuickAppItem::Close]);
+    // Quick settings starts on its normal tiles, away from Close.
+    press(&mut s, &f, &[Up]);
+    assert!(matches!(s.overlay(), Some(Overlay::Quick { index: 0 })));
     assert_eq!(
-        press(&mut s, &f, &[Right, Right, Ok]),
+        press(&mut s, &f, &[Ok]),
         vec![Effect::AppWindow(crate::toplevel::WindowAction::Close)]
     );
     s.open_quick(true);
-    // Down reaches the normal tiles; Up from the first row comes back.
-    press(&mut s, &f, &[Down]);
-    assert!(matches!(s.overlay(), Some(Overlay::Quick { index: 3 })));
-    press(&mut s, &f, &[Up]);
-    assert!(matches!(s.overlay(), Some(Overlay::Quick { index: 0 })));
     assert_eq!(press(&mut s, &f, &[Back]), vec![Effect::ReturnToApp]);
     assert!(!s.quick_over_app);
-    // A Linux app gets a Mouse button before Close; OK turns mouse mode
-    // on for it and goes back to it.
+    // A Linux app also has Mouse. Up reaches that row; OK toggles it.
     s.quick_app = Some(QuickApp {
         name: "FreeTube".into(),
-        fullscreen: false,
         mouse: Some(false),
     });
     s.open_quick(true);
-    assert_eq!(s.quick_offset(), 4);
+    assert_eq!(s.quick_offset(), 2);
+    assert!(matches!(s.overlay(), Some(Overlay::Quick { index: 2 })));
     assert_eq!(
-        press(&mut s, &f, &[Right, Right, Ok]),
+        press(&mut s, &f, &[Up, Ok]),
         vec![Effect::AppMouse(true), Effect::ReturnToApp]
     );
     s.quick_app.as_mut().unwrap().mouse = Some(true);
     s.open_quick(true);
     assert_eq!(
-        press(&mut s, &f, &[Right, Right, Ok]),
+        press(&mut s, &f, &[Up, Ok]),
         vec![Effect::AppMouse(false), Effect::ReturnToApp]
     );
     s.open_quick(true);
     assert_eq!(
-        press(&mut s, &f, &[Right, Right, Right, Ok]),
+        press(&mut s, &f, &[Up, Right, Ok]),
         vec![Effect::AppWindow(crate::toplevel::WindowAction::Close)]
     );
     // Opened inside CatosTV: Back just closes it, the page stays.

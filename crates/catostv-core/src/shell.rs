@@ -314,8 +314,6 @@ pub enum EthRow {
 /// Controls for the app behind Quick settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickAppItem {
-    BackToApp,
-    Fullscreen,
     /// Mouse mode for this app (`crate::cursor`): not for Android apps.
     Mouse,
     Close,
@@ -325,7 +323,6 @@ pub enum QuickAppItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickApp {
     pub name: String,
-    pub fullscreen: bool,
     /// Mouse mode is on in this app right now; `None`: not offered
     /// (Android).
     pub mouse: Option<bool>,
@@ -1332,13 +1329,11 @@ impl Shell {
         }
     }
 
-    /// The app controls, in order: Back · Full screen · Mouse · Close
+    /// The app controls, in order: Mouse · Close
     /// (no Mouse for Android apps).
     pub fn quick_app_items(&self) -> Vec<QuickAppItem> {
         let mouse = self.quick_app.as_ref().is_some_and(|a| a.mouse.is_some());
         [
-            Some(QuickAppItem::BackToApp),
-            Some(QuickAppItem::Fullscreen),
             mouse.then_some(QuickAppItem::Mouse),
             Some(QuickAppItem::Close),
         ]
@@ -1350,8 +1345,10 @@ impl Shell {
     pub fn open_quick(&mut self, over_app: bool) {
         self.overlays
             .retain(|o| !matches!(o, Overlay::Quick { .. }));
-        self.overlays.push(Overlay::Quick { index: 0 });
         self.quick_over_app = over_app;
+        self.overlays.push(Overlay::Quick {
+            index: self.quick_offset(),
+        });
     }
 
     pub fn go_home(&mut self) {
@@ -2867,18 +2864,10 @@ impl Shell {
                         Action::Down => *index = off,
                         Action::Ok | Action::OkLong => {
                             let item = app_items[*index];
-                            let fullscreen = self.quick_app.as_ref().is_some_and(|a| a.fullscreen);
                             let mouse = self.quick_app.as_ref().and_then(|a| a.mouse);
                             self.overlays.pop();
                             self.quick_over_app = false;
                             return match item {
-                                QuickAppItem::BackToApp => vec![Effect::ReturnToApp],
-                                QuickAppItem::Fullscreen => vec![
-                                    Effect::AppWindow(crate::toplevel::WindowAction::Fullscreen(
-                                        !fullscreen,
-                                    )),
-                                    Effect::ReturnToApp,
-                                ],
                                 QuickAppItem::Mouse => {
                                     vec![
                                         Effect::AppMouse(!mouse.unwrap_or(false)),

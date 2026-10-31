@@ -6,9 +6,7 @@
   popups ever reach the TV user.
 
     desktop 1 "CatosTV"  catostv-shell
-    desktop 2 "App"    the running app, maximized; apps other than Android
-                       get a slim bar with round close / minimise /
-                       full-screen buttons (theme "CatosTV")
+    desktop 2 "App"    the running app, maximized and undecorated
 
 
   DO NOT remove the reserved W-A-F11 / W-A-F12 bindings: the shell presses
@@ -31,9 +29,8 @@
   </desktops>
 
   <theme>
-    <!-- No window decorations at all: apps draw edge to edge like
-         on a TV. Back / full screen / close live in CatosTV's Control Center
-         (the Control Center key over any app), usable with a remote. -->
+    <!-- No window decorations: apps draw edge to edge. Close and Mouse
+         live in CatosTV's Control Center, usable with a remote. -->
     <keepBorder>no</keepBorder>
     <maximizedDecoration>none</maximizedDecoration>
   </theme>
@@ -144,7 +141,7 @@
 
     <!-- No plain F11 for full screen: the shell's own W-A-F11 is F11 too,
          and if its modifiers ever got lost on the way it took a film out of
-         full screen. Full screen is in the Control Center's app row. -->
+         full screen. Apps request full screen when they open. -->
 
     <!-- Development fallback keys (keyboard only). -->
     <keybind key="W-1"><action name="ForEach">

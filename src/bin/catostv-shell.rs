@@ -1347,8 +1347,7 @@ impl ShellApp {
 
     /// Quick settings over the app in front, with that app's controls.
     fn quick_over_app(&mut self) {
-        self.shell.open_quick(true);
-        // Which app, and is it full screen (for the controls row).
+        // Which app the controls belong to.
         let name = self
             .foreground
             .as_deref()
@@ -1356,12 +1355,6 @@ impl ShellApp {
             .map(|a| a.name.clone())
             .or_else(|| self.foreground.clone())
             .unwrap_or_else(|| "App".into());
-        let fullscreen = self
-            .foreground
-            .as_deref()
-            .and_then(|f| self.window_pattern(f))
-            .and_then(|w| catostv_core::toplevel::is_fullscreen(&w))
-            .unwrap_or(false);
         // Offered as chosen, showing whether it is on right now.
         let live = lock(&self.watch).mouse_live;
         let mouse = self
@@ -1369,11 +1362,8 @@ impl ShellApp {
             .as_deref()
             .and_then(|f| self.mouse_for(f))
             .map(|_| live);
-        self.shell.quick_app = Some(catostv_core::shell::QuickApp {
-            name,
-            fullscreen,
-            mouse,
-        });
+        self.shell.quick_app = Some(catostv_core::shell::QuickApp { name, mouse });
+        self.shell.open_quick(true);
     }
 
     /// Mouse mode for app `id`: as chosen in the Control Center, else as
