@@ -1685,22 +1685,29 @@ impl ShellApp {
             // behind the app is what flashes up when it next comes over it.
             wait_for_blank(&watch, &ui);
             let blank_ready = Instant::now();
-            let switched = compositor::show_app_workspace(&mut SystemRunner, true);
+            // Activating Android's own window also selects its desktop.
+            // A keyboard desktop switch first adds another handover.
+            let switched = if let Some(w) = window.as_deref().filter(|_| android) {
+                match catostv_core::toplevel::activate(w) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => {
+                        lock(&watch).blank = None;
+                        return Msg::AndroidNoWindow(name);
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                compositor::show_app_workspace(&mut SystemRunner, true)
+            };
             if switched.is_err() {
                 lock(&watch).blank = None;
             }
-            if let Some(w) = window {
-                if android {
-                    // Raised only if it is not in front already; never
-                    // minimized or closed.
-                    let _ = catostv_core::toplevel::raise_if_needed(&w);
-                } else {
-                    let player = players
-                        .iter()
-                        .any(|p| catostv_core::toplevel::activate(p).unwrap_or(false));
-                    if !player {
-                        let _ = catostv_core::toplevel::activate(&w);
-                    }
+            if let Some(w) = window.filter(|_| !android) {
+                let player = players
+                    .iter()
+                    .any(|p| catostv_core::toplevel::activate(p).unwrap_or(false));
+                if !player {
+                    let _ = catostv_core::toplevel::activate(&w);
                 }
             }
             if let Some(pkg) = package.as_deref().filter(|_| android) {
