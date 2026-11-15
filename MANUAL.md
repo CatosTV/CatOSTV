@@ -89,6 +89,10 @@ button with your name), keeps what you watch off CatosTV's Home.
 
 ## Apps that need a mouse
 
+To hide an app, open **Settings → Apps**, select it and choose **Hide**.
+This also works for bundled apps such as Catfyn. **Show hidden apps** on
+the same page restores them.
+
 **Settings → Android → Restart Android** restarts Android while keeping its
 apps and sign-ins. The separate **Reset Android** option removes Android's
 apps, sign-ins and settings after confirmation.

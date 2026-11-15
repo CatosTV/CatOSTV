@@ -1345,6 +1345,7 @@ impl ShellApp {
         // Apps whose program is missing are not shown at all;
         // a running one stays so it can be resumed/closed.
         apps.retain(|a| a.is_installed() || self.mgr().is_running(&a.id));
+        apps.retain(|a| !self.prefs.hidden_apps.contains(&a.id));
         catostv_core::apps::apply_order(&mut apps, &self.prefs.app_order);
         // Papirus icons where the theme has one.
         for a in &mut apps {
@@ -2201,6 +2202,21 @@ impl ShellApp {
                 } else {
                     self.launch(ctx, i);
                 }
+            }
+            Effect::HideApp(i) => {
+                if let Some(app) = self.apps.get(i) {
+                    let id = app.id.clone();
+                    if !self.prefs.hidden_apps.contains(&id) {
+                        self.prefs.hidden_apps.push(id);
+                        self.save_prefs(ctx);
+                        self.rebuild_apps();
+                    }
+                }
+            }
+            Effect::ShowHiddenApps => {
+                self.prefs.hidden_apps.clear();
+                self.save_prefs(ctx);
+                self.rebuild_apps();
             }
             Effect::Uninstall(i) => {
                 let Some(app) = self.apps.get(i).cloned() else {

@@ -112,6 +112,8 @@ pub struct UiPrefs {
     /// Home's apps in the order the user put them (app ids); apps not
     /// listed follow in their usual order.
     pub app_order: Vec<String>,
+    /// Apps hidden from Home and Apps. Settings can show them again.
+    pub hidden_apps: Vec<String>,
     /// Behind the interface: one of [`HOME_BACKGROUNDS`] (keys).
     pub home_background: String,
     /// Mouse mode chosen per app (app id, on) in the Control Center; apps
@@ -179,6 +181,7 @@ impl Default for UiPrefs {
             saver_pictures: "cats".into(),
             saver_minutes: crate::screensaver::DEFAULT_MINUTES,
             app_order: Vec::new(),
+            hidden_apps: Vec::new(),
             home_background: DEFAULT_HOME_BACKGROUND.into(),
             mouse_apps: Vec::new(),
         }
@@ -278,6 +281,11 @@ impl UiPrefs {
                     p.pad_nintendo_devices.push(v.to_string())
                 }
                 "app" if !v.is_empty() && v.len() <= 256 => p.app_order.push(v.to_string()),
+                "hidden_app" if !v.is_empty() && v.len() <= 256 => {
+                    if !p.hidden_apps.iter().any(|id| id == v) {
+                        p.hidden_apps.push(v.to_string());
+                    }
+                }
                 "mouse_app" => {
                     if let Some((id, on)) = v.rsplit_once(' ')
                         && !id.trim().is_empty()
@@ -360,6 +368,10 @@ impl UiPrefs {
         for id in &self.app_order {
             let id: String = id.chars().filter(|c| !c.is_control()).collect();
             s.push_str(&format!("app = {id}\n"));
+        }
+        for id in &self.hidden_apps {
+            let id: String = id.chars().filter(|c| !c.is_control()).collect();
+            s.push_str(&format!("hidden_app = {id}\n"));
         }
         for (id, on) in &self.mouse_apps {
             let id: String = id.chars().filter(|c| !c.is_control()).collect();
@@ -453,6 +465,7 @@ mod tests {
             saver_pictures: "photos".into(),
             saver_minutes: 10,
             app_order: vec!["catfyn".into(), "com.example.Tv".into()],
+            hidden_apps: vec!["catfyn".into()],
             home_background: "photos".into(),
             mouse_apps: vec![("io.freetubeapp.FreeTube".into(), true)],
         };

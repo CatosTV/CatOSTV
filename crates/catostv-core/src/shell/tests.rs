@@ -85,6 +85,31 @@ fn press(s: &mut Shell, f: &Fixture, actions: &[Action]) -> Vec<Effect> {
 }
 
 #[test]
+fn bundled_apps_can_be_hidden_and_restored_from_settings() {
+    let mut f = Fixture::new();
+    let mut shell = Shell::new();
+    shell.open_app_options(0, &f.ctx(), false);
+    let hide = app_options(false, false, false)
+        .iter()
+        .position(|option| *option == AppOption::Hide)
+        .unwrap();
+    *shell.overlays.last_mut().unwrap().index_mut().unwrap() = hide;
+    assert_eq!(shell.handle(Action::Ok, &f.ctx()), [Effect::HideApp(0)]);
+    assert!(shell.overlays.is_empty());
+    f.prefs.hidden_apps.push("jellyfin".into());
+    open_settings(&mut shell, &f, Category::Apps);
+    let restore = shell
+        .settings_rows(&f.ctx())
+        .iter()
+        .position(|row| row.id == RowId::ShowHiddenApps)
+        .unwrap();
+    shell.settings_rows_focus = true;
+    shell.settings_row = restore;
+    assert_eq!(shell.handle(Action::Ok, &f.ctx()), [Effect::ShowHiddenApps]);
+    assert!(!app_options(true, false, false).contains(&AppOption::Hide));
+}
+
+#[test]
 fn cast_receiver_switch_uses_saved_choice_instead_of_daemon_presence() {
     let mut f = Fixture::new();
     let mut s = Shell::new();

@@ -2028,6 +2028,7 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::App(_) => return None,
         R::AppSearch => "search",
         R::UpdateApps => "download",
+        R::ShowHiddenApps => "grid",
         R::AndroidState | R::AndroidSetup | R::AndroidVariant | R::AndroidCertify => "android",
         R::AndroidRetry => "refresh",
         R::AndroidApk => "usb",

@@ -252,6 +252,7 @@ pub enum RowId {
     /// Settings → Apps: filter the list.
     AppSearch,
     UpdateApps,
+    ShowHiddenApps,
     AndroidState,
     AndroidSetup,
     /// After a failed setup: the same store again (Settings → Android).
@@ -729,6 +730,15 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                     "Update store apps",
                     "",
                     "",
+                    RowKind::Action,
+                ));
+            }
+            if !ctx.prefs.hidden_apps.is_empty() && needle.is_empty() {
+                v.push(row(
+                    RowId::ShowHiddenApps,
+                    "Show hidden apps",
+                    "",
+                    ctx.prefs.hidden_apps.len().to_string(),
                     RowKind::Action,
                 ));
             }

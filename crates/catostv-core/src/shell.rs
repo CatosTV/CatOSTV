@@ -365,6 +365,7 @@ pub enum AppOption {
     Restart,
     Close,
     Uninstall,
+    Hide,
     Cancel,
 }
 
@@ -377,6 +378,7 @@ impl AppOption {
             Self::Restart => "Restart",
             Self::Close => "Close",
             Self::Uninstall => "Uninstall",
+            Self::Hide => "Hide",
             Self::Cancel => "Cancel",
         }
     }
@@ -395,6 +397,9 @@ pub fn app_options(running: bool, removable: bool, movable: bool) -> Vec<AppOpti
     }
     if removable && !running {
         v.push(AppOption::Uninstall);
+    }
+    if !running {
+        v.push(AppOption::Hide);
     }
     v.push(AppOption::Cancel);
     v
@@ -894,6 +899,8 @@ pub enum Effect {
     Restart(usize),
     /// Remove a Flatpak / Android app (index into `ctx.apps`).
     Uninstall(usize),
+    HideApp(usize),
+    ShowHiddenApps,
     SetWifi(bool),
     SetBluetooth(bool),
     VolumeStep(i8),
@@ -2751,6 +2758,7 @@ impl Shell {
                 vec![]
             }
             RowId::UpdateApps => vec![Effect::UpdateApps],
+            RowId::ShowHiddenApps => vec![Effect::ShowHiddenApps],
             // First setup: the store chooser; "Try again" after a
             // failure keeps the choice (its own row: after a failure no image
             // is installed yet either).
@@ -2941,6 +2949,7 @@ impl Shell {
                     AppOption::Restart => vec![Effect::Restart(app)],
                     AppOption::Close => vec![Effect::Close(app)],
                     AppOption::Uninstall => vec![Effect::Uninstall(app)],
+                    AppOption::Hide => vec![Effect::HideApp(app)],
                     AppOption::Cancel => vec![],
                 }
             }
