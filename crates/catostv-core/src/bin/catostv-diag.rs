@@ -1,7 +1,7 @@
-//! `catostv-diag`, read-only diagnostics for developers and support.
+//! `catostv-diag`, diagnostics and APK installation.
 //!
-//! Nothing in this tool modifies the system. `dry-run` executes an install
-//! plan against the simulated host (only `lsblk`/`findmnt` queries run).
+//! `android-install` installs the specified APK. `dry-run` runs a simulated
+//! install plan; its only host queries are `lsblk` and `findmnt`.
 //! (`store QUERY` lets flatpak refresh its appstream cache, as any search does.)
 //!
 //! ```text
@@ -17,6 +17,8 @@
 //! catostv-diag windows                      app windows the compositor reports (run in the TV session)
 //! catostv-diag activate APP_ID               bring that window to the front (testing what follows)
 //! catostv-diag android-sync                 redo the Android icon sync (run as the TV account)
+//! catostv-diag android-install /path/app.apk install an APK through Android PackageManager
+//! catostv-diag freeze-report                current state and previous-boot kernel warnings
 //! catostv-diag version
 //! ```
 
@@ -26,7 +28,7 @@ use catostv_core::{android, audio, bluetooth, desktop, disk, env, flatpak, ipc, 
 use std::time::Duration;
 
 const USAGE: &str =
-    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|packages|install-prepare|windows|activate|minimize|version> [options]
+    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|android-install|freeze-report|packages|install-prepare|windows|activate|minimize|version> [options]
   plan/dry-run options: --disk /dev/X  [--timezone Area/City]  [--keyboard us|de|…]  [--cpu intel|amd|other]";
 
 fn opt(args: &[String], name: &str) -> Option<String> {
@@ -57,6 +59,7 @@ fn main() {
             0
         }
         Some("status") => status(),
+        Some("freeze-report") => freeze_report(),
         Some("disks") => disks(),
         Some("wifi") => wifi(),
         Some("plan") => {
@@ -75,6 +78,35 @@ fn main() {
         Some("apps") => discovered_apps(),
         Some("store") => store(args.get(1).map(String::as_str)),
         Some("android") => android_status(),
+        Some("android-install") => match args.get(1).filter(|_| args.len() == 2) {
+            Some(path) if android::is_booted() => match android::install_apk_as_root(
+                &mut SystemRunner,
+                &home_dir(),
+                std::path::Path::new(path),
+                &mut std::thread::sleep,
+            ) {
+                Ok(Some(app)) => {
+                    println!("Installed {}", app.name);
+                    0
+                }
+                Ok(None) => {
+                    println!("APK installed");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("catostv-diag: {error}");
+                    1
+                }
+            },
+            Some(_) => {
+                eprintln!("catostv-diag: Start Android from Settings first");
+                1
+            }
+            None => {
+                eprintln!("usage: catostv-diag android-install /absolute/path/app.apk");
+                2
+            }
+        },
         // The shell's Android icon sync, by hand (run as the TV account):
         // lists Android's apps and writes/removes CatosTV's desktop files.
         Some("android-sync") => match android::list_apps(&mut SystemRunner) {
@@ -507,4 +539,59 @@ fn is_root() -> bool {
                 .and_then(|l| l.split_whitespace().nth(1).map(|u| u == "0"))
         })
         .unwrap_or(false)
+}
+
+/// A bounded snapshot that also retains kernel errors from the previous boot.
+fn freeze_report() -> i32 {
+    use catostv_core::process::{Cmd, Runner};
+    let mut runner = SystemRunner;
+    let commands: &[(&str, &str, &[&str])] = &[
+        ("Uptime", "uptime", &[]),
+        ("Memory", "free", &["-h"]),
+        ("Memory pressure", "cat", &["/proc/pressure/memory"]),
+        ("CPU pressure", "cat", &["/proc/pressure/cpu"]),
+        ("IO pressure", "cat", &["/proc/pressure/io"]),
+        (
+            "Processes",
+            "ps",
+            &["-eo", "pid,ppid,stat,comm,pcpu,pmem", "--sort=-pcpu"],
+        ),
+        ("Graphics drivers", "lspci", &["-nnk"]),
+        (
+            "Current boot kernel warnings",
+            "journalctl",
+            &["-k", "-b", "0", "-p", "warning", "-n", "200", "--no-pager"],
+        ),
+        (
+            "Previous boot kernel warnings",
+            "journalctl",
+            &["-k", "-b", "-1", "-p", "warning", "-n", "200", "--no-pager"],
+        ),
+        ("Service failures", "systemctl", &["--failed", "--no-pager"]),
+        (
+            "Recent interface log",
+            "tail",
+            &["-n", "120", "/home/catostv/.local/state/catostv/shell.log"],
+        ),
+    ];
+    println!("CatosTV {} freeze report", env::version());
+    for (label, program, args) in commands {
+        println!("\n{label}");
+        match runner.run(
+            &Cmd::new(*program)
+                .args(args.iter().copied())
+                .timeout(Duration::from_secs(5)),
+        ) {
+            Ok(out) => {
+                for line in out.stdout.lines().take(300) {
+                    println!("{line}");
+                }
+                if !out.success() {
+                    println!("Unavailable: {}", out.stderr.trim());
+                }
+            }
+            Err(error) => println!("Unavailable: {error}"),
+        }
+    }
+    0
 }
