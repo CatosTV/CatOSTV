@@ -3564,7 +3564,7 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                     (
                         "android",
                         "Aurora Store",
-                        "The Play catalogue without a Google account. Some apps that need Google services will not sign in.",
+                        "The Play catalogue without an account. Some downloads are phone apps and need a mouse.",
                         "No account",
                     ),
                 ],

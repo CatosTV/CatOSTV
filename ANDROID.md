@@ -10,16 +10,20 @@ second home screen to deal with.
 
 1. Open **Settings → Android** and choose **Set up Android TV**.
 2. Pick an app store:
-   - **Google Play**: the real Play Store with your Google account. Google
+   - **Google Play** (recommended for TV apps): the Play Store with your Google account. Google
      has to be told about the TV once (see *Google Play certification*
      below).
    - **Aurora Store**: installs the same apps from Google Play without a
-     Google account. Good if you'd rather not sign in to Google on your TV.
+     Google account. Some downloads are phone versions and may need a mouse.
 3. CatosTV downloads Android (about 1 GB) and sets it up. The page shows
    each step and the download as it goes. It takes a few minutes.
 
 From then on Android starts with the TV in the background, so apps open
 quickly.
+
+For TV apps, start with Google Play. Availability depends on the app,
+region and device certification. Aurora may offer a phone version; installing
+a TV APK directly can help when the publisher provides one.
 
 ## Google Play certification
 
@@ -101,3 +105,16 @@ pleasant on a TV. Phone-only apps open but may expect a touch screen.
   works. See the [manual](MANUAL.md#your-phone).
 - **Storage**: Android apps and their data live on CatosTV's disk; Settings
   → System shows how much space is left.
+
+## Install an APK over SSH
+
+With Debug SSH enabled, copy the APK to the TV, then run as the TV account:
+
+```sh
+scp app.apk catostv@TV_IP:/home/catostv/Downloads/app.apk
+ssh catostv@TV_IP 'catostv-diag android-install /home/catostv/Downloads/app.apk'
+```
+
+Start Android from Settings first. The command uses the same PackageManager
+installation path as the APK picker and waits for its actual result.
+A failed install returns an error; it does not report success early.

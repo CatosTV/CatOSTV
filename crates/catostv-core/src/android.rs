@@ -1356,6 +1356,7 @@ pub fn install_apk_as_root(
     apk: &Path,
     sleep: &mut dyn FnMut(Duration),
 ) -> Result<Option<AndroidApp>> {
+    let _install_lock = apk_install_lock(home)?;
     let before: Vec<String> = list_apps(r)
         .map(|a| a.into_iter().map(|a| a.package).collect())
         .unwrap_or_default();
@@ -1375,6 +1376,28 @@ pub fn install_apk_as_root(
     verdict.map_err(|reason| Error::msg(format!("Android refused the APK: {reason}")))?;
     let now = list_apps(r).unwrap_or_default();
     Ok(now.into_iter().find(|a| !before.contains(&a.package)))
+}
+
+fn apk_install_lock(home: &Path) -> Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    let dir = home.join(".cache/catostv/android-install");
+    std::fs::create_dir_all(&dir)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(dir.join("install.lock"))?;
+    // LOCK_EX | LOCK_NB: GUI and SSH installs share the same staged request.
+    if unsafe { flock(file.as_raw_fd(), 2 | 4) } != 0 {
+        return Err(Error::msg("Another APK installation is in progress"));
+    }
+    Ok(file)
 }
 
 /// Install `path` and wait until Android lists a new app
@@ -1718,6 +1741,16 @@ pub fn removable_apks(r: &mut dyn Runner) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn apk_installs_cannot_overwrite_another_staged_request() {
+        let home = std::env::temp_dir().join(format!("catostv-apk-lock-{}", std::process::id()));
+        let first = apk_install_lock(&home).unwrap();
+        assert!(apk_install_lock(&home).is_err());
+        drop(first);
+        assert!(apk_install_lock(&home).is_ok());
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn drawn_app_is_ready_without_a_hold_only_when_its_focus_matches() {
