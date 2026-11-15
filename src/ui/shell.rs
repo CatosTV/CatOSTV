@@ -232,7 +232,7 @@ fn backdrop(c: &C, v: &ShellView, tint: Option<theme::Rgb>) {
         c.background_at(tint, true, v.now);
         return;
     };
-    if show.prev.is_none() {
+    if show.prev.is_none() && show.fade() < 1.0 {
         // The first picture fades in over the glow.
         c.background_at(tint, true, v.now);
     }

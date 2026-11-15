@@ -250,7 +250,7 @@ fn spawn_app_watcher(
     // Short: when an app closes, Android's window underneath shows until
     // this notices and CatosTV comes back.
     const TICK: Duration = Duration::from_millis(120);
-    // The shell repaints at least every 250 ms while visible.
+    // The shell repaints at least once a second while visible.
     const HIDDEN_AFTER: Duration = Duration::from_millis(1500);
     // Hidden sooner right after opening an app: the switch to it comes
     // 60 ms after `Watch::blank` is set (leaving an app that was still
@@ -1442,8 +1442,10 @@ impl ShellApp {
         }
         let px = ctx.content_rect().size() * ctx.pixels_per_point();
         show.tick(ctx, [px.x.round() as u32, px.y.round() as u32]);
-        // The slow drift and the cross-fades.
-        ctx.request_repaint_after(Duration::from_millis(50));
+        // Keep cross-fades smooth, then let the TV rest between pictures.
+        if show.cur.is_some() && show.fade() < 1.0 {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
     }
 
     /// Show the screensaver: the pictures on disk at once, a few new ones
@@ -4329,8 +4331,8 @@ impl eframe::App for ShellApp {
             }
         }
         self.sync_watch();
-        // Keep polling app processes and the clock even when idle.
-        ctx.request_repaint_after(Duration::from_millis(250));
+        // App exits have their own watcher; the visible clock needs one tick.
+        ctx.request_repaint_after(Duration::from_secs(1));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -4731,6 +4733,7 @@ impl eframe::App for ShellApp {
             && self.prefs.home_background == "glow"
             && self.shell.page == catostv_core::shell::Page::Home
             && self.blank_since.is_none()
+            && self.last_input.elapsed() < Duration::from_secs(3)
         {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
@@ -4756,12 +4759,10 @@ impl eframe::App for ShellApp {
             || self.shell.volume.is_some()
             || self.leaving.is_some()
             || fin_loading
-            || !self.fin_fetching.is_empty()
             || self.launching.is_some()
             || self.launch_end.is_some()
             || self.started.elapsed().as_secs_f32() < view::INTRO_SECS
             || confirm_left.is_some()
-            || self.busy()
             || self.animating()
             || now.duration_since(self.page_since).as_secs_f32() < 0.3;
         self.hits = c.take_hits();
@@ -4802,7 +4803,7 @@ impl eframe::App for ShellApp {
             }
         }
         if busy {
-            ctx.request_repaint();
+            ctx.request_repaint_after(Duration::from_millis(33));
         }
     }
 }
