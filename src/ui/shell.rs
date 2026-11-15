@@ -761,7 +761,16 @@ fn home_now_playing(
         c.fill(rect, 28.0, theme::accent_a((24.0 * t) as u8));
     }
     if t > 0.001 {
-        c.outline(rect, 28.0, 2.5, theme::accent_a((255.0 * t) as u8));
+        c.outline(
+            rect,
+            28.0,
+            if theme::flat() { 3.0 } else { 2.5 },
+            if theme::flat() {
+                theme::focus_edge(t)
+            } else {
+                theme::accent_a((255.0 * t) as u8)
+            },
+        );
     }
     let picture = c.r(84.0, 142.0, 304.0, 171.0);
     c.fill(
@@ -1034,7 +1043,11 @@ fn draw_home(c: &C, v: &ShellView) {
             0.5,
             0.86,
         );
-        let rail = c.clipped(0.0, 94.0, 1280.0, 280.0);
+        let rail = if flat {
+            c.clipped(52.0, 94.0, 1176.0, 280.0)
+        } else {
+            c.clipped(0.0, 94.0, 1280.0, 280.0)
+        };
         for (index, item) in retained.iter().enumerate() {
             let x = index as f32 * step - scroll;
             if x + 64.0 + width < 0.0 || x + 64.0 > 1280.0 {
@@ -1055,7 +1068,7 @@ fn draw_home(c: &C, v: &ShellView) {
     }
     let up = if flat { 660.0 } else { 540.0 } * shift;
     let heading_y = if flat {
-        293.25 + 108.0 * player_t
+        260.0 + 138.0 * player_t
     } else {
         384.0
     };
@@ -1065,8 +1078,8 @@ fn draw_home(c: &C, v: &ShellView) {
             heading_y - up,
             Align2::LEFT_CENTER,
             "Apps",
-            21.0,
-            theme::text2(),
+            24.0,
+            theme::text(),
             Weight::Semibold,
         );
     } else {
@@ -1080,7 +1093,7 @@ fn draw_home(c: &C, v: &ShellView) {
     let step = tw + gap;
     let visible = 5usize;
     let row_y = if flat {
-        345.25 + 108.0 * player_t
+        310.0 + 138.0 * player_t
     } else {
         446.0
     };
@@ -1183,7 +1196,7 @@ fn draw_home(c: &C, v: &ShellView) {
         let focus = if in_media { s.home_media } else { None };
         let y = if flat {
             // Show the heading and thumbnail tops as a cue to browse down.
-            650.0 - 462.0 * shift
+            620.0 + 20.0 * player_t - (432.0 + 20.0 * player_t) * shift
         } else {
             628.0 - 278.0 * shift
         };
@@ -1198,7 +1211,7 @@ fn draw_home(c: &C, v: &ShellView) {
     {
         c.text(
             64.0,
-            if flat { 626.0 } else { 648.0 },
+            if flat { 620.0 } else { 648.0 },
             Align2::LEFT_CENTER,
             &c.fit(note, 1150.0, 16.0, Weight::Regular),
             16.0,
@@ -1529,23 +1542,36 @@ fn draw_recents(c: &C, v: &ShellView) {
 
 fn draw_apps(c: &C, v: &ShellView) {
     let s = v.shell;
+    let flat = theme::flat();
     widgets::title(c, 64.0, 96.0, "Apps", 30.0);
     let cols = shell::APPS_GRID_COLS;
-    let (w, h, gx) = (174.0, 98.0, 26.0);
-    let row_h = h + 58.0;
+    let (w, h, gx) = if flat {
+        (172.0, 96.75, 24.0)
+    } else {
+        (174.0, 98.0, 26.0)
+    };
+    let row_h = h + if flat { 67.25 } else { 58.0 };
     let row = s.grid_index / cols;
     let first_row = row.saturating_sub(2) as f32;
     let scroll = c.anim("grid-scroll", first_row * row_h);
     let focus_ok = s.overlay().is_none() && !s.top_focus;
+    let list = if flat {
+        c.clipped(48.0, 148.0, 1184.0, 540.0)
+    } else {
+        c.clone()
+    };
     for (i, app) in v.ctx.apps.iter().enumerate() {
-        let x = 52.0 + (i % cols) as f32 * (w + gx);
+        let x = if flat { 64.0 } else { 52.0 } + (i % cols) as f32 * (w + gx);
         let y = 160.0 + (i / cols) as f32 * row_h - scroll;
         if !(90.0..=700.0).contains(&y) {
             continue;
         }
         let t = focus_t(c, ("grid", i), focus_ok && s.grid_index == i);
-        widgets::app_tile(c, v.images, c.r(x, y, w, h), app, t);
-        c.hit(c.r(x, y, w, h + 34.0), Target::Grid(i));
+        widgets::app_tile(&list, v.images, list.r(x, y, w, h), app, t);
+        list.hit(
+            list.r(x, y, w, h + if flat { 40.0 } else { 34.0 }),
+            Target::Grid(i),
+        );
     }
 }
 
@@ -1668,7 +1694,15 @@ fn draw_store(c: &C, v: &ShellView) {
         if t > 0.01 {
             widgets::card(c, rect, 14.0, t);
         } else if shown {
-            c.fill(rect, 14.0, theme::rgba(theme::WHITE, 16));
+            c.fill(
+                rect,
+                14.0,
+                if theme::flat() {
+                    theme::primary_container()
+                } else {
+                    theme::rgba(theme::WHITE, 16)
+                },
+            );
         }
         c.hit(rect, Target::StoreCat(i));
         c.text(
@@ -1862,12 +1896,13 @@ fn draw_store(c: &C, v: &ShellView) {
         widgets::card(c, widgets::grow(base, t), 24.0, t);
         c.hit(c.r(x, y, w, h + 30.0), Target::StoreItem(i));
         store_icon_or_mono(c, v, item, x + w / 2.0, y + h / 2.0, 60.0);
+        let label_size = if theme::flat() { 17.0 } else { 15.0 };
         c.text(
             x + w / 2.0,
             y + h + 18.0,
             Align2::CENTER_CENTER,
-            &c.fit(&item.name, w - 8.0, 15.0, Weight::Medium),
-            15.0,
+            &c.fit(&item.name, w - 8.0, label_size, Weight::Medium),
+            label_size,
             if t > 0.5 {
                 theme::text()
             } else {
@@ -2208,8 +2243,7 @@ const CAT_TOP: f32 = 114.0;
 fn draw_settings(c: &C, v: &ShellView) {
     let s = v.shell;
     let no_overlay = s.overlay().is_none();
-    // Two panels of the same glass, side by side and the same height; the
-    // focus pill alone says which side you are on.
+    // Flat gives the content a higher tone than the navigation panel.
     c.glass(c.r(32.0, 32.0, 300.0, 656.0), 32.0);
     widgets::title(c, 60.0, 60.0, "Settings", 28.0);
     for (i, cat) in Category::ALL.iter().enumerate() {
@@ -2268,7 +2302,11 @@ fn draw_settings(c: &C, v: &ShellView) {
     }
 
     let right = c.r(344.0, 32.0, 884.0, 656.0);
-    c.glass(right, 32.0);
+    if theme::flat() {
+        c.fill(right, 32.0, theme::surface(2));
+    } else {
+        c.glass(right, 32.0);
+    }
     let rows_on = c.anim(
         ("settings-rows-focus", s.current_category().title()),
         if no_overlay && s.settings_rows_focus {
@@ -2848,12 +2886,14 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                 c.hit(base, Target::Item(off + i));
                 widgets::icon_badge(c, x + 36.0, y + 48.0, 20.0, icon, active, t);
                 let ty = if state.is_empty() { y + 48.0 } else { y + 38.0 };
+                let label_size = if theme::flat() { 16.0 } else { 15.0 };
+                let state_size = if theme::flat() { 13.5 } else { 12.5 };
                 c.text(
                     x + 66.0,
                     ty,
                     Align2::LEFT_CENTER,
-                    &c.fit(label, 96.0, 15.0, Weight::Medium),
-                    15.0,
+                    &c.fit(label, 96.0, label_size, Weight::Medium),
+                    label_size,
                     theme::text(),
                     Weight::Medium,
                 );
@@ -2862,9 +2902,13 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                         x + 66.0,
                         y + 60.0,
                         Align2::LEFT_CENTER,
-                        &c.fit(&state, 96.0, 12.5, Weight::Regular),
-                        12.5,
-                        theme::text3(),
+                        &c.fit(&state, 96.0, state_size, Weight::Regular),
+                        state_size,
+                        if theme::flat() {
+                            widgets::mix(theme::text3(), theme::text2(), t)
+                        } else {
+                            theme::text3()
+                        },
                         Weight::Regular,
                     );
                 }

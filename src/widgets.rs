@@ -15,10 +15,9 @@ use eframe::egui::{Align2, Color32, Rect};
 
 // ---------------------------------------------------------------- focus
 //
-// One focus language for every screen ("subtle, like
-// tvOS"): nothing is drawn outside the focused element, there are no
-// coloured glows, rings or thick outlines, and every soft edge is a real
-// Gaussian (`Canvas::soft_shadow`), never stacked translucent shapes.
+// Glassy uses a soft pane and sheen. Flat uses a tonal fill and a crisp
+// accent edge, with stronger separation for viewing across the room.
+// Glassy's soft edges are real Gaussian shadows (`Canvas::soft_shadow`).
 //
 // * Rows, list items, buttons, keys, chips and sheet cards: [`focus_pill`]
 //   a lighter pane inside the element's own bounds (white ~14 % at the
@@ -42,7 +41,7 @@ pub fn focus_pill<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
             radius,
             mix(theme::surface(2), theme::primary_container(), t),
         );
-        c.outline(rect, radius, 2.0, theme::accent_a((255.0 * t) as u8));
+        c.outline(rect, radius, 3.0, theme::focus_edge(t));
         return;
     }
     c.rounded_gradient(
@@ -71,7 +70,11 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 /// so moving up from the rows into the bar is obvious.
 pub fn bar_pill<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
     if theme::flat() {
-        c.fill(rect, radius, mix(theme::surface(3), theme::accent(), t));
+        c.fill(
+            rect,
+            radius,
+            mix(theme::primary_container(), theme::accent(), t),
+        );
         return;
     }
     if t > 0.01 {
@@ -102,7 +105,7 @@ pub const LIFT: f32 = 0.06;
 pub const HOME_LIFT: f32 = 0.14;
 
 pub fn home_lift() -> f32 {
-    if theme::flat() { 0.045 } else { HOME_LIFT }
+    if theme::flat() { 0.06 } else { HOME_LIFT }
 }
 
 /// [`lifted`], growing by `grow` (×1.14 for 0.14) when focused.
@@ -148,7 +151,7 @@ pub fn focus_sheen<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
         return;
     }
     if theme::flat() {
-        c.outline(rect, radius, 2.0, theme::accent_a((255.0 * t) as u8));
+        c.outline(rect, radius, 3.0, theme::focus_edge(t));
         return;
     }
     c.rounded_gradient(rect, radius, theme::WHITE, (31.0 * t) as u8, 0);
@@ -187,15 +190,20 @@ pub fn card<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
     focus_pill(c, rect, radius, t);
 }
 
-/// Small caps-style section label ("AVAILABLE NETWORKS").
+/// Section label: sentence case in Flat, compact capitals in Glassy.
 pub fn section<H: Copy>(c: &Canvas<H>, x: f32, y: f32, text: &str) {
+    let flat = theme::flat();
     c.text(
         x,
         y,
         Align2::LEFT_CENTER,
-        &text.to_uppercase(),
-        12.5,
-        theme::text3(),
+        &if flat {
+            text.to_owned()
+        } else {
+            text.to_uppercase()
+        },
+        if flat { 19.0 } else { 12.5 },
+        if flat { theme::text2() } else { theme::text3() },
         Weight::Semibold,
     );
 }
@@ -254,7 +262,7 @@ pub fn filter_chip<H: Copy>(c: &Canvas<H>, rect: Rect, label: &str, selected: bo
             },
         );
         if t > 0.01 {
-            c.outline(rect, r, 2.0, theme::accent_a((255.0 * t) as u8));
+            c.outline(rect, r, 3.0, theme::focus_edge(t));
         }
     } else if selected {
         c.fill(rect, r, theme::rgba(theme::INK, 245));
@@ -405,7 +413,7 @@ pub fn app_tile_lift<H: Copy>(
         c.fill(
             rect,
             radius,
-            mix(theme::surface(2), theme::primary_container(), t),
+            mix(theme::app_container(tint), theme::primary_container(), t),
         );
     } else {
         c.fill(rect, radius, theme::rgba(theme::BG_TOP, 175));
@@ -414,7 +422,7 @@ pub fn app_tile_lift<H: Copy>(
     c.frost_edge(rect, radius, 1.0);
     focus_sheen(c, rect, radius, t);
     let alpha = if app.installed { 255 } else { 110 };
-    let size = h * 0.42 * (1.0 + 0.08 * lift);
+    let size = h * if theme::flat() { 0.52 } else { 0.42 } * (1.0 + 0.08 * lift);
     app_icon(
         c,
         images,
@@ -432,8 +440,8 @@ pub fn app_tile_lift<H: Copy>(
     } else {
         theme::text2()
     };
-    let label_size = if theme::flat() && w >= 210.0 {
-        18.0
+    let label_size = if theme::flat() {
+        if w >= 210.0 { 19.0 } else { 17.0 }
     } else {
         15.0
     };
@@ -516,7 +524,7 @@ pub fn button<H: Copy>(c: &Canvas<H>, rect: Rect, label: &str, style: ButtonStyl
     match style {
         _ if theme::flat() => {
             if t > 0.01 {
-                c.outline(rect, radius, 2.0, theme::accent_a((255.0 * t) as u8));
+                c.outline(rect, radius, 3.0, theme::focus_edge(t));
             }
         }
         ButtonStyle::Secondary => {
@@ -603,7 +611,7 @@ pub fn tab_bar<H: Copy>(
     let nav = c.r(cx - total / 2.0, y, total, h);
     c.glass(nav, h / 2.0);
     let tf = c.anim((id, "tab-focus"), if focus.is_some() { 1.0 } else { 0.0 });
-    if tf > 0.01 {
+    if tf > 0.01 && !theme::flat() {
         c.outline(nav, h / 2.0, 1.5, theme::accent_a((150.0 * tf) as u8));
     }
     let mut rects = Vec::with_capacity(labels.len());
@@ -668,7 +676,11 @@ pub fn tab_bar<H: Copy>(
                 x + w / 2.0,
                 y + h - 5.0,
                 2.0,
-                theme::rgba(theme::WHITE, (160.0 * (1.0 - cover * 2.0)) as u8),
+                if theme::flat() {
+                    theme::accent_a((255.0 * (1.0 - cover * 2.0)) as u8)
+                } else {
+                    theme::rgba(theme::WHITE, (160.0 * (1.0 - cover * 2.0)) as u8)
+                },
             );
         }
     }
@@ -705,7 +717,16 @@ pub fn toggle<H: Copy>(
         c.shadow(track, 13.0, 0.0, 14.0, theme::accent_a(90));
     }
     c.fill(track, 13.0, fill);
-    c.circle(knob_x, y + 13.0, 10.0, theme::rgb(theme::WHITE));
+    c.circle(
+        knob_x,
+        y + 13.0,
+        10.0,
+        if theme::flat() {
+            mix(theme::text2(), theme::on_accent(), k)
+        } else {
+            theme::rgb(theme::WHITE)
+        },
+    );
 }
 
 /// Horizontal level bar (volume, picture fit, progress).
@@ -775,7 +796,7 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
         rect,
         radius,
         if theme::flat() {
-            theme::surface(2)
+            theme::surface(1)
         } else {
             theme::rgba(theme::WHITE, 12)
         },
@@ -810,10 +831,13 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
         );
         tx = x + 36.0 + 2.0 * r;
     }
+    let label_size = if theme::flat() { 18.0 } else { 16.5 };
+    let subtitle_size = if theme::flat() { 14.0 } else { 13.0 };
+    let value_size = if theme::flat() { 16.0 } else { 15.0 };
     let value_w = if row.value.is_empty() {
         0.0
     } else {
-        c.text_width(row.value, 15.0, Weight::Medium) + 24.0
+        c.text_width(row.value, value_size, Weight::Medium) + 24.0
     };
     let right_w = match row.kind {
         Some(RowKind::Toggle(_)) => 64.0,
@@ -833,8 +857,8 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
         tx,
         title_y,
         Align2::LEFT_CENTER,
-        &c.fit(row.title, text_w, 16.5, Weight::Medium),
-        16.5,
+        &c.fit(row.title, text_w, label_size, Weight::Medium),
+        label_size,
         ink,
         Weight::Medium,
     );
@@ -843,9 +867,13 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
             tx,
             y + h / 2.0 + 11.0,
             Align2::LEFT_CENTER,
-            &c.fit(row.subtitle, text_w, 13.0, Weight::Regular),
-            13.0,
-            theme::text3(),
+            &c.fit(row.subtitle, text_w, subtitle_size, Weight::Regular),
+            subtitle_size,
+            if theme::flat() && !row.disabled {
+                mix(theme::text3(), theme::text2(), t)
+            } else {
+                theme::text3()
+            },
             Weight::Regular,
         );
     }
@@ -857,7 +885,7 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
             cy,
             Align2::RIGHT_CENTER,
             row.value,
-            15.0,
+            value_size,
             col,
             Weight::Medium,
         );
@@ -884,7 +912,7 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
             };
             icons::draw(c, "chevron", rx - 6.0, cy, 13.0, col);
             value_text(c, rx - 22.0, col);
-            let vw = c.text_width(row.value, 15.0, Weight::Medium);
+            let vw = c.text_width(row.value, value_size, Weight::Medium);
             icons::draw(c, "back", rx - 36.0 - vw, cy, 13.0, col);
         }
         Some(RowKind::Soon) => {

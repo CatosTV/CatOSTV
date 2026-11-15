@@ -132,9 +132,10 @@ impl<H: Copy> Canvas<H> {
 
     // ---------------- pointer ----------------
 
-    /// Register a clickable rect (later registrations are on top).
+    /// Register the visible part of a clickable rect (later registrations win).
     pub fn hit(&self, rect: Rect, target: H) {
-        if self.interactive {
+        let rect = rect.intersect(self.painter.clip_rect());
+        if self.interactive && rect.is_positive() {
             self.hits.borrow_mut().push((rect, target));
         }
     }
@@ -992,6 +993,28 @@ mod motion_tests {
             let hits = c.take_hits();
             assert_eq!(hits.len(), 1);
             assert_eq!(hits[0], (c.r(124.0, 136.0, 80.0, 40.0), 1));
+        });
+    }
+
+    #[test]
+    fn clipped_scrolling_targets_only_accept_input_where_visible() {
+        let ctx = egui::Context::default();
+        frame(&ctx, 0.0, |c| {
+            let viewport = c.clipped(52.0, 94.0, 1176.0, 280.0);
+            let card = viewport.translated(-100.0, 0.0);
+            card.hit(card.r(64.0, 122.0, 900.0, 220.0), 1);
+            // A fully scrolled-away card and a zero-area target cannot be clicked.
+            card.hit(card.r(-900.0, 122.0, 900.0, 220.0), 2);
+            card.hit(card.r(80.0, 120.0, 0.0, 40.0), 3);
+            let nested = card.clipped(700.0, 140.0, 400.0, 80.0);
+            nested.hit(nested.r(600.0, 120.0, 600.0, 220.0), 4);
+            assert_eq!(
+                c.take_hits(),
+                vec![
+                    (c.r(52.0, 122.0, 812.0, 220.0), 1),
+                    (c.r(600.0, 140.0, 400.0, 80.0), 4),
+                ]
+            );
         });
     }
 }

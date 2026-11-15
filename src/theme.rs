@@ -14,6 +14,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub type Rgb = (u8, u8, u8);
 
+const FLAT_TEXT_SECONDARY: Rgb = (194, 201, 215);
+const FLAT_TEXT_TERTIARY: Rgb = (158, 168, 187);
+
 static FLAT: AtomicBool = AtomicBool::new(false);
 
 pub fn set_theme(choice: catostv_core::prefs::Theme) {
@@ -34,12 +37,39 @@ pub fn blend(a: Rgb, b: Rgb, amount: f32) -> Rgb {
 
 /// Opaque, accent-tinted containers, from the page to raised controls.
 pub fn surface(level: u8) -> Color32 {
-    let tone = [16, 22, 28, 34, 40][usize::from(level.min(4))];
-    rgb(blend((tone, tone, tone), accent_rgb(), 0.08))
+    rgb(flat_surface(level, accent_rgb()))
+}
+
+fn flat_surface(level: u8, accent: Rgb) -> Rgb {
+    let tone = [
+        (15, 17, 23),
+        (23, 26, 34),
+        (32, 36, 46),
+        (42, 47, 59),
+        (55, 61, 75),
+    ][usize::from(level.min(4))];
+    blend(tone, accent, 0.035)
 }
 
 pub fn primary_container() -> Color32 {
-    rgb(blend((24, 24, 24), accent_rgb(), 0.32))
+    rgb(flat_primary(accent_rgb()))
+}
+
+fn flat_primary(accent: Rgb) -> Rgb {
+    blend((32, 36, 46), accent, 0.24)
+}
+
+/// A quiet app-specific tone, kept separate from the interface focus colour.
+pub fn app_container(tint: Rgb) -> Color32 {
+    rgb(blend(flat_surface(2, accent_rgb()), tint, 0.12))
+}
+
+/// Flat focus stays visible against artwork as well as tonal containers.
+pub fn focus_edge(t: f32) -> Color32 {
+    rgba(
+        blend(accent_rgb(), WHITE, 0.18),
+        (255.0 * t.clamp(0.0, 1.0)) as u8,
+    )
 }
 
 /// Unmultiplied colour from an RGB tuple and alpha.
@@ -70,14 +100,14 @@ pub fn text() -> Color32 {
 /// Secondary text (labels, values).
 pub fn text2() -> Color32 {
     if flat() {
-        return rgb(blend(INK, accent_rgb(), 0.15));
+        return rgb(FLAT_TEXT_SECONDARY);
     }
     rgba(INK, 165)
 }
 /// Tertiary text (hints, disabled).
 pub fn text3() -> Color32 {
     if flat() {
-        return rgb(blend((150, 150, 150), accent_rgb(), 0.12));
+        return rgb(FLAT_TEXT_TERTIARY);
     }
     rgba(INK, 105)
 }
@@ -169,12 +199,38 @@ pub fn accent_a(a: u8) -> Color32 {
 
 /// Text colour that reads well on a solid accent fill.
 pub fn on_accent() -> Color32 {
+    if flat() {
+        return rgb(contrast_ink(accent_rgb()));
+    }
     let (r, g, b) = accent_rgb();
     let luma = 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32;
     if luma > 150.0 {
         rgb((12, 13, 20))
     } else {
         rgb(WHITE)
+    }
+}
+
+fn luminance((r, g, b): Rgb) -> f32 {
+    let linear = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+fn contrast_ink(fill: Rgb) -> Rgb {
+    let dark = (12, 13, 20);
+    let light_ratio = (luminance(WHITE) + 0.05) / (luminance(fill) + 0.05);
+    let dark_ratio = (luminance(fill) + 0.05) / (luminance(dark) + 0.05);
+    if dark_ratio >= light_ratio {
+        dark
+    } else {
+        WHITE
     }
 }
 
@@ -311,5 +367,40 @@ pub fn greeting(hour: u32) -> &'static str {
         12..=16 => "Good afternoon",
         17..=21 => "Good evening",
         _ => "Good night",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contrast(a: Rgb, b: Rgb) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn flat_accent_labels_have_readable_contrast_for_every_accent() {
+        for &(name, accent) in ACCENTS {
+            assert!(contrast(accent, contrast_ink(accent)) >= 4.5, "{name}");
+        }
+        assert_eq!(contrast_ink(BLACK), WHITE);
+        assert_eq!(contrast_ink(WHITE), (12, 13, 20));
+    }
+
+    #[test]
+    fn flat_secondary_labels_stay_readable_on_resting_and_selected_rows() {
+        for &(name, accent) in ACCENTS {
+            for level in 0..=2 {
+                assert!(
+                    contrast(FLAT_TEXT_TERTIARY, flat_surface(level, accent)) >= 4.5,
+                    "{name} surface {level}"
+                );
+            }
+            assert!(
+                contrast(FLAT_TEXT_SECONDARY, flat_primary(accent)) >= 4.5,
+                "{name} selected row"
+            );
+        }
     }
 }
