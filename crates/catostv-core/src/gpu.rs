@@ -20,6 +20,15 @@ pub enum GpuChoice {
 }
 
 impl GpuChoice {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Auto => Self::Nvidia,
+            Self::Nvidia => Self::Open,
+            Self::Open => Self::Safe,
+            Self::Safe => Self::Auto,
+        }
+    }
+
     /// From a kernel command line (`/proc/cmdline`); `Auto` when absent or
     /// unknown.
     pub fn from_cmdline(cmdline: &str) -> Self {
@@ -167,7 +176,12 @@ pub fn plan(choice: GpuChoice, gpus: &[Gpu]) -> DriverPlan {
         },
         GpuChoice::Nvidia | GpuChoice::Auto if modern_nvidia => DriverPlan {
             packages: vec!["nvidia-open", "nvidia-utils", "libva-nvidia-driver"],
-            kernel_params: vec!["nvidia_drm.modeset=1", "nvidia_drm.fbdev=1"],
+            kernel_params: vec![
+                "module_blacklist=nouveau",
+                "nouveau.modeset=0",
+                "nvidia_drm.modeset=1",
+                "nvidia_drm.fbdev=1",
+            ],
             android_software: true,
             summary: "Graphics: NVIDIA driver".into(),
             ..Default::default()
@@ -231,6 +245,12 @@ mod tests {
             ["nvidia-open", "nvidia-utils", "libva-nvidia-driver"]
         );
         assert!(p.kernel_params.contains(&"nvidia_drm.modeset=1"));
+        assert!(p.kernel_params.contains(&"nouveau.modeset=0"));
+        assert!(
+            !plan(GpuChoice::Open, &both)
+                .kernel_params
+                .contains(&"nouveau.modeset=0")
+        );
         assert!(p.android_software);
         // "Open drivers" keeps Mesa, also with that card.
         assert!(plan(GpuChoice::Open, &both).packages.is_empty());

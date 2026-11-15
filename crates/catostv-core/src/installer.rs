@@ -161,7 +161,7 @@ pub struct Installer {
     /// Disk list focus. Items: disks…, "Search again".
     pub disk_index: usize,
     pub tz_index: usize,
-    /// 0 = Cancel, 1 = Erase & install.
+    /// 0 = Cancel, 1 = Erase & install, 2 = installed graphics choice.
     pub confirm_index: usize,
     pub progress: Progress,
     pub failure: Option<(String, bool)>,
@@ -169,6 +169,8 @@ pub struct Installer {
     pub notice: Option<String>,
     /// Graphics from the boot menu (`catostv.gpu=`).
     pub gpu: crate::gpu::GpuChoice,
+    /// Opt-in boot-menu workaround for Intel display / NVMe power hangs.
+    pub compatibility: bool,
     /// The graphics cards found.
     pub gpus: Vec<crate::gpu::Gpu>,
 }
@@ -176,7 +178,12 @@ pub struct Installer {
 impl Installer {
     /// The graphics drivers this install gets.
     pub fn drivers(&self) -> crate::gpu::DriverPlan {
-        crate::gpu::plan(self.gpu, &self.gpus)
+        let mut plan = crate::gpu::plan(self.gpu, &self.gpus);
+        if self.compatibility {
+            plan.kernel_params
+                .extend(["i915.enable_psr=0", "nvme_core.default_ps_max_latency_us=0"]);
+        }
+        plan
     }
 
     pub fn new(dry_run: bool) -> Self {
@@ -200,6 +207,7 @@ impl Installer {
             failure: None,
             notice: None,
             gpu: crate::gpu::GpuChoice::default(),
+            compatibility: false,
             gpus: Vec::new(),
         }
     }
@@ -297,8 +305,11 @@ impl Installer {
             }
             Step::Confirm => {
                 match action {
+                    Action::Up => self.confirm_index = 2,
+                    Action::Down => self.confirm_index = 0,
                     Action::Left => self.confirm_index = 0,
                     Action::Right => self.confirm_index = 1,
+                    Action::Ok if self.confirm_index == 2 => self.gpu = self.gpu.next(),
                     Action::Ok if self.confirm_index == 0 => self.goto(Step::Disk),
                     Action::Ok => {
                         let Some(disk) = self.selected_disk().filter(|d| d.eligible()) else {
@@ -502,7 +513,7 @@ impl Installer {
                 self.tz_index = i;
                 true
             }
-            (Step::Confirm, Target::Item(i)) if i < 2 => {
+            (Step::Confirm, Target::Item(i)) if i < 3 => {
                 self.confirm_index = i;
                 true
             }
@@ -608,6 +619,28 @@ mod tests {
     use super::*;
     use crate::disk::{BlockDevice, DiskCandidate};
     use Action::*;
+
+    #[test]
+    fn safe_live_boot_can_select_accelerated_installed_graphics_without_erasing() {
+        let mut flow = Installer::new(true);
+        flow.step = Step::Confirm;
+        flow.gpu = crate::gpu::GpuChoice::Safe;
+        assert!(flow.handle(Up).is_empty());
+        assert!(flow.handle(Ok).is_empty());
+        assert_eq!(flow.step, Step::Confirm);
+        assert_eq!(flow.gpu, crate::gpu::GpuChoice::Auto);
+        assert!(!flow.drivers().safe);
+        assert_eq!(flow.confirm_index, 2);
+        flow.handle(Down);
+        assert_eq!(flow.confirm_index, 0);
+        flow.compatibility = true;
+        assert!(flow.drivers().kernel_params.contains(&"i915.enable_psr=0"));
+        assert!(
+            flow.drivers()
+                .kernel_params
+                .contains(&"nvme_core.default_ps_max_latency_us=0")
+        );
+    }
 
     #[test]
     fn finished_steps_are_listed() {

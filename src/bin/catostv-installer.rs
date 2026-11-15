@@ -54,6 +54,11 @@ impl InstallerApp {
                 // The boot menu's graphics choice and the cards
                 // found.
                 gpu: catostv_core::gpu::GpuChoice::current(),
+                compatibility: std::fs::read_to_string("/proc/cmdline").is_ok_and(|cmdline| {
+                    cmdline
+                        .split_whitespace()
+                        .any(|parameter| parameter == "catostv.compat=1")
+                }),
                 gpus: catostv_core::gpu::detect(&mut SystemRunner),
                 ..Installer::new(env::is_dry_run())
             },

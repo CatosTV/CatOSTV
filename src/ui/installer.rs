@@ -533,14 +533,13 @@ fn draw_confirm(c: &C, f: &Installer) {
             Weight::Semibold,
         );
         let facts = format!(
-            "{}  ·  {}  ·  {}",
+            "{}  ·  {}",
             f.timezone().replace('_', " "),
-            keyboard::label(f.keyboard()),
-            f.drivers().summary
+            keyboard::label(f.keyboard())
         );
         c.text(
             X0 + 32.0,
-            388.0,
+            354.0,
             Align2::LEFT_CENTER,
             &facts,
             14.0,
@@ -548,6 +547,15 @@ fn draw_confirm(c: &C, f: &Installer) {
             Weight::Regular,
         );
     }
+    let graphics = c.r(X0 + 24.0, 374.0, MAIN_W - 48.0, 38.0);
+    widgets::button(
+        c,
+        graphics,
+        &f.drivers().summary,
+        ButtonStyle::Secondary,
+        t(c, "installed-graphics", f.confirm_index == 2),
+    );
+    c.hit(graphics, Target::Item(2));
     let buttons = [
         ("Cancel", ButtonStyle::Secondary, 220.0),
         ("Erase and install", ButtonStyle::Danger, 260.0),

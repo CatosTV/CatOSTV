@@ -28,6 +28,11 @@ first entry after ten seconds.
 | **Install with NVIDIA's driver** | For GeForce GTX 16 / RTX 20 or newer. |
 | **Install with the open-source NVIDIA driver** | Older NVIDIA cards, or when NVIDIA's driver gives no picture. |
 | **Install with basic graphics** | The screen stays black or garbled with the others. Fine for installing, too slow for films. |
+| **Install with compatibility settings** | The PC freezes during installation. Disables Intel panel self-refresh and NVMe power saving. |
+
+The graphics choice on the final confirmation screen controls the installed
+system. If you used basic graphics to reach the installer, select that row
+and press OK to choose accelerated graphics before installing.
 
 The installer needs **internet**, because it downloads the newest
 version, and it takes 10 to 30 minutes. **The disk you pick is erased.**

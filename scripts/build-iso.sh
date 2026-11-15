@@ -90,9 +90,8 @@ python3 -I "$ROOT/scripts/solid-png.py" "$T/select_c.png" 8b7cf6
 # blank until the installer showed): Plymouth in the live initramfs (after kms, so it
 # draws as early as the graphics driver allows), the installed system's
 # theme, and greetd waiting for it to quit before the installer starts.
-sed -i -E '/^HOOKS=/ s/\bkms\b/kms plymouth/' "$PROFILE/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
-grep -q 'kms plymouth' "$PROFILE/airootfs/etc/mkinitcpio.conf.d/archiso.conf" \
-  || { echo "could not add plymouth to the live initramfs HOOKS" >&2; exit 1; }
+python3 -I "$ROOT/scripts/configure-live-initramfs.py" \
+  "$PROFILE/airootfs/etc/mkinitcpio.conf.d/archiso.conf"
 install -d "$PROFILE/airootfs/usr/share/plymouth/themes"
 cp -a "$ROOT/target-root/usr/share/plymouth/themes/catostv" "$PROFILE/airootfs/usr/share/plymouth/themes/"
 install -Dm644 /dev/stdin "$PROFILE/airootfs/etc/plymouth/plymouthd.conf" <<'PLY'
@@ -125,6 +124,9 @@ mesa
 vulkan-intel
 vulkan-radeon
 intel-media-driver
+nvidia-open
+nvidia-utils
+vulkan-nouveau
 networkmanager
 wpa_supplicant
 bluez
@@ -149,6 +151,9 @@ PKGS
 sort -u -o "$PROFILE/packages.x86_64" "$PROFILE/packages.x86_64"
 
 A="$PROFILE/airootfs"
+# The boot menu chooses the live driver. Keep nouveau available for the
+# open-driver entry; nvidia-utils otherwise blacklists it for every entry.
+install -Dm644 /dev/null "$A/etc/modprobe.d/nvidia-utils.conf"
 for b in "${BINARIES[@]}"; do
   install -Dm755 "$ROOT/target/release/$b" "$A/usr/local/bin/$b"
 done

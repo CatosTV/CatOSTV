@@ -242,6 +242,14 @@ mod repo_consistency {
         for script in ["build-iso.sh", "deploy.sh", "make-update.sh"] {
             assert!(repo_file(&format!("scripts/{script}")).contains("scripts/fetch-cattube.sh"));
         }
+        assert!(
+            std::path::Path::new(&format!(
+                "{}/../../scripts/configure-live-initramfs.py",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .is_file()
+        );
+        assert!(repo_file("scripts/build-iso.sh").contains("scripts/configure-live-initramfs.py"));
     }
 
     #[test]
