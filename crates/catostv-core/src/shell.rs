@@ -464,10 +464,11 @@ pub enum StoreCat {
     /// Running and finished installs of this session.
     Downloads,
     Installed,
+    Updates,
     Search,
 }
 
-pub const STORE_CATS: [StoreCat; 9] = [
+pub const STORE_CATS: [StoreCat; 10] = [
     StoreCat::Featured,
     StoreCat::Watch,
     StoreCat::Listen,
@@ -476,6 +477,7 @@ pub const STORE_CATS: [StoreCat; 9] = [
     StoreCat::Tools,
     StoreCat::Downloads,
     StoreCat::Installed,
+    StoreCat::Updates,
     StoreCat::Search,
 ];
 
@@ -490,6 +492,7 @@ impl StoreCat {
             Self::Tools => "Tools",
             Self::Downloads => "Downloads",
             Self::Installed => "Installed",
+            Self::Updates => "Updates",
             Self::Search => "Search",
         }
     }
@@ -504,9 +507,17 @@ impl StoreCat {
             Self::Tools => "gear",
             Self::Downloads => "download",
             Self::Installed => "check",
+            Self::Updates => "download",
             Self::Search => "search",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreUpdateItem {
+    Check,
+    Install,
+    App(usize),
 }
 
 /// Appstream details for the full-screen Store page.
@@ -676,6 +687,10 @@ pub enum Overlay {
         /// From Home's row: offers Move.
         movable: bool,
     },
+    AppUpdateNotes {
+        app: usize,
+        index: usize,
+    },
     Power {
         index: usize,
     },
@@ -793,6 +808,7 @@ impl Overlay {
         match self {
             Overlay::Quick { index }
             | Overlay::AppOptions { index, .. }
+            | Overlay::AppUpdateNotes { index, .. }
             | Overlay::Power { index }
             | Overlay::BtScan { index }
             | Overlay::BtDevice { index, .. }
@@ -1039,6 +1055,7 @@ pub enum Effect {
     StoreUninstall(String),
     /// Launch the installed Flatpak `id`.
     StoreOpen(String),
+    CheckAppUpdates,
     UpdateApps,
     /// Load appstream details (and screenshots) for the Store page.
     StoreDetails(String),
@@ -1411,6 +1428,14 @@ impl Shell {
     /// Number of selectable entries in an overlay (for clamping/pointer).
     pub fn overlay_len(&self, o: &Overlay, ctx: &ShellContext) -> usize {
         match o {
+            Overlay::AppUpdateNotes { app, .. } => ctx
+                .sys
+                .updates
+                .apps_check
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .and_then(|apps| apps.get(*app))
+                .map_or(1, |app| app.note_lines().len()),
             Overlay::Quick { .. } => self.quick_offset() + QUICK_ITEMS.len() + 1,
             Overlay::AppOptions { app, movable, .. } => {
                 let running = ctx.apps.get(*app).is_some_and(|a| a.running);
@@ -1484,10 +1509,32 @@ impl Shell {
                 })
                 .collect(),
             StoreCat::Search => self.store_results.items().to_vec(),
+            StoreCat::Updates => Vec::new(),
             cat => flatpak::curated_in(cat.label())
                 .into_iter()
                 .map(StoreItem::from_curated)
                 .collect(),
+        }
+    }
+
+    pub fn store_update_items(&self, ctx: &ShellContext) -> Vec<StoreUpdateItem> {
+        if !ctx.sys.flatpak_available {
+            return Vec::new();
+        }
+        let apps = ctx.sys.updates.app_updates();
+        let mut items = vec![StoreUpdateItem::Check];
+        if !apps.is_empty() {
+            items.push(StoreUpdateItem::Install);
+            items.extend((0..apps.len()).map(StoreUpdateItem::App));
+        }
+        items
+    }
+
+    fn store_len(&self, ctx: &ShellContext) -> usize {
+        if self.current_store_cat() == StoreCat::Updates {
+            self.store_update_items(ctx).len()
+        } else {
+            self.store_items(ctx).len()
         }
     }
 
@@ -1563,13 +1610,14 @@ impl Shell {
             self.top_focus = true;
             self.top_index = top_index_of(Page::Recents);
         }
-        let n_store = self.store_items(ctx).len();
+        let n_store = self.store_len(ctx);
         self.store_index = self.store_index.min(n_store.saturating_sub(1));
         if n_store == 0 {
             self.store_grid = false;
         }
         // Drop overlays that point at things that disappeared.
         self.overlays.retain(|o| match o {
+            Overlay::AppUpdateNotes { app, .. } => *app < ctx.sys.updates.app_updates().len(),
             Overlay::AppOptions { app, .. } => *app < n_apps,
             Overlay::BtDevice { device, .. } => *device < ctx.sys.bt_devices.len(),
             Overlay::VpnOptions { vpn, .. } => *vpn < ctx.sys.vpns.len(),
@@ -1966,7 +2014,7 @@ impl Shell {
                 }
                 true
             }
-            Target::StoreItem(i) if self.page == Page::Store && i < self.store_items(ctx).len() => {
+            Target::StoreItem(i) if self.page == Page::Store && i < self.store_len(ctx) => {
                 self.top_focus = false;
                 self.store_grid = true;
                 self.store_index = i;
@@ -2305,7 +2353,7 @@ impl Shell {
     }
 
     fn handle_store(&mut self, action: Action, ctx: &ShellContext) -> Vec<Effect> {
-        let n_items = self.store_items(ctx).len();
+        let n_items = self.store_len(ctx);
         if !self.store_grid {
             // The sections, a list on the left; moving along it switches
             // the section at once (like tabs). Right goes to its apps.
@@ -2331,6 +2379,41 @@ impl Shell {
                     }
                 }
                 Action::Back => self.go_home(),
+                _ => {}
+            }
+            return vec![];
+        }
+        if self.current_store_cat() == StoreCat::Updates {
+            match action {
+                Action::Back | Action::Left => self.store_grid = false,
+                Action::Up if self.store_index == 0 => {
+                    self.top_focus = true;
+                    self.top_index = top_index_of(Page::Store);
+                }
+                Action::Up => self.store_index = self.store_index.saturating_sub(1),
+                Action::Down => self.store_index = step(self.store_index, 1, n_items),
+                Action::Ok | Action::OkLong => {
+                    let u = &ctx.sys.updates;
+                    match self.store_update_items(ctx).get(self.store_index) {
+                        Some(StoreUpdateItem::Check) if !u.apps_checking && !u.apps_installing => {
+                            return vec![Effect::CheckAppUpdates];
+                        }
+                        Some(StoreUpdateItem::Install)
+                            if !u.apps_checking
+                                && !u.apps_installing
+                                && self.store_jobs.is_empty() =>
+                        {
+                            return vec![Effect::UpdateApps];
+                        }
+                        Some(StoreUpdateItem::App(app)) => {
+                            self.overlays.push(Overlay::AppUpdateNotes {
+                                app: *app,
+                                index: 0,
+                            })
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
             return vec![];
@@ -2757,7 +2840,6 @@ impl Shell {
                     .push(Overlay::AppsSearch { osk: Box::new(osk) });
                 vec![]
             }
-            RowId::UpdateApps => vec![Effect::UpdateApps],
             RowId::ShowHiddenApps => vec![Effect::ShowHiddenApps],
             // First setup: the store chooser; "Try again" after a
             // failure keeps the choice (its own row: after a failure no image
@@ -2921,6 +3003,17 @@ impl Shell {
                     Action::Ok | Action::OkLong => {
                         let item = QUICK_ITEMS[i];
                         return self.activate_quick(item, ctx);
+                    }
+                    _ => {}
+                }
+                vec![]
+            }
+            Overlay::AppUpdateNotes { index, .. } => {
+                match action {
+                    Action::Up => *index = index.saturating_sub(1),
+                    Action::Down => *index += 1,
+                    Action::Ok | Action::OkLong => {
+                        self.overlays.pop();
                     }
                     _ => {}
                 }

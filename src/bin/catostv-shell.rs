@@ -59,6 +59,8 @@ enum Msg {
     KdeNamed(bool),
     /// Settings → Updates: a check finished.
     UpdateCheck(Result<catostv_core::updates::Check, String>),
+    AppUpdateCheck(Result<Vec<flatpak::AppUpdate>, String>),
+    AppUpdatesDone(Result<(), String>),
     /// A fresh Recents preview of an app: app id, the capture and
     /// its blurred copy.
     Thumb(String, String, String),
@@ -787,6 +789,8 @@ struct ShellApp {
     kde_named: bool,
     /// An update finished: restart the interface shortly.
     restart_after_update: Option<Instant>,
+    updates_checked_at: Option<Instant>,
+    update_notice: String,
     /// Recents previews: app id → (capture, blurred copy).
     thumbs: HashMap<String, (String, String)>,
     /// CPU/memory per app for Recents, sampled while it is open.
@@ -1133,6 +1137,8 @@ impl ShellApp {
         let mut app = Self {
             shell: Shell::new(),
             restart_after_update: None,
+            updates_checked_at: None,
+            update_notice: String::new(),
             kde_named: false,
             thumbs: HashMap::new(),
             usage: Default::default(),
@@ -1550,6 +1556,7 @@ impl ShellApp {
             && !self.sys.android_setup.as_ref().is_some_and(|s| s.running())
             && !self.sys.android_repairing
             && !self.sys.android_restarting
+            && !self.sys.updates.apps_installing
             && !matches!(
                 self.sys.updates.install,
                 Some(catostv_core::updates::InstallState::Running(_))
@@ -2312,9 +2319,26 @@ impl ShellApp {
             }
             Effect::CheckUpdates => {
                 if !self.sys.updates.checking {
+                    self.updates_checked_at = Some(Instant::now());
                     self.sys.updates.checking = true;
                     self.jobs.spawn(|| {
                         Msg::UpdateCheck(catostv_core::updates::check(&mut SystemRunner))
+                    });
+                }
+            }
+            Effect::CheckAppUpdates => {
+                if self.sys.flatpak_available
+                    && !self.sys.updates.apps_checking
+                    && !self.sys.updates.apps_installing
+                {
+                    self.sys.updates.apps_checking = true;
+                    self.sys.updates.apps_result = None;
+                    let home = self.home.clone();
+                    self.jobs.spawn(move || {
+                        Msg::AppUpdateCheck(
+                            flatpak::available_updates(&mut SystemRunner, &home)
+                                .map_err(|e| e.to_string()),
+                        )
                     });
                 }
             }
@@ -2708,12 +2732,20 @@ impl ShellApp {
                 }
             }
             Effect::UpdateApps => {
+                if self.sys.updates.apps_installing
+                    || self.sys.updates.apps_checking
+                    || !self.shell.store_jobs.is_empty()
+                {
+                    return;
+                }
+                self.sys.updates.apps_installing = true;
+                self.sys.updates.apps_result = None;
                 self.show_toast(ctx, "Updating store apps…");
-                self.jobs
-                    .spawn(|| match flatpak::update_all(&mut SystemRunner) {
-                        Ok(()) => Msg::Toast("Store apps are up to date".into()),
-                        Err(e) => Msg::Toast(e.to_string()),
-                    });
+                self.jobs.spawn(|| {
+                    Msg::AppUpdatesDone(
+                        flatpak::update_all(&mut SystemRunner).map_err(|e| e.to_string()),
+                    )
+                });
             }
             Effect::AndroidSetup => {
                 self.show_toast(ctx, "Setting up Android…");
@@ -3817,6 +3849,23 @@ impl ShellApp {
                 self.sys.updates.checking = false;
                 self.sys.updates.check = Some(r);
             }
+            Msg::AppUpdateCheck(result) => {
+                self.sys.updates.apps_checking = false;
+                self.sys.updates.apps_check = Some(result);
+            }
+            Msg::AppUpdatesDone(result) => {
+                self.sys.updates.apps_installing = false;
+                let text = match result {
+                    Ok(()) => {
+                        self.sys.updates.apps_check = None;
+                        self.apply(ctx, Effect::CheckAppUpdates);
+                        "Store apps are up to date".to_string()
+                    }
+                    Err(error) => error,
+                };
+                self.sys.updates.apps_result = Some(text.clone());
+                self.show_toast(ctx, &text);
+            }
             Msg::LeftApp => {
                 if self.foreground_android().is_some() {
                     self.send_android_home();
@@ -4009,8 +4058,9 @@ impl ShellApp {
             });
         }
         // The last update check lives here, not in the snapshot.
-        s.updates.checking = self.sys.updates.checking;
-        s.updates.check = self.sys.updates.check.clone();
+        let install = s.updates.install.take();
+        s.updates = self.sys.updates.clone();
+        s.updates.install = install;
         self.follow_install(ctx, s.updates.install.clone());
         let first = std::mem::take(&mut self.first_snapshot);
         if !first && self.appliance && self.pending_scale.is_none() {
@@ -4104,6 +4154,7 @@ impl ShellApp {
         let online = |s: &SystemSnapshot| s.net.as_ref().is_some_and(|n| n.online);
         if online(&s) && !online(&self.sys) {
             self.last_media_refresh = None;
+            self.updates_checked_at = None;
         }
         self.sys = s;
         self.autostart_android(ctx);
@@ -4302,6 +4353,7 @@ impl ShellApp {
             || self.shell.vpn_busy.is_some()
             || self.shell.debug_ssh_busy.is_some()
             || !self.shell.store_jobs.is_empty()
+            || self.sys.updates.apps_installing
             || self.bluetooth_on_screen()
     }
 
@@ -4348,6 +4400,51 @@ impl eframe::App for ShellApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         for msg in self.jobs.drain() {
             self.handle_message(ctx, msg);
+        }
+        if self.appliance
+            && self.started.elapsed() >= Duration::from_secs(30)
+            && self
+                .updates_checked_at
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(6 * 60 * 60))
+        {
+            self.apply(ctx, Effect::CheckUpdates);
+            self.apply(ctx, Effect::CheckAppUpdates);
+        }
+        // Announce an available update once, when it will not cover playback.
+        if self.appliance
+            && self.foreground.is_none()
+            && self.toast.is_none()
+            && self.saver.is_none()
+            && !self.sys.updates.checking
+            && !self.sys.updates.apps_checking
+        {
+            let mut available = Vec::new();
+            if let Some(Ok(catostv_core::updates::Check::Available(manifest))) =
+                &self.sys.updates.check
+            {
+                available.push(format!("CatosTV {}", manifest.version));
+            }
+            if let Some(Ok(apps)) = &self.sys.updates.apps_check {
+                available.extend(
+                    apps.iter()
+                        .map(|app| format!("{} {}", app.name, app.version)),
+                );
+            }
+            let key = available.join(";");
+            if !key.is_empty() && key != self.update_notice {
+                self.update_notice = key;
+                let system = matches!(
+                    &self.sys.updates.check,
+                    Some(Ok(catostv_core::updates::Check::Available(_)))
+                );
+                let apps = !self.sys.updates.app_updates().is_empty();
+                let notice = match (system, apps) {
+                    (true, true) => "Updates available · Settings and Store",
+                    (true, false) => "System update available · Settings → Updates",
+                    _ => "App updates available · Store → Updates",
+                };
+                self.show_toast(ctx, notice);
+            }
         }
         if self.shell.page == Page::Home {
             if !self.playback_reading
@@ -4663,6 +4760,14 @@ impl eframe::App for ShellApp {
             && !self.sys.updates.checking
         {
             self.apply(&ctx, Effect::CheckUpdates);
+        }
+        if self.shell.page == Page::Store
+            && self.shell.current_store_cat() == catostv_core::shell::StoreCat::Updates
+            && self.sys.updates.apps_check.is_none()
+            && !self.sys.updates.apps_checking
+            && !self.sys.updates.apps_installing
+        {
+            self.apply(&ctx, Effect::CheckAppUpdates);
         }
         // While an update installs, follow its progress.
         if matches!(

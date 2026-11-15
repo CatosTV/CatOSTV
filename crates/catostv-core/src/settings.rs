@@ -92,13 +92,45 @@ pub struct AppView {
     pub running: bool,
 }
 
-/// What Settings → Updates shows: the last check (kept by
-/// the GUI across snapshots) and the install unit's progress.
+/// System and Store update results, kept by the GUI across snapshots.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UpdatesView {
     pub checking: bool,
     pub check: Option<Result<crate::updates::Check, String>>,
     pub install: Option<crate::updates::InstallState>,
+    pub apps_checking: bool,
+    pub apps_check: Option<Result<Vec<crate::flatpak::AppUpdate>, String>>,
+    pub apps_installing: bool,
+    pub apps_result: Option<String>,
+}
+
+impl UpdatesView {
+    pub fn app_updates(&self) -> &[crate::flatpak::AppUpdate] {
+        self.apps_check
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .map_or(&[], Vec::as_slice)
+    }
+
+    pub fn app_status(&self) -> String {
+        if self.apps_installing {
+            return "Updating…".into();
+        }
+        if self.apps_checking {
+            return "Checking…".into();
+        }
+        match &self.apps_check {
+            Some(Err(error)) => error.clone(),
+            Some(Ok(apps)) if !apps.is_empty() => format!(
+                "{} update{} available",
+                apps.len(),
+                if apps.len() == 1 { "" } else { "s" }
+            ),
+            _ if self.apps_result.is_some() => self.apps_result.clone().unwrap_or_default(),
+            Some(Ok(_)) => "Up to date".into(),
+            None => String::new(),
+        }
+    }
 }
 
 /// Everything the shell state machine needs to read.
@@ -251,7 +283,6 @@ pub enum RowId {
     App(usize),
     /// Settings → Apps: filter the list.
     AppSearch,
-    UpdateApps,
     ShowHiddenApps,
     AndroidState,
     AndroidSetup,
@@ -724,15 +755,6 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                         row(RowId::App(i), &a.entry.name, "", state, RowKind::Action)
                     }),
             );
-            if sys.flatpak_available && needle.is_empty() {
-                v.push(row(
-                    RowId::UpdateApps,
-                    "Update store apps",
-                    "",
-                    "",
-                    RowKind::Action,
-                ));
-            }
             if !ctx.prefs.hidden_apps.is_empty() && needle.is_empty() {
                 v.push(row(
                     RowId::ShowHiddenApps,
@@ -970,6 +992,7 @@ fn update_rows(sys: &SystemSnapshot) -> Vec<Row> {
             RowKind::Action,
         ));
     }
+
     v
 }
 
@@ -1315,6 +1338,60 @@ mod tests {
             prefs,
             display,
         }
+    }
+
+    #[test]
+    fn settings_updates_only_list_system_updates_and_hidden_apps_can_be_restored() {
+        let mut sys = SystemSnapshot {
+            flatpak_available: true,
+            ..Default::default()
+        };
+        let prefs = UiPrefs {
+            hidden_apps: vec!["catfyn".into()],
+            ..Default::default()
+        };
+        let display = DisplayPrefs::default();
+        sys.updates.apps_check = Some(Ok(vec![crate::flatpak::AppUpdate {
+            id: "tv.kodi.Kodi".into(),
+            name: "Kodi".into(),
+            version: "22.0".into(),
+            notes: Vec::new(),
+        }]));
+        let ctx = ctx_with(&sys, &prefs, &display);
+        let apps = rows(Category::Apps, &ctx);
+        assert!(apps.iter().any(|row| row.id == RowId::ShowHiddenApps));
+        let updates = rows(Category::Updates, &ctx);
+        assert!(updates.iter().any(|row| row.id == RowId::UpdateCheck));
+        assert!(
+            !updates
+                .iter()
+                .any(|row| row.title == "Kodi" || row.title == "Store apps")
+        );
+    }
+
+    #[test]
+    fn store_status_reports_busy_errors_and_new_updates_without_stale_success() {
+        let mut u = UpdatesView {
+            apps_check: Some(Ok(vec![])),
+            ..Default::default()
+        };
+        assert_eq!(u.app_status(), "Up to date");
+        u.apps_checking = true;
+        assert_eq!(u.app_status(), "Checking…");
+        u.apps_installing = true;
+        assert_eq!(u.app_status(), "Updating…");
+        u.apps_installing = false;
+        u.apps_checking = false;
+        u.apps_result = Some("Store apps are up to date".into());
+        u.apps_check = Some(Err("Offline".into()));
+        assert_eq!(u.app_status(), "Offline");
+        u.apps_check = Some(Ok(vec![crate::flatpak::AppUpdate {
+            id: "tv.kodi.Kodi".into(),
+            name: "Kodi".into(),
+            version: "22.0".into(),
+            notes: vec![],
+        }]));
+        assert_eq!(u.app_status(), "1 update available");
     }
 
     #[test]

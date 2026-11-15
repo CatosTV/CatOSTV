@@ -402,6 +402,19 @@ fn draw_top_bar(c: &C, v: &ShellView) {
         widgets::bar_pill(c, rect, h / 2.0, t);
     }
     c.hit(rect, Target::Top(quick));
+    let update_available = matches!(
+        &v.ctx.sys.updates.check,
+        Some(Ok(catostv_core::updates::Check::Available(_)))
+    ) || v
+        .ctx
+        .sys
+        .updates
+        .apps_check
+        .as_ref()
+        .is_some_and(|result| result.as_ref().is_ok_and(|apps| !apps.is_empty()));
+    if update_available {
+        c.circle(1218.0, y + 10.0, 3.5, theme::accent());
+    }
     let ink = widgets::mix(theme::text(), theme::on_accent(), t);
     let cy = y + h / 2.0;
     let x0 = 1228.0 - w + pad;
@@ -1679,6 +1692,9 @@ fn draw_store(c: &C, v: &ShellView) {
             StoreCat::Installed if !v.ctx.sys.flatpaks.is_empty() => {
                 Some(v.ctx.sys.flatpaks.len().to_string())
             }
+            StoreCat::Updates if !v.ctx.sys.updates.app_updates().is_empty() => {
+                Some(v.ctx.sys.updates.app_updates().len().to_string())
+            }
             _ => None,
         };
         if let Some(r) = right {
@@ -1703,6 +1719,10 @@ fn draw_store(c: &C, v: &ShellView) {
         .translated(0.0, 10.0 * (1.0 - enter))
         .opacity(0.35 + 0.65 * enter);
     let c = &content;
+    if s.current_store_cat() == StoreCat::Updates {
+        draw_store_updates(c, v);
+        return;
+    }
     let x0 = 280.0;
     let cat = s.current_store_cat();
     let items = s.store_items(v.ctx);
@@ -1893,6 +1913,96 @@ fn draw_store(c: &C, v: &ShellView) {
 
 // ------------------------------------------------------------------- search
 
+fn draw_store_updates(c: &C, v: &ShellView) {
+    use shell::StoreUpdateItem;
+    let s = v.shell;
+    let u = &v.ctx.sys.updates;
+    widgets::title(c, 280.0, 104.0, "Updates", 34.0);
+    let status = if v.ctx.sys.flatpak_available {
+        u.app_status()
+    } else {
+        "The Store needs Flatpak".into()
+    };
+    c.text(
+        280.0,
+        168.0,
+        Align2::LEFT_CENTER,
+        &c.fit(&status, 948.0, 18.0, Weight::Regular),
+        18.0,
+        theme::text2(),
+        Weight::Regular,
+    );
+    let focus = s.overlay().is_none() && !s.top_focus && s.store_grid;
+    let first = s.store_index.saturating_sub(5);
+    let scroll = c.anim("store-updates-scroll", first as f32 * 76.0);
+    let list = c.clipped(268.0, 192.0, 972.0, 496.0);
+    let busy = u.apps_checking || u.apps_installing;
+    for (i, item) in s.store_update_items(v.ctx).iter().enumerate() {
+        let y = 204.0 + i as f32 * 76.0 - scroll;
+        if y + 64.0 < 192.0 || y > 688.0 {
+            continue;
+        }
+        let t = focus_t(c, ("store-update", i), focus && s.store_index == i);
+        let rect = list.r(280.0, y, 948.0, 64.0);
+        let (title, subtitle, value, icon, kind, disabled) = match item {
+            StoreUpdateItem::Check => (
+                "Check for updates",
+                "",
+                "",
+                "refresh",
+                if busy { RowKind::Info } else { RowKind::Action },
+                busy,
+            ),
+            StoreUpdateItem::Install => (
+                if u.apps_installing {
+                    "Updating…"
+                } else {
+                    "Update all"
+                },
+                "",
+                "",
+                "download",
+                if busy {
+                    RowKind::Info
+                } else {
+                    RowKind::Primary
+                },
+                busy || !s.store_jobs.is_empty(),
+            ),
+            StoreUpdateItem::App(app) => {
+                let app = &u.app_updates()[*app];
+                (
+                    app.name.as_str(),
+                    "Release notes",
+                    app.version.as_str(),
+                    "download",
+                    RowKind::Action,
+                    false,
+                )
+            }
+        };
+        widgets::list_row(
+            &list,
+            rect,
+            &ListRow {
+                title,
+                subtitle,
+                value,
+                kind: Some(kind),
+                icon: Some(icon),
+                disabled,
+            },
+            t,
+        );
+        if matches!(item, StoreUpdateItem::Check) && u.apps_checking
+            || matches!(item, StoreUpdateItem::Install) && u.apps_installing
+        {
+            widgets::spinner(&list, 1200.0, y + 32.0, 10.0, v.now);
+        }
+        list.hit(rect, Target::StoreItem(i));
+    }
+}
+
 fn draw_search(c: &C, v: &ShellView) {
     let s = v.shell;
     let kb_focus = s.overlay().is_none() && !s.top_focus && s.search_focus == SearchFocus::Keyboard;
@@ -2027,7 +2137,6 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::Accent | R::Theme => "palette",
         R::App(_) => return None,
         R::AppSearch => "search",
-        R::UpdateApps => "download",
         R::ShowHiddenApps => "grid",
         R::AndroidState | R::AndroidSetup | R::AndroidVariant | R::AndroidCertify => "android",
         R::AndroidRetry => "refresh",
@@ -2797,6 +2906,41 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
                     14.0,
                     theme::text2(),
                     Weight::Medium,
+                );
+            }
+        }
+        Overlay::AppUpdateNotes { app, index } => {
+            let Some(app) = ctx
+                .sys
+                .updates
+                .apps_check
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .and_then(|apps| apps.get(*app))
+            else {
+                return;
+            };
+            let m = widgets::modal(c, 880.0, 530.0);
+            let (mx, my) = c.to_design(m.min);
+            let y = modal_header(
+                c,
+                mx,
+                my,
+                Some("download"),
+                &format!("{} {}", app.name, app.version),
+                880.0,
+            );
+            let lines = app.note_lines();
+            let top = (*index).min(lines.len().saturating_sub(12));
+            for (i, line) in lines.iter().skip(top).take(12).enumerate() {
+                c.text(
+                    mx + 32.0,
+                    y + 22.0 + i as f32 * 29.0,
+                    Align2::LEFT_CENTER,
+                    &c.fit(line, 816.0, 16.0, Weight::Regular),
+                    16.0,
+                    theme::text2(),
+                    Weight::Regular,
                 );
             }
         }

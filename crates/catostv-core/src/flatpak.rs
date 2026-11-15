@@ -522,6 +522,119 @@ pub fn update_all_cmd() -> Cmd {
         .timeout(UPDATE_TIMEOUT)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppUpdate {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub notes: Vec<String>,
+}
+
+impl AppUpdate {
+    /// Lines of release notes for the remote's scrollable detail panel.
+    pub fn note_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for paragraph in &self.notes {
+            let mut line = String::new();
+            for word in paragraph.split_whitespace() {
+                if !line.is_empty() && line.chars().count() + word.chars().count() > 80 {
+                    lines.push(std::mem::take(&mut line));
+                }
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
+            }
+            if !line.is_empty() {
+                lines.push(line);
+            }
+            lines.push(String::new());
+        }
+        if lines.is_empty() {
+            lines.push("No release notes available".into());
+        }
+        lines
+    }
+}
+
+pub fn available_updates_cmd() -> Cmd {
+    Cmd::new("flatpak")
+        .args([
+            "remote-ls",
+            "--user",
+            "--updates",
+            "--app",
+            "--columns=application,name,version",
+        ])
+        .timeout(SEARCH_TIMEOUT)
+}
+
+/// Available user app updates, with release notes supplied by the publisher.
+pub fn available_updates(r: &mut dyn Runner, home: &Path) -> Result<Vec<AppUpdate>> {
+    let output = r.run_ok(&available_updates_cmd())?;
+    let xml = read_appstream(r, home).unwrap_or_default();
+    Ok(parse_updates(&output.stdout, &xml))
+}
+
+pub fn parse_updates(text: &str, xml: &str) -> Vec<AppUpdate> {
+    let mut updates = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let fields = cells(line);
+        if !is_valid_app_id(&fields[0]) || updates.iter().any(|u: &AppUpdate| u.id == fields[0]) {
+            continue;
+        }
+        let id = fields[0].clone();
+        let version = fields.get(2).cloned().unwrap_or_default();
+        let notes = release_notes(xml, &id, &version);
+        updates.push(AppUpdate {
+            name: fields
+                .get(1)
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .unwrap_or_else(|| id.clone()),
+            id,
+            version,
+            notes,
+        });
+    }
+    updates
+}
+
+fn release_notes(xml: &str, id: &str, version: &str) -> Vec<String> {
+    let Some(at) = xml.find(&format!("<id>{id}</id>")) else {
+        return Vec::new();
+    };
+    let Some(end) = xml[at..].find("</component>") else {
+        return Vec::new();
+    };
+    let component = &xml[at..at + end];
+    let Some(releases) = first_tag(component, "releases") else {
+        return Vec::new();
+    };
+    for (attributes, release) in all_tags(releases, "release") {
+        if attr(attributes, "version") != Some(version) {
+            continue;
+        }
+        let Some(description) = first_tag(release, "description") else {
+            return Vec::new();
+        };
+        let mut notes: Vec<_> = ["p", "li"]
+            .into_iter()
+            .flat_map(|tag| all_tags(description, tag))
+            .filter(|(attributes, _)| !attributes.contains("xml:lang"))
+            .map(|(_, text)| (description.find(text).unwrap_or(0), plain(text)))
+            .collect();
+        notes.sort_by_key(|(position, _)| *position);
+        return notes
+            .into_iter()
+            .filter(|(_, text)| !text.is_empty())
+            .take(40)
+            .map(|(_, text)| text.chars().take(2000).collect())
+            .collect();
+    }
+    Vec::new()
+}
+
 /// Remove runtimes no installed app needs any more (after uninstalling).
 pub fn remove_unused_cmd() -> Cmd {
     Cmd::new("flatpak")
@@ -972,6 +1085,27 @@ mod tests {
     use super::*;
     use crate::process::fake::FakeRunner;
     use crate::testutil::TempDir;
+
+    #[test]
+    fn updates_use_the_available_versions_notes_and_ignore_duplicate_branches() {
+        let xml = r#"<components><component><id>tv.kodi.Kodi</id><releases>
+          <release version="22.0"><description><p>New playback fixes.</p><ul><li>Keep audio in sync.</li></ul></description></release>
+          <release version="21.0"><description><p>Old changes.</p></description></release>
+          </releases></component><component><id>org.example.Other</id>
+          <releases><release version="1"><description><p>Other changes.</p></description></release></releases>
+          </component></components>"#;
+        let updates = parse_updates(
+            "tv.kodi.Kodi\tKodi\t22.0\ntv.kodi.Kodi\tKodi\t21.0\norg.example.Other\tOther\t2\ninvalid\n",
+            xml,
+        );
+        assert_eq!(updates.len(), 2);
+        assert_eq!(
+            updates[0].notes,
+            ["New playback fixes.", "Keep audio in sync."]
+        );
+        assert_eq!(updates[1].note_lines(), ["No release notes available"]);
+        assert!(!available_updates_cmd().args.iter().any(|arg| arg == "-y"));
+    }
 
     #[test]
     fn app_id_validation() {

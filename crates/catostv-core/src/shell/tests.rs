@@ -85,6 +85,95 @@ fn press(s: &mut Shell, f: &Fixture, actions: &[Action]) -> Vec<Effect> {
 }
 
 #[test]
+fn store_updates_remote_and_pointer_navigation_keep_notes_and_actions_in_store() {
+    let mut f = Fixture::new();
+    f.sys.flatpak_available = true;
+    f.sys.updates.apps_check = Some(Result::Ok(vec![crate::flatpak::AppUpdate {
+        id: "tv.kodi.Kodi".into(),
+        name: "Kodi".into(),
+        version: "22.0".into(),
+        notes: vec!["Playback fixes".into()],
+    }]));
+    let mut s = Shell::new();
+    s.open_page(Page::Store);
+    let category = STORE_CATS
+        .iter()
+        .position(|c| *c == StoreCat::Updates)
+        .unwrap();
+    for _ in 0..category {
+        press(&mut s, &f, &[Action::Down]);
+    }
+    assert_eq!(s.current_store_cat(), StoreCat::Updates);
+    assert!(!s.store_grid);
+    press(&mut s, &f, &[Action::Right]);
+    assert_eq!(press(&mut s, &f, &[Action::Ok]), [Effect::CheckAppUpdates]);
+    assert_eq!(
+        press(&mut s, &f, &[Action::Down, Action::Ok]),
+        [Effect::UpdateApps]
+    );
+    assert!(press(&mut s, &f, &[Action::Down, Action::Ok]).is_empty());
+    assert!(matches!(
+        s.overlay(),
+        Some(Overlay::AppUpdateNotes { app: 0, .. })
+    ));
+    press(&mut s, &f, &[Action::Back]);
+    assert_eq!(s.page, Page::Store);
+    assert_eq!(s.store_index, 2);
+    press(&mut s, &f, &[Action::Left]);
+    assert!(!s.store_grid);
+    s.pointer(Target::StoreItem(2), true, &f.ctx());
+    assert!(matches!(
+        s.overlay(),
+        Some(Overlay::AppUpdateNotes { app: 0, .. })
+    ));
+    press(&mut s, &f, &[Action::Back]);
+    s.pointer(Target::StoreItem(0), false, &f.ctx());
+    press(&mut s, &f, &[Action::Up]);
+    assert!(s.top_focus);
+}
+
+#[test]
+fn store_update_busy_empty_and_failed_states_reject_stale_actions() {
+    let mut f = Fixture::new();
+    f.sys.flatpak_available = true;
+    f.sys.updates.apps_check = Some(Result::Ok(vec![crate::flatpak::AppUpdate {
+        id: "tv.kodi.Kodi".into(),
+        name: "Kodi".into(),
+        version: "22.0".into(),
+        notes: vec![],
+    }]));
+    let mut s = Shell::new();
+    s.open_page(Page::Store);
+    s.store_cat = STORE_CATS
+        .iter()
+        .position(|c| *c == StoreCat::Updates)
+        .unwrap();
+    for installing in [false, true] {
+        f.sys.updates.apps_checking = !installing;
+        f.sys.updates.apps_installing = installing;
+        assert!(s.pointer(Target::StoreItem(0), true, &f.ctx()).is_empty());
+        assert!(s.pointer(Target::StoreItem(1), true, &f.ctx()).is_empty());
+    }
+    f.sys.updates.apps_installing = false;
+    s.pointer(Target::StoreItem(2), true, &f.ctx());
+    f.sys.updates.apps_check = Some(Result::Ok(vec![]));
+    s.clamp(&f.ctx());
+    assert!(s.overlay().is_none());
+    assert_eq!(s.store_index, 0);
+    assert_eq!(s.store_update_items(&f.ctx()), [StoreUpdateItem::Check]);
+    assert!(s.pointer(Target::StoreItem(1), true, &f.ctx()).is_empty());
+    f.sys.updates.apps_check = Some(Err("Offline".into()));
+    assert_eq!(
+        s.pointer(Target::StoreItem(0), true, &f.ctx()),
+        [Effect::CheckAppUpdates]
+    );
+    f.sys.flatpak_available = false;
+    s.clamp(&f.ctx());
+    assert!(!s.store_grid);
+    assert!(s.pointer(Target::StoreItem(0), true, &f.ctx()).is_empty());
+}
+
+#[test]
 fn bundled_apps_can_be_hidden_and_restored_from_settings() {
     let mut f = Fixture::new();
     let mut shell = Shell::new();

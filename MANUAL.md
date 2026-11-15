@@ -143,6 +143,12 @@ New versions show up in **Settings → Updates**. They don't install while
 something is playing. Each update brings the Arch Linux packages it was
 tested with, so the system underneath only changes together with CatosTV.
 
+CatosTV checks for system and store app updates automatically. An accent
+dot on the clock pill marks available updates. Store app updates and their
+release notes are in **Store → Updates**, with **Check for updates** and
+**Update all**. System updates stay in **Settings → Updates**. Updates start
+when you select them. GitHub downloads contain installer ISOs; installed TVs use Settings.
+
 ---
 
 ## Debug SSH
