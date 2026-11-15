@@ -320,6 +320,15 @@ pub fn activate(want: &str) -> Result<bool> {
 }
 
 pub fn activate_on(s: UnixStream, want: &str) -> Result<bool> {
+    activate_with(s, want, false)
+}
+
+/// Android's one TV window must fill the output before it is revealed.
+pub fn activate_fullscreen(want: &str) -> Result<bool> {
+    activate_with(connect()?, want, true)
+}
+
+fn activate_with(s: UnixStream, want: &str, fullscreen: bool) -> Result<bool> {
     let mut ses = session(s)?;
     // The newest matching window (windows are listed in creation order):
     // Android's composer can leave an older Waydroid window behind for a
@@ -335,6 +344,9 @@ pub fn activate_on(s: UnixStream, want: &str) -> Result<bool> {
     };
     if w.minimized {
         ses.conn.send(w.handle, 3, &[])?; // unset_minimized
+    }
+    if fullscreen && !w.fullscreen {
+        ses.conn.send(w.handle, 8, &[Arg::U(0)])?;
     }
     ses.conn.send(w.handle, 4, &[Arg::U(ses.seat)])?; // activate(seat)
     ses.conn.roundtrip(|_, _, _| {})?;
@@ -632,6 +644,25 @@ mod tests {
             fake.send(rd_u32(&sync, 0).unwrap(), 0, &[Arg::U(3)]);
         });
         assert!(activate_on(client, "waydroid*").unwrap());
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn restores_android_fullscreen_before_activating() {
+        let (client, mut fake) = pair();
+        let t = std::thread::spawn(move || {
+            fake.handshake();
+            let (obj, op, _) = fake.read();
+            assert_eq!((obj, op), (0xff00_0001, 3));
+            let (obj, op, args) = fake.read();
+            assert_eq!((obj, op), (0xff00_0001, 8));
+            assert_eq!(rd_u32(&args, 0), Some(0));
+            let (obj, op, _) = fake.read();
+            assert_eq!((obj, op), (0xff00_0001, 4));
+            let (_, _, sync) = fake.read();
+            fake.send(rd_u32(&sync, 0).unwrap(), 0, &[Arg::U(3)]);
+        });
+        assert!(activate_with(client, "waydroid*", true).unwrap());
         t.join().unwrap();
     }
 

@@ -1289,6 +1289,7 @@ pub fn player_argv_full(
         "--no-terminal",
         "--ytdl=no",
         "--wayland-app-id=catfyn-player",
+        "--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5",
     ]
     .iter()
     .map(|s| s.to_string())

@@ -454,7 +454,12 @@ fn spawn_app_watcher(
                         .is_some_and(|m| catostv_core::toplevel::activate(m).unwrap_or(false));
                 if back {
                     eprintln!("catostv: Android came over {w}; back to {w}");
-                } else {
+                } else if all.is_some()
+                    && fg
+                        .as_deref()
+                        .is_none_or(|id| !lock(&manager).is_running(id))
+                    && lock(&watch).foreground == fg
+                {
                     eprintln!("catostv: {w} closed its window; back to Home");
                     // Handled before CatosTV draws again: no launch screen left
                     // over from opening the app.
@@ -517,6 +522,18 @@ fn spawn_app_watcher(
             // minimized or closed.
             tidy_tick = (tidy_tick + 1) % 4;
             if appliance && hidden && android_front && tidy_tick == 0 {
+                // A mode change or a restored window can lose its fullscreen
+                // state. Reassert it once, without minimizing or toggling it.
+                if let Some(window) = all.as_ref().and_then(|windows| {
+                    windows.iter().rev().find(|window| {
+                        window.activated && is_android_window(&window.app_id) && !window.fullscreen
+                    })
+                }) {
+                    let _ = catostv_core::toplevel::control(
+                        &window.app_id,
+                        catostv_core::toplevel::WindowAction::Fullscreen(true),
+                    );
+                }
                 // Only when Android's front app changes (every
                 // window touch is a re-plug), and only a raise.
                 let top = android::read_top().filter(|t| !android::is_android_home(t));
@@ -1693,7 +1710,7 @@ impl ShellApp {
             // Activating Android's own window also selects its desktop.
             // A keyboard desktop switch first adds another handover.
             let switched = if let Some(w) = window.as_deref().filter(|_| android) {
-                match catostv_core::toplevel::activate(w) {
+                match catostv_core::toplevel::activate_fullscreen(w) {
                     Ok(true) => Ok(()),
                     Ok(false) => {
                         lock(&watch).blank = None;
@@ -4029,6 +4046,7 @@ impl ShellApp {
     }
 
     fn handle_lifecycle(&mut self, ctx: &egui::Context, ev: LifecycleEvent) {
+        eprintln!("catostv: app lifecycle {ev:?}");
         let id = ev.id().to_string();
         // The app ended: its launch screen too (its window may never have
         // been noticed).

@@ -156,7 +156,7 @@ pub fn stop_leftovers(record: &Path) -> Vec<String> {
 
 impl AppManager {
     /// `log_dir`: where each app's stdout/stderr is written as `<id>.log`
-    /// (overwritten on each launch). `None` discards output.
+    /// (the previous launch is kept as `<id>.previous.log`). `None` discards output.
     pub fn new(log_dir: Option<PathBuf>) -> Self {
         Self {
             tracked: HashMap::new(),
@@ -266,6 +266,10 @@ impl AppManager {
             return (Stdio::null(), Stdio::null());
         };
         let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::rename(
+            dir.join(format!("{id}.log")),
+            dir.join(format!("{id}.previous.log")),
+        );
         match File::create(dir.join(format!("{id}.log"))) {
             Ok(f) => match f.try_clone() {
                 Ok(f2) => (Stdio::from(f), Stdio::from(f2)),
@@ -383,6 +387,28 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn relaunch_keeps_the_previous_players_log() {
+        let dir = crate::testutil::TempDir::new("player-logs");
+        let mut manager = AppManager::new(Some(dir.path().to_path_buf()));
+        manager
+            .launch(&app("player", "sh -c 'echo first-playback'"))
+            .unwrap();
+        assert_eq!(poll_until(&mut manager, 5).len(), 1);
+        manager
+            .launch(&app("player", "sh -c 'echo second-playback'"))
+            .unwrap();
+        assert_eq!(poll_until(&mut manager, 5).len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("player.previous.log")).unwrap(),
+            "first-playback\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("player.log")).unwrap(),
+            "second-playback\n"
+        );
     }
 
     #[test]
