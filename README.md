@@ -1,133 +1,111 @@
 <p align="center">
-  <img src="assets/logo.svg" width="96" alt="CatosTV">
+  <img src="assets/logo.svg" width="72" alt="CatosTV logo">
 </p>
 
-# CatosTV &nbsp;&middot;&nbsp; [<img src="https://img.shields.io/badge/Telegram-Group-blue?style=flat-square&logo=telegram">](https://t.me/+0SUpfEJNYFhhNzZh)
+<h1 align="center">CatosTV</h1>
 
-**A no-nonsense Linux distro made for TV screens.**
+<p align="center">A no-nonsense Linux distro built for TV screens.</p>
+
+<p align="center">
+  <a href="https://github.com/CatosTV/CatOSTV/releases/latest"><strong>Download ISO</strong></a>
+  &nbsp;·&nbsp; <a href="MANUAL.md">Manual</a>
+  &nbsp;·&nbsp; <a href="ANDROID.md">Android setup</a>
+  &nbsp;·&nbsp; <a href="https://t.me/+0SUpfEJNYFhhNzZh">Telegram community</a>
+</p>
 
 ![CatosTV Home](assets/screenshots/home.webp)
 
-I built CatosTV for my living room because I wanted a home screen for my
-apps, without sponsored tiles or rows of things I never asked to watch.
+CatosTV turns an x86-64 PC into a TV box. It boots into a home screen you
+can use with a remote, keyboard or controller. The home screen has no ads,
+and CatosTV does not require an account.
 
-CatosTV turns a mini PC, desktop or laptop into a TV box. It boots straight
-into a full-screen interface you can use from the couch with a remote,
-keyboard or controller. Pick an app and watch.
+## On your TV
 
-The home screen has no ads and CatosTV doesn't require an account. Apps
-and streaming services may require their own accounts. The optional
-screensaver fetches pictures and local weather from public services.
+- **YouTube:** [CatTube](https://github.com/coderastic/CatTube), with search,
+  subscriptions, subtitles and phone control.
+- **Your media:** Catfyn connects to [Jellyfin](https://jellyfin.org) and
+  [Plex](https://www.plex.tv), with continue watching and next-episode playback.
+- **Android TV apps:** set up Google Play or Aurora, then open Android apps
+  from the same home screen. See the [Android guide](ANDROID.md).
+- **Linux apps and games:** install from Flathub in the Store. Moonlight
+  and a file browser are included.
+- **TV controls:** quick settings, app switching, HDMI-CEC, Bluetooth
+  remotes, controllers and a phone remote.
+- **Your layout:** choose Flat or Glassy, pick an accent colour and arrange
+  your apps.
 
-It's based on Arch Linux, with the home screen, settings, installer and
-media interface written in Rust. Install once, then get signed updates
-from Settings, together with the Arch packages tested for that version.
+Apps and streaming services may need their own accounts. Android app
+compatibility depends on the app and your hardware.
 
-## What you get
+<details>
+<summary>More screenshots</summary>
 
-| | |
-|---|---|
-| ![CatTube](assets/screenshots/cattube.webp) | ![Catfyn](assets/screenshots/catfyn.webp) |
-| CatTube, for YouTube | Catfyn, for Jellyfin and Plex |
-| ![Store](assets/screenshots/store.webp) | ![Quick settings](assets/screenshots/quick-settings.webp) |
-| The Store, apps from Flathub | Quick settings, over any app |
+**CatTube**
 
-- A home screen you drive with a remote. Your apps in one row, big
-  readable text, and everything reachable with arrows, OK and Back.
-- Choose Glassy or Flat in Settings, with your own accent colour. Now
-  playing cards let you return to a loaded video, with separate cards when
-  more than one player is open.
-- Android apps, natively. Set up Android TV once from Settings and your
-  Android apps sit right next to everything else. They open full screen,
-  the remote and controllers work in them, and Back on an app's first
-  screen takes you home. See [ANDROID.md](ANDROID.md).
-- [CatTube](https://github.com/coderastic/CatTube), a native YouTube app
-  with search, subscriptions, watch history, subtitles and phone control.
-- [Catfyn](https://github.com/coderastic/Catfyn), a built-in player for your own [Jellyfin](https://jellyfin.org)
-  or [Plex](https://www.plex.tv) server (or both): continue watching, next
-  episode with a countdown, subtitles.
-- Linux apps as well. Moonlight game streaming and a simple file browser are
-  there from the start, and Steam (Big Picture), Spotify, Kodi and lots
-  more install from the built-in Store (Flathub).
-- Recents, to jump back to an app or close it, with a picture of what each
-  one was showing.
-- Use whatever you have to control it: a keyboard, a game controller, a
-  Bluetooth remote, your phone (a remote page in the browser, or KDE
-  Connect), or your TV's own remote over HDMI-CEC.
-  One press on a keyboard, remote or controller wakes the TV from sleep.
-- Cast to it from phone apps that support DLNA, and use "link with TV" in
-  the YouTube app. Turn casting on or off in Settings.
-- Quick settings for Wi-Fi, Ethernet, Bluetooth, sound, sleep and power,
-  one button away, even while an app is open.
-- Updates from Settings. They're signed, you choose when to install them,
-  and they never start while something is playing.
+![CatTube](assets/screenshots/cattube.webp)
 
-## Download
+**Catfyn** · [Standalone app](https://github.com/coderastic/Catfyn)
 
-Get the latest ISO from the [Releases](https://github.com/CatosTV/CatOSTV/releases/latest) page and write it to
-a USB stick (8 GB or more) with [balenaEtcher](https://etcher.balena.io),
-[Ventoy](https://www.ventoy.net) or `dd`:
+![Catfyn](assets/screenshots/catfyn.webp)
 
-```bash
-sudo dd if=catostv-VERSION-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
-```
+**Store**
 
-You can check the download with the `.sha256` file next to it:
-`sha256sum -c catostv-VERSION-x86_64.iso.sha256`. Replace `VERSION` with
-the downloaded version and `/dev/sdX` with the USB device you want to erase.
+![Store](assets/screenshots/store.webp)
 
-You don't need a newer ISO when a new version comes out. The installer
-checks for updates before it starts and installs the newest version.
+**Quick settings**
 
-The main branch can include changes that aren't in the latest ISO or
-update yet. Check the release notes for what's included in a download.
+![Quick settings](assets/screenshots/quick-settings.webp)
 
-## What you need
+</details>
 
-- A 64-bit PC (x86-64) that boots in UEFI mode. Almost every PC from the
-  last ten years does.
-- A disk of 20 GB or more that CatosTV may erase completely. 64 GB or more
-  is nicer if you plan to install many Android apps or games.
-- An internet connection while installing, over Ethernet or Wi-Fi.
-- A TV or monitor over HDMI. The installer selects graphics drivers for
-  the hardware it detects.
+## Install
 
-## Quick start
+You need a **UEFI x86-64 PC**, a disk of **20 GB or more**, an internet
+connection and a USB stick of **8 GB or more**. A 64 GB disk gives Android
+apps and games more room.
 
-1. Plug in the USB stick and boot from it (F12, F11 or Esc at power-on
-   usually opens the boot menu).
-2. Choose **Install CatosTV**. If the screen stays dark on an unusual
-   graphics card, try **Install with basic graphics**.
-3. Follow the installer: keyboard, network, the disk to use, time zone. It
-   shows you the disk and asks before erasing anything.
-4. When it says **You're all set**, remove the stick and restart.
+1. Download the ISO and its `.sha256` file from
+   [GitHub Releases](https://github.com/CatosTV/CatOSTV/releases/latest).
+2. Write the ISO to USB, then boot the PC from it.
+3. Choose **Install CatosTV** and follow the installer. Installation erases
+   the disk you select. If the display stays dark, try **basic graphics**.
+4. Remove the USB stick and restart when installation finishes.
 
-The TV starts straight into CatosTV. The [manual](MANUAL.md) covers
-everything from there: the remote, apps, Android, casting, settings and
-what to do when something misbehaves.
+The [manual](MANUAL.md) covers USB creation, keyboard and remote controls,
+network setup, apps and troubleshooting.
 
-## Building it yourself
+## Updates
 
-CatosTV is built on Arch Linux. On an Arch machine:
+Install signed system updates from **Settings → Updates**. Store app
+updates are in **Store → Updates**. You choose when to install them.
 
-```bash
-sudo pacman -S --needed base-devel rustup archiso grub ttf-dejavu freetype2
+GitHub Releases contain installer ISOs and checksums. Installed TVs get
+system updates from CatosTV's update service. You do not need a new ISO
+for each update. Changes on `main` may be ahead of the published ISO and OTA.
+
+## Build from source
+
+On Arch Linux:
+
+```sh
+sudo pacman -S --needed base-devel git rustup archiso grub ttf-dejavu freetype2
 rustup default stable
-./scripts/build-iso.sh          # makes out/catostv-<version>-x86_64.iso
+git clone https://github.com/CatosTV/CatOSTV.git
+cd CatOSTV
+./scripts/build-iso.sh
 ```
 
-## Credits
+The ISO is written to `out/`.
 
-- Android TV images: [SupeChicken666](https://github.com/supechicken) and
-  [WayDroid-ATV](https://github.com/WayDroid-ATV/waydroid-builds), whose
-  images power CatosTV's Android TV setup.
-- Icons: [Papirus](https://github.com/PapirusDevelopmentTeam/papirus-icon-theme)
-  icon theme (GPL-3.0).
-- Built on [Arch Linux](https://archlinux.org), with
-  [labwc](https://labwc.github.io), [Waydroid](https://waydro.id),
-  [mpv](https://mpv.io) and [egui](https://github.com/emilk/egui).
-- Font: [Inter](https://rsms.me/inter/).
+## Credits and licence
 
-## License
+Android TV images come from [SupeChicken666](https://github.com/supechicken)
+and [WayDroid-ATV](https://github.com/WayDroid-ATV/waydroid-builds).
+CatosTV uses [Arch Linux](https://archlinux.org),
+[labwc](https://labwc.github.io), [Waydroid](https://waydro.id),
+[mpv](https://mpv.io), [egui](https://github.com/emilk/egui),
+[Papirus icons](https://github.com/PapirusDevelopmentTeam/papirus-icon-theme)
+(GPL-3.0) and the [Inter font](https://rsms.me/inter/).
 
-See [LICENSE](LICENSE).
+CatosTV is licensed under [MIT](LICENSE). Included software and assets
+retain their own licences.
