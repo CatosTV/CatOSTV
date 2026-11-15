@@ -6,6 +6,7 @@
 // root script over a file the shell staged) and the "send Android
 // home" unit (a fixed root script, no input), the "controllers follow
 // what is in front" unit (a fixed root script, no input),
+// the fixed Android restart unit (keeps user data),
 // nothing else (the density unit runs a fixed root script with no input). The setup unit
 // runs a fixed root script that takes no input
 // (/usr/local/lib/catostv/android-setup); the stop unit's only input is the
@@ -19,6 +20,7 @@ polkit.addRule(function(action, subject) {
         (action.lookup("unit") == "catostv-android-setup.service" ||
          action.lookup("unit") == "catostv-android-density.service" ||
          action.lookup("unit") == "catostv-android-repair.service" ||
+         action.lookup("unit") == "catostv-android-restart.service" ||
          action.lookup("unit") == "catostv-android-install.service" ||
          action.lookup("unit") == "catostv-android-home.service" ||
          action.lookup("unit") == "catostv-android-pads.service" ||

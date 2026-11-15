@@ -1036,7 +1036,9 @@ pub enum Effect {
     /// Load appstream details (and screenshots) for the Store page.
     StoreDetails(String),
     AndroidSetup,
-    /// Restart Android with a fresh keystore.
+    /// Restart the Android session and container, keeping its data.
+    AndroidRestart,
+    /// Reset Android apps and user data after confirmation.
     AndroidRepair,
     /// List a folder for the APK picker (`None` = the starting places,
     /// after mounting removable drives).
@@ -2771,7 +2773,10 @@ impl Shell {
                 vec![Effect::BrowseApks(None)]
             }
             RowId::AndroidStore => vec![Effect::AndroidOpenStore],
-            RowId::AndroidRepair => {
+            RowId::AndroidRestart if !sys.android_restarting && !sys.android_repairing => {
+                vec![Effect::AndroidRestart]
+            }
+            RowId::AndroidRepair if !sys.android_restarting && !sys.android_repairing => {
                 self.overlays.push(Overlay::RepairConfirm { index: 0 });
                 vec![]
             }

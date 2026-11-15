@@ -107,6 +107,7 @@ enum Msg {
     AndroidStuck,
     /// The stuck Android session has stopped: start a fresh one.
     AndroidRestarted,
+    AndroidRestartDone(Result<(), String>),
     /// Quick settings key while an app was in front.
     /// Quick settings or a volume key while an app is in front: the window
     /// has just been put on top of the app.
@@ -985,6 +986,7 @@ fn snapshot(appliance: bool, home: &Path) -> (SystemSnapshot, Vec<AppEntry>) {
         android,
         android_setup: android::read_setup_state(),
         android_repairing: android::repair_running(&mut r),
+        android_restarting: false,
         gsf_id: android::read_gsf_id(),
         android_download: android::read_download_progress(),
         android_image: android::installed_image(),
@@ -1546,6 +1548,7 @@ impl ShellApp {
             && self.shell.volume.is_none()
             && !self.sys.android_setup.as_ref().is_some_and(|s| s.running())
             && !self.sys.android_repairing
+            && !self.sys.android_restarting
             && !matches!(
                 self.sys.updates.install,
                 Some(catostv_core::updates::InstallState::Running(_))
@@ -1906,6 +1909,10 @@ impl ShellApp {
     /// until the app has been launched (switching
     /// early showed whatever app was last on the app desktop).
     fn android(&mut self, ctx: &egui::Context, task: AndroidTask) {
+        if self.sys.android_restarting {
+            self.show_toast(ctx, "Restarting Android…");
+            return;
+        }
         let quiet = matches!(task, AndroidTask::InstallAurora);
         // Android still running on a display a TV session restart left
         // behind: stop it, then do the task on a fresh session.
@@ -1947,7 +1954,7 @@ impl ShellApp {
                 match result {
                     Ok(()) => Msg::AndroidOpened(pkg.to_string()),
                     Err(e) if e.to_string().contains("timed out") => Msg::Toast(
-                        "Android is not responding. Settings → Android → Reset Android".into(),
+                        "Android is not responding. Settings → Android → Restart Android".into(),
                     ),
                     Err(e) => Msg::Toast(e.to_string()),
                 }
@@ -2026,6 +2033,7 @@ impl ShellApp {
         if !self.sys.android.initialized
             || self.sys.android_setup.as_ref().is_some_and(|s| s.running())
             || self.sys.android_repairing
+            || self.sys.android_restarting
         {
             return;
         }
@@ -2713,7 +2721,33 @@ impl ShellApp {
                 self.android(ctx, AndroidTask::InstallApk(path));
             }
             Effect::AndroidOpenStore => self.android(ctx, AndroidTask::OpenAurora),
+            Effect::AndroidRestart => {
+                if self.sys.android_restarting
+                    || self.sys.android_repairing
+                    || !self.sys.android.initialized
+                {
+                    return;
+                }
+                self.sys.android_restarting = true;
+                self.android_running.clear();
+                self.android_started = false;
+                if self.foreground_android().is_some() {
+                    self.foreground = None;
+                    self.sync_watch();
+                    self.return_to_shell();
+                }
+                self.show_toast(ctx, "Restarting Android…");
+                self.jobs.spawn(|| {
+                    Msg::AndroidRestartDone(
+                        android::restart(&mut SystemRunner, &mut std::thread::sleep)
+                            .map_err(|error| error.to_string()),
+                    )
+                });
+            }
             Effect::AndroidRepair => {
+                if self.sys.android_restarting || self.sys.android_repairing {
+                    return;
+                }
                 self.sys.android_repairing = true;
                 self.android_running.clear();
                 self.android_started = false;
@@ -3505,6 +3539,9 @@ impl ShellApp {
             }
             Msg::Apks(r) => self.shell.on_apks(r),
             Msg::AndroidOpened(pkg) => {
+                if self.sys.android_restarting {
+                    return;
+                }
                 self.end_launch();
                 lock(&self.watch).android_opened = Some((pkg.clone(), Instant::now()));
                 if !self.android_running.contains(&pkg) {
@@ -3828,6 +3865,9 @@ impl ShellApp {
                 self.show_toast(ctx, &format!("{name} removed"));
             }
             Msg::AndroidStuck => {
+                if self.sys.android_restarting {
+                    return;
+                }
                 if self.foreground.as_deref().is_some_and(|f| {
                     f == android::SESSION_APP_ID
                         || self
@@ -3850,9 +3890,29 @@ impl ShellApp {
                 });
             }
             Msg::AndroidRestarted => {
+                if self.sys.android_restarting {
+                    return;
+                }
                 self.sys.android.session = false;
                 self.android_started = false;
                 self.ensure_android_session(ctx, true);
+            }
+            Msg::AndroidRestartDone(result) => {
+                self.sys.android_restarting = false;
+                self.sys.android.session = false;
+                self.android_started = false;
+                match result {
+                    Ok(()) => {
+                        self.mgr().close(android::SESSION_APP_ID);
+                        if self.ensure_android_session(ctx, false) {
+                            self.android(ctx, AndroidTask::InstallAurora);
+                        }
+                    }
+                    Err(error) => {
+                        self.show_toast(ctx, &format!("Could not restart Android: {error}"))
+                    }
+                }
+                self.refresh_soon();
             }
             Msg::AndroidRetry(task) => {
                 self.sys.android.session = false;
@@ -3923,6 +3983,7 @@ impl ShellApp {
         discovered: Vec<AppEntry>,
     ) {
         self.refreshing = false;
+        s.android_restarting = self.sys.android_restarting;
         // Phones should see "CatosTV", not the hostname (KDE Connect's
         // default). Tried each refresh until the daemon answers.
         if !self.kde_named && self.appliance {
@@ -4220,6 +4281,7 @@ impl ShellApp {
     fn busy(&self) -> bool {
         self.sys.android_setup.as_ref().is_some_and(|s| s.running())
             || self.sys.android_repairing
+            || self.sys.android_restarting
             || self.shell.bt_busy.is_some()
             || self.shell.vpn_busy.is_some()
             || self.shell.debug_ssh_busy.is_some()

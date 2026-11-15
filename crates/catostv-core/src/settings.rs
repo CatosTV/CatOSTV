@@ -54,6 +54,8 @@ pub struct SystemSnapshot {
     pub android_setup: Option<SetupState>,
     /// Settings → Android → Reset Android is running.
     pub android_repairing: bool,
+    /// A requested Android restart is stopping and starting its container.
+    pub android_restarting: bool,
     /// Google Play certification id (GApps image), once GMS created it.
     pub gsf_id: Option<String>,
     /// Which Android image the setup installed ("atv16-gapps", …).
@@ -260,6 +262,7 @@ pub enum RowId {
     AndroidCertify,
     AndroidApk,
     AndroidRepair,
+    AndroidRestart,
     AndroidStore,
     CastReceiver,
     PhoneRemote,
@@ -1209,7 +1212,9 @@ fn android_rows(ctx: &ShellContext) -> Vec<Row> {
                     .as_deref()
                     .map(crate::android::image_label)
                     .unwrap_or_default(),
-                if ctx.sys.android_repairing {
+                if ctx.sys.android_restarting {
+                    "Restarting…"
+                } else if ctx.sys.android_repairing {
                     "Resetting…"
                 } else if a.keystore_broken {
                     "Needs a reset"
@@ -1245,11 +1250,26 @@ fn android_rows(ctx: &ShellContext) -> Vec<Row> {
                 RowKind::Action,
             ));
             v.push(row(
+                RowId::AndroidRestart,
+                "Restart Android",
+                "Keep apps and sign-ins",
+                "",
+                if ctx.sys.android_restarting || ctx.sys.android_repairing {
+                    RowKind::Info
+                } else {
+                    RowKind::Action
+                },
+            ));
+            v.push(row(
                 RowId::AndroidRepair,
                 RESET_LABEL,
                 RESET_SUBTITLE,
                 "",
-                RowKind::Action,
+                if ctx.sys.android_restarting || ctx.sys.android_repairing {
+                    RowKind::Info
+                } else {
+                    RowKind::Action
+                },
             ));
         }
     }
@@ -1258,7 +1278,7 @@ fn android_rows(ctx: &ShellContext) -> Vec<Row> {
 
 /// Settings → Android → Reset Android (worded plainly).
 pub const RESET_LABEL: &str = "Reset Android";
-pub const RESET_SUBTITLE: &str = "Fixes Android when it won't start or keeps crashing.";
+pub const RESET_SUBTITLE: &str = "Remove Android apps, sign-ins and settings";
 
 /// Every row of every category, for Search.
 pub fn all_rows(ctx: &ShellContext) -> Vec<(Category, Row)> {
@@ -1359,6 +1379,7 @@ mod tests {
                 RowId::AndroidState,
                 RowId::AndroidCertify,
                 RowId::AndroidApk,
+                RowId::AndroidRestart,
                 RowId::AndroidRepair
             ]
         );
@@ -1366,9 +1387,6 @@ mod tests {
         let rows = rows(Category::Android, &ctx_with(&sys, &p, &d));
         let reset = rows.iter().find(|r| r.id == RowId::AndroidRepair).unwrap();
         assert_eq!(reset.title, "Reset Android");
-        assert_eq!(
-            reset.subtitle,
-            "Fixes Android when it won't start or keeps crashing."
-        );
+        assert_eq!(reset.subtitle, "Remove Android apps, sign-ins and settings");
     }
 }

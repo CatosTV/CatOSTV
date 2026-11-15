@@ -73,6 +73,9 @@ pleasant on a TV. Phone-only apps open but may expect a touch screen.
   closed, open it again"). Open it again and it starts fresh.
 - **An app keeps crashing or won't open**: close it in Recents and open it
   again. Still broken: uninstall and reinstall it.
+- **Android freezes or needs a fresh start**: **Settings → Android →
+  Restart Android**. It restarts Android and keeps installed apps, sign-ins
+  and app data.
 - **Android itself won't start, or everything crashes**: **Settings →
   Android → Reset Android**. It removes all Android apps, sign-ins and app
   data and sets Android up again from scratch (a few minutes). CatosTV, your

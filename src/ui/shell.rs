@@ -2032,7 +2032,7 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::AndroidRetry => "refresh",
         R::AndroidApk => "usb",
         R::AndroidStore => "store",
-        R::AndroidRepair => "refresh",
+        R::AndroidRepair | R::AndroidRestart => "refresh",
         R::CastReceiver => "cast",
         R::PhoneRemote | R::KdeConnect | R::KdeDevice(_) => "phone",
         R::KeyGuide => "keyboard",
@@ -2075,7 +2075,11 @@ fn category_status(cat: Category, ctx: &ShellContext) -> Option<(String, Option<
             .iter()
             .find(|k| k.is_default)
             .map(|k| (k.name.clone(), None)),
-        Category::Android => Some(if sys.android.initialized {
+        Category::Android => Some(if sys.android_restarting {
+            ("Restarting…".into(), None)
+        } else if sys.android_repairing {
+            ("Resetting…".into(), None)
+        } else if sys.android.initialized {
             ("Ready".into(), Some(theme::SUCCESS))
         } else {
             ("Not set up".into(), None)

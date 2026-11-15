@@ -947,6 +947,43 @@ fn audio_output_choice() {
 }
 
 #[test]
+fn restarting_android_needs_no_reset_confirmation_and_cannot_overlap_reset() {
+    let mut fixture = Fixture::new();
+    fixture.sys.android.installed = true;
+    fixture.sys.android.initialized = true;
+    fixture.sys.android_image = Some("atv16-vanilla".into());
+    let mut shell = Shell::new();
+    open_settings(&mut shell, &fixture, Category::Android);
+    shell.settings_rows_focus = true;
+    shell.settings_row = shell
+        .settings_rows(&fixture.ctx())
+        .iter()
+        .position(|row| row.id == RowId::AndroidRestart)
+        .unwrap();
+    assert_eq!(
+        press(&mut shell, &fixture, &[Action::Ok]),
+        [Effect::AndroidRestart]
+    );
+    assert!(shell.overlays.is_empty());
+    fixture.sys.android_restarting = true;
+    assert!(press(&mut shell, &fixture, &[Action::Ok]).is_empty());
+    let rows = shell.settings_rows(&fixture.ctx());
+    assert_eq!(rows[0].value, "Restarting…");
+    for id in [RowId::AndroidRestart, RowId::AndroidRepair] {
+        shell.settings_row = rows.iter().position(|row| row.id == id).unwrap();
+        assert!(press(&mut shell, &fixture, &[Action::Ok]).is_empty());
+        assert!(shell.overlays.is_empty());
+    }
+    fixture.sys.android_restarting = false;
+    fixture.sys.android_repairing = true;
+    shell.settings_row = rows
+        .iter()
+        .position(|row| row.id == RowId::AndroidRestart)
+        .unwrap();
+    assert!(press(&mut shell, &fixture, &[Action::Ok]).is_empty());
+}
+
+#[test]
 fn android_rows_trigger_setup_and_apk_install() {
     let mut f = Fixture::new();
     f.sys.android.installed = true;
@@ -969,7 +1006,7 @@ fn android_rows_trigger_setup_and_apk_install() {
     assert!(s.overlays.is_empty());
     f.sys.android.initialized = true;
     f.sys.android_image = Some("atv16-vanilla".into());
-    // Status, Install an APK, Repair (no Aurora row:).
+    // Status, Install an APK, Restart, Reset (no Aurora row).
     assert_eq!(
         press(&mut s, &f, &[Up, Down, Ok]),
         vec![Effect::BrowseApks(None)]
@@ -1012,7 +1049,7 @@ fn android_rows_trigger_setup_and_apk_install() {
     assert!(s.overlay().is_none());
     // Reset Android asks first: Cancel is the default, Back
     // and OK on Cancel change nothing, OK on Reset Android resets.
-    assert_eq!(press(&mut s, &f, &[Down, Ok]), vec![]);
+    assert_eq!(press(&mut s, &f, &[Down, Down, Ok]), vec![]);
     assert!(matches!(
         s.overlay(),
         Some(Overlay::RepairConfirm { index: 0 })

@@ -1,0 +1,8 @@
+# Restart Android without changing its installed apps or user data.
+[Unit]
+Description=CatosTV: restart Android
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart waydroid-container.service
+TimeoutStartSec=120

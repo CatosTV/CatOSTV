@@ -89,6 +89,10 @@ button with your name), keeps what you watch off CatosTV's Home.
 
 ## Apps that need a mouse
 
+**Settings → Android → Restart Android** restarts Android while keeping its
+apps and sign-ins. The separate **Reset Android** option removes Android's
+apps, sign-ins and settings after confirmation.
+
 Desktop apps made for a mouse get a pointer: the arrows move it, OK clicks,
 and holding OK is a right click. **Back** puts the remote back to normal.
 It comes on by itself for apps that need it; **Mouse** in Quick settings,

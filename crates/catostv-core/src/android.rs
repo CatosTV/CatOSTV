@@ -1170,6 +1170,20 @@ pub fn density_cmd() -> Cmd {
 /// Root unit behind Settings → Android → Reset Android.
 pub const REPAIR_UNIT: &str = "catostv-android-repair.service";
 
+/// Restart only the Android container. Its apps, accounts and data stay.
+pub const RESTART_UNIT: &str = "catostv-android-restart.service";
+
+pub fn restart_cmd() -> Cmd {
+    Cmd::new("systemctl")
+        .args(["--no-ask-password", "start", RESTART_UNIT])
+        .timeout(Duration::from_secs(120))
+}
+
+pub fn restart(r: &mut dyn Runner, sleep: &mut dyn FnMut(Duration)) -> Result<()> {
+    stop_stale_session(r, sleep)?;
+    r.run_ok(&restart_cmd()).map(|_| ())
+}
+
 pub fn repair_cmd() -> Cmd {
     Cmd::new("systemctl")
         .args(["--no-ask-password", "start", "--no-block", REPAIR_UNIT])
@@ -2045,6 +2059,59 @@ Wayland display:\twayland-0
                 .unwrap_err()
                 .message()
                 .contains("not found")
+        );
+    }
+
+    #[test]
+    fn restart_waits_for_the_session_and_never_routes_to_reset() {
+        let mut runner = FakeRunner::new();
+        runner.push(Output::ok(""));
+        runner.push(Output::ok(RUNNING));
+        runner.push(Output::ok("active"));
+        runner.push(Output::ok(STOPPED));
+        runner.push(Output::ok("active"));
+        runner.push(Output::ok(""));
+        let mut sleeps = Vec::new();
+        restart(&mut runner, &mut |duration| sleeps.push(duration)).unwrap();
+        assert_eq!(sleeps, [Duration::from_millis(500)]);
+        assert_eq!(
+            runner.seen.last().unwrap().display(),
+            "systemctl --no-ask-password start catostv-android-restart.service"
+        );
+        assert!(
+            runner
+                .seen
+                .iter()
+                .all(|command| !command.display().contains(REPAIR_UNIT))
+        );
+        let unit = repo_file("target-root/etc/systemd/system/catostv-android-restart.service");
+        let commands: Vec<_> = unit
+            .lines()
+            .filter_map(|line| line.strip_prefix("ExecStart="))
+            .collect();
+        assert_eq!(
+            commands,
+            ["/usr/bin/systemctl restart waydroid-container.service"]
+        );
+        assert!(!unit.contains("--force"));
+        let rule = repo_file("target-root/etc/polkit-1/rules.d/50-catostv-android.rules");
+        assert!(rule.contains(RESTART_UNIT));
+
+        let mut runner = FakeRunner::new();
+        runner.push(Output::failed(1, "session stop failed"));
+        assert!(restart(&mut runner, &mut |_| {}).is_err());
+        assert_eq!(runner.seen.len(), 1);
+
+        let mut runner = FakeRunner::new();
+        runner.push(Output::ok(""));
+        runner.push(Output::ok(STOPPED));
+        runner.push(Output::ok("active"));
+        runner.push(Output::failed(1, "container restart failed"));
+        assert!(
+            restart(&mut runner, &mut |_| {})
+                .unwrap_err()
+                .to_string()
+                .contains("container restart failed")
         );
     }
 
