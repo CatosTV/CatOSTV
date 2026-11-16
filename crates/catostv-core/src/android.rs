@@ -1428,16 +1428,25 @@ pub fn install_apk_and_wait(
 /// Install the Aurora Store downloaded by the setup script unless Android
 /// already has it (microG's bundle may ship an old copy; Android then
 /// treats ours as an update). Returns `true` if an install was started.
-pub fn install_aurora_if_missing(r: &mut dyn Runner) -> Result<bool> {
-    install_aurora_from(r, Path::new(AURORA_APK_PATH))
+pub fn install_aurora_if_missing(
+    r: &mut dyn Runner,
+    home: &Path,
+    sleep: &mut dyn FnMut(Duration),
+) -> Result<bool> {
+    install_aurora_from(r, home, Path::new(AURORA_APK_PATH), sleep)
 }
 
-fn install_aurora_from(r: &mut dyn Runner, apk: &Path) -> Result<bool> {
+fn install_aurora_from(
+    r: &mut dyn Runner,
+    home: &Path,
+    apk: &Path,
+    sleep: &mut dyn FnMut(Duration),
+) -> Result<bool> {
     let apps = list_apps(r)?;
     if apps.iter().any(|a| a.package == AURORA_PACKAGE) {
         return Ok(false);
     }
-    install_apk(r, apk)?;
+    install_apk_as_root(r, home, apk, sleep)?;
     Ok(true)
 }
 
@@ -2307,13 +2316,25 @@ categories:
         let apk = t.write("AuroraStore.apk", "PK");
         let mut r = FakeRunner::new();
         r.push(Output::ok(APP_LIST));
-        assert!(!install_aurora_from(&mut r, &apk).unwrap());
+        assert!(!install_aurora_from(&mut r, t.path(), &apk, &mut |_| {}).unwrap());
         assert_eq!(r.seen.len(), 1);
         r.push(Output::ok(
             "Name: Settings\npackageName: com.android.settings\ncategories:\n",
         ));
-        assert!(install_aurora_from(&mut r, &apk).unwrap());
-        assert_eq!(r.seen[2].args[..2], ["app", "install"]);
+        r.push(Output::ok(""));
+        r.push(Output::failed(1, "PackageManager unavailable"));
+        assert!(
+            install_aurora_from(&mut r, t.path(), &apk, &mut |_| {})
+                .unwrap_err()
+                .to_string()
+                .contains("PackageManager unavailable")
+        );
+        assert_eq!(r.seen.last().unwrap().args, install_unit_cmd().args);
+        assert!(
+            r.seen
+                .iter()
+                .all(|c| c.args.get(..2) != Some(&["app".into(), "install".into()]))
+        );
     }
 
     #[test]

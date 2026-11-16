@@ -112,9 +112,13 @@ With Debug SSH enabled, copy the APK to the TV, then run as the TV account:
 
 ```sh
 scp app.apk catostv@TV_IP:/home/catostv/Downloads/app.apk
-ssh catostv@TV_IP 'catostv-diag android-install /home/catostv/Downloads/app.apk'
+ssh -t catostv@TV_IP 'sudo -v && catostv-diag android-install /home/catostv/Downloads/app.apk'
 ```
 
 Start Android from Settings first. The command uses the same PackageManager
 installation path as the APK picker and waits for its actual result.
 A failed install returns an error; it does not report success early.
+
+If Aurora Store is missing after setup, start Android and run
+`sudo -v` followed by `catostv-diag android-store` over SSH. This installs the store APK downloaded
+during setup and waits for Android's result.

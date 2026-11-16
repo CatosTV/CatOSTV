@@ -23,13 +23,37 @@
 //! ```
 
 use catostv_core::install::{self, CpuVendor, DryRunHost, InstallConfig, InstallEvent};
-use catostv_core::process::SystemRunner;
+use catostv_core::process::{Cmd, Output, Runner, SystemRunner};
 use catostv_core::{android, audio, bluetooth, desktop, disk, env, flatpak, ipc, net, timezone};
 use std::time::Duration;
 
 const USAGE: &str =
-    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|android-install|freeze-report|packages|install-prepare|windows|activate|minimize|version> [options]
+    "usage: catostv-diag <status|disks|wifi|plan|dry-run|apps|store|android|android-sync|android-install|android-store|freeze-report|packages|install-prepare|windows|activate|minimize|version> [options]
   plan/dry-run options: --disk /dev/X  [--timezone Area/City]  [--keyboard us|de|…]  [--cpu intel|amd|other]";
+
+struct ApkInstaller;
+
+impl Runner for ApkInstaller {
+    fn run(&mut self, command: &Cmd) -> catostv_core::Result<Output> {
+        let output = SystemRunner.run(command)?;
+        if output.success() || *command != android::install_unit_cmd() {
+            return Ok(output);
+        }
+        // SSH is outside the local polkit session. Use only an existing
+        // Debug SSH sudo login, and only for the fixed APK install unit.
+        let elevated = Cmd::new("sudo")
+            .args(["-n", "--", "systemctl"])
+            .args(command.args.clone())
+            .timeout(command.timeout);
+        let output = SystemRunner.run(&elevated)?;
+        if !output.success() && output.stderr.contains("password") {
+            return Err(catostv_core::Error::msg(
+                "Run sudo -v before installing an APK over SSH",
+            ));
+        }
+        Ok(output)
+    }
+}
 
 fn opt(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -78,9 +102,33 @@ fn main() {
         Some("apps") => discovered_apps(),
         Some("store") => store(args.get(1).map(String::as_str)),
         Some("android") => android_status(),
+        Some("android-store") => {
+            if !android::is_booted() {
+                eprintln!("catostv-diag: Start Android from Settings first");
+                std::process::exit(1);
+            }
+            match android::install_aurora_if_missing(
+                &mut ApkInstaller,
+                &home_dir(),
+                &mut std::thread::sleep,
+            ) {
+                Ok(true) => {
+                    println!("Aurora Store installed");
+                    0
+                }
+                Ok(false) => {
+                    println!("Aurora Store is already installed");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("catostv-diag: {error}");
+                    1
+                }
+            }
+        }
         Some("android-install") => match args.get(1).filter(|_| args.len() == 2) {
             Some(path) if android::is_booted() => match android::install_apk_as_root(
-                &mut SystemRunner,
+                &mut ApkInstaller,
                 &home_dir(),
                 std::path::Path::new(path),
                 &mut std::thread::sleep,

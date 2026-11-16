@@ -1943,6 +1943,13 @@ impl ShellApp {
             return;
         }
         let home = self.home.clone();
+        let aurora = self
+            .sys
+            .android_image
+            .as_deref()
+            .map_or(self.prefs.android_variant == "vanilla", |image| {
+                image.ends_with("-vanilla")
+            });
         let home_requests = if matches!(task, AndroidTask::Launch(_) | AndroidTask::OpenAurora) {
             std::mem::take(&mut self.android_home)
         } else {
@@ -2015,19 +2022,30 @@ impl ShellApp {
                         Err(e) => Msg::ApkDone(e.to_string()),
                     }
                 }
-                AndroidTask::OpenAurora => match android::install_aurora_if_missing(&mut r) {
-                    Ok(_) => launch(&mut r, android::AURORA_PACKAGE),
-                    Err(e) => Msg::Toast(e.to_string()),
-                },
+                AndroidTask::OpenAurora => {
+                    match android::install_aurora_if_missing(&mut r, &home, &mut sleep) {
+                        Ok(_) => launch(&mut r, android::AURORA_PACKAGE),
+                        Err(e) => Msg::Toast(e.to_string()),
+                    }
+                }
                 // Installing it makes Waydroid write its .desktop file, so
                 // the next refresh shows Aurora Store on Home.
                 AndroidTask::InstallAurora => {
                     // Android just booted: size its layout for the TV first.
                     let _ = SystemRunner.run(&android::density_cmd());
-                    match android::install_aurora_if_missing(&mut r) {
+                    if !aurora {
+                        return if tv_changed {
+                            Msg::Refresh
+                        } else {
+                            Msg::Nothing
+                        };
+                    }
+                    match android::install_aurora_if_missing(&mut r, &home, &mut sleep) {
                         Ok(_) => Msg::Refresh,
-                        Err(_) if tv_changed => Msg::Refresh,
-                        Err(_) => Msg::Nothing,
+                        Err(error) => {
+                            eprintln!("catostv: Aurora Store install failed: {error}");
+                            Msg::Toast(format!("Could not install Aurora Store: {error}"))
+                        }
                     }
                 }
             }
