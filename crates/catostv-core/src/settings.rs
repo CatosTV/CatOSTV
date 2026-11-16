@@ -65,6 +65,7 @@ pub struct SystemSnapshot {
     pub android_download: Option<(u32, u32)>,
     /// Installed Flatpak apps (user + system).
     pub flatpaks: Vec<InstalledApp>,
+    pub hidden_apps: Vec<AppView>,
     pub flatpak_available: bool,
     pub remote: Option<RemoteInfo>,
     /// KDE Connect devices (empty when kdeconnectd is not running).
@@ -283,7 +284,7 @@ pub enum RowId {
     App(usize),
     /// Settings → Apps: filter the list.
     AppSearch,
-    ShowHiddenApps,
+    HiddenApps,
     AndroidState,
     AndroidSetup,
     /// After a failed setup: the same store again (Settings → Android).
@@ -755,10 +756,10 @@ pub fn rows_for(cat: Category, ctx: &ShellContext, apps_filter: &str) -> Vec<Row
                         row(RowId::App(i), &a.entry.name, "", state, RowKind::Action)
                     }),
             );
-            if !ctx.prefs.hidden_apps.is_empty() && needle.is_empty() {
+            if needle.is_empty() {
                 v.push(row(
-                    RowId::ShowHiddenApps,
-                    "Show hidden apps",
+                    RowId::HiddenApps,
+                    "Hidden apps",
                     "",
                     ctx.prefs.hidden_apps.len().to_string(),
                     RowKind::Action,
@@ -1341,7 +1342,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_updates_only_list_system_updates_and_hidden_apps_can_be_restored() {
+    fn settings_updates_only_list_system_updates_and_hidden_apps_open_separately() {
         let mut sys = SystemSnapshot {
             flatpak_available: true,
             ..Default::default()
@@ -1359,7 +1360,7 @@ mod tests {
         }]));
         let ctx = ctx_with(&sys, &prefs, &display);
         let apps = rows(Category::Apps, &ctx);
-        assert!(apps.iter().any(|row| row.id == RowId::ShowHiddenApps));
+        assert!(apps.iter().any(|row| row.id == RowId::HiddenApps));
         let updates = rows(Category::Updates, &ctx);
         assert!(updates.iter().any(|row| row.id == RowId::UpdateCheck));
         assert!(

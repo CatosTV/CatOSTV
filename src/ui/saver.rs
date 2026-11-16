@@ -2,7 +2,6 @@
 //! the weather in the bottom corners.
 
 use crate::canvas::Canvas;
-use crate::icons;
 use crate::saver::{Slide, Slideshow};
 use crate::theme::{self, Weight};
 use catostv_core::screensaver::{self as ss, Weather};
@@ -90,7 +89,7 @@ pub fn draw<H: Copy>(c: &Canvas<H>, v: &SaverView) {
             white,
             Weight::Semibold,
         );
-        icons::draw(
+        crate::weather_icons::draw(
             c,
             ss::weather_icon(w.code, v.night),
             right - tw - 34.0,

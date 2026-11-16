@@ -89,9 +89,16 @@ button with your name), keeps what you watch off CatosTV's Home.
 
 ## Apps that need a mouse
 
-To hide an app, open **Settings → Apps**, select it and choose **Hide**.
-This also works for bundled apps such as Catfyn. **Show hidden apps** on
-the same page restores them.
+To hide an app, open **Settings → Apps**, select it and choose **Move to
+hidden apps**. Create and confirm a four-digit PIN on first use. This also
+works for bundled apps such as Catfyn.
+
+Open **Settings → Apps → Hidden apps** and enter the PIN to see these apps.
+OK opens an app. Hold OK for **Open** and **Unhide**; Unhide puts just that
+app back on Home. Leaving the folder or opening an app locks it again.
+**Change PIN** is available inside the unlocked folder. Five wrong attempts
+pause PIN entry for 30 seconds. The PIN protects access through CatosTV;
+it does not encrypt app data or restrict access through SSH.
 
 **Settings → Android → Restart Android** restarts Android while keeping its
 apps and sign-ins. The separate **Reset Android** option removes Android's

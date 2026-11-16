@@ -2172,7 +2172,7 @@ fn row_icon(id: settings::RowId) -> Option<&'static str> {
         R::Accent | R::Theme => "palette",
         R::App(_) => return None,
         R::AppSearch => "search",
-        R::ShowHiddenApps => "grid",
+        R::HiddenApps => "lock",
         R::AndroidState | R::AndroidSetup | R::AndroidVariant | R::AndroidCertify => "android",
         R::AndroidRetry => "refresh",
         R::AndroidApk => "usb",
@@ -2788,6 +2788,9 @@ fn draw_overlay(c: &C, v: &ShellView, overlay: &Overlay) {
     let s = v.shell;
     let ctx = v.ctx;
     match overlay {
+        Overlay::HiddenPin(_) | Overlay::HiddenApps { .. } | Overlay::HiddenAppOptions { .. } => {
+            draw_hidden(c, v, overlay)
+        }
         Overlay::Quick { index } => {
             c.scrim();
             let panel = c.r(
@@ -4078,5 +4081,154 @@ fn choice_sheet(
             Weight::Medium,
         );
         c.hit(rect, Target::Item(i));
+    }
+}
+
+fn draw_hidden(c: &C, v: &ShellView, overlay: &Overlay) {
+    match overlay {
+        Overlay::HiddenPin(entry) => {
+            let panel = widgets::modal(c, 480.0, 620.0);
+            let (x, y) = c.to_design(panel.min);
+            c.hit(panel, Target::Item(usize::MAX));
+            modal_header(c, x, y, Some("lock"), entry.title(), 480.0);
+            c.text(
+                x + 40.0,
+                y + 88.0,
+                Align2::LEFT_CENTER,
+                "Four digits for Hidden apps",
+                16.0,
+                theme::text2(),
+                Weight::Regular,
+            );
+            for index in 0..4 {
+                let px = x + 183.0 + index as f32 * 38.0;
+                if index < entry.filled() {
+                    c.circle(px, y + 136.0, 7.0, theme::text());
+                } else {
+                    c.ring(px, y + 136.0, 7.0, 1.5, theme::text3());
+                }
+            }
+            if let Some(error) = &entry.error {
+                c.text(
+                    x + 40.0,
+                    y + 177.0,
+                    Align2::LEFT_CENTER,
+                    &c.fit(error, 400.0, 15.0, Weight::Medium),
+                    15.0,
+                    theme::rgb(theme::DANGER),
+                    Weight::Medium,
+                );
+            }
+            if entry.stage == catostv_core::hidden_apps::Stage::Busy {
+                widgets::spinner(c, x + 240.0, y + 320.0, 24.0, v.since_start as f64);
+                return;
+            }
+            for (index, label) in [
+                "1", "2", "3", "4", "5", "6", "7", "8", "9", "Delete", "0", "OK",
+            ]
+            .iter()
+            .enumerate()
+            {
+                let rect = c.r(
+                    x + 40.0 + (index % 3) as f32 * 138.0,
+                    y + 212.0 + (index / 3) as f32 * 82.0,
+                    124.0,
+                    66.0,
+                );
+                widgets::button(
+                    c,
+                    rect,
+                    label,
+                    ButtonStyle::Secondary,
+                    focus_t(c, ("hidden-pin", entry.ticket, index), entry.index == index),
+                );
+                c.hit(rect, Target::Item(index));
+            }
+            c.text(
+                x + 40.0,
+                y + 583.0,
+                Align2::LEFT_CENTER,
+                "Back to cancel",
+                14.0,
+                theme::text3(),
+                Weight::Regular,
+            );
+        }
+        Overlay::HiddenApps { index } => {
+            let panel = widgets::modal(c, 700.0, 620.0);
+            let (x, y) = c.to_design(panel.min);
+            c.hit(panel, Target::Item(usize::MAX));
+            let top = modal_header(c, x, y, Some("lock"), "Hidden apps", 700.0);
+            c.text(
+                x + 40.0,
+                top + 6.0,
+                Align2::LEFT_TOP,
+                if v.ctx.sys.hidden_apps.is_empty() {
+                    "No hidden apps"
+                } else {
+                    "OK to open · Hold OK for options"
+                },
+                15.0,
+                theme::text2(),
+                Weight::Regular,
+            );
+            let mut rows: Vec<ListRow> = v
+                .ctx
+                .sys
+                .hidden_apps
+                .iter()
+                .map(|app| ListRow {
+                    icon: Some(&app.entry.icon),
+                    ..ListRow::simple(&app.entry.name)
+                })
+                .collect();
+            rows.push(ListRow {
+                icon: Some("key"),
+                ..ListRow::simple("Change PIN")
+            });
+            rows.push(ListRow {
+                icon: Some("back"),
+                ..ListRow::simple("Back")
+            });
+            modal_list(
+                c,
+                "hidden-apps",
+                x + 40.0,
+                top + 44.0,
+                620.0,
+                &rows,
+                *index,
+                6,
+            );
+        }
+        Overlay::HiddenAppOptions { id, index } => {
+            let name = v
+                .ctx
+                .sys
+                .hidden_apps
+                .iter()
+                .find(|app| app.entry.id == *id)
+                .map_or("Hidden app", |app| app.entry.name.as_str());
+            let panel = widgets::modal(c, 480.0, 330.0);
+            let (x, y) = c.to_design(panel.min);
+            c.hit(panel, Target::Item(usize::MAX));
+            let top = modal_header(c, x, y, Some("lock"), name, 480.0);
+            let rows = [
+                ListRow::simple("Open"),
+                ListRow::simple("Unhide"),
+                ListRow::simple("Back"),
+            ];
+            modal_list(
+                c,
+                "hidden-app-options",
+                x + 40.0,
+                top,
+                400.0,
+                &rows,
+                *index,
+                3,
+            );
+        }
+        _ => {}
     }
 }

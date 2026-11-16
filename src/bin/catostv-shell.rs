@@ -55,6 +55,8 @@ const SCALE_SETTLE: Duration = Duration::from_millis(700);
 type PlexLinked = (String, String, String, Vec<catostv_core::plex::PlexServer>);
 
 enum Msg {
+    HiddenPinChecked(u64, Result<bool, String>),
+    HiddenPinCreated(u64, Result<String, String>),
     /// KDE Connect took the name "CatosTV" (or not yet: daemon not up).
     KdeNamed(bool),
     /// Settings → Updates: a check finished.
@@ -785,6 +787,8 @@ enum AndroidTask {
 }
 
 struct ShellApp {
+    hidden_apps: Vec<AppEntry>,
+    pin_attempts: catostv::hidden_pin::Attempts,
     /// KDE Connect announces "CatosTV" (set once the daemon answers).
     kde_named: bool,
     /// An update finished: restart the interface shortly.
@@ -970,6 +974,7 @@ fn snapshot(appliance: bool, home: &Path) -> (SystemSnapshot, Vec<AppEntry>) {
         })
         .collect();
     let sys = SystemSnapshot {
+        hidden_apps: Vec::new(),
         wifi_on: net::wifi_state(&mut r).ok().flatten(),
         net: net::status(&mut r).ok(),
         vpns: catostv_core::vpn::list(&mut r).unwrap_or_default(),
@@ -1135,6 +1140,8 @@ impl ShellApp {
         let jobs = Jobs::new(&cc.egui_ctx);
         let appliance = env::is_appliance();
         let mut app = Self {
+            hidden_apps: Vec::new(),
+            pin_attempts: Default::default(),
             shell: Shell::new(),
             restart_after_update: None,
             updates_checked_at: None,
@@ -1351,7 +1358,6 @@ impl ShellApp {
         // Apps whose program is missing are not shown at all;
         // a running one stays so it can be resumed/closed.
         apps.retain(|a| a.is_installed() || self.mgr().is_running(&a.id));
-        apps.retain(|a| !self.prefs.hidden_apps.contains(&a.id));
         catostv_core::apps::apply_order(&mut apps, &self.prefs.app_order);
         // Papirus icons where the theme has one.
         for a in &mut apps {
@@ -1359,10 +1365,60 @@ impl ShellApp {
                 a.icon_path = Some(p.to_string_lossy().into_owned());
             }
         }
-        self.installed = apps.iter().map(AppEntry::is_installed).collect();
-        self.apps = apps;
+        let (hidden, visible): (Vec<_>, Vec<_>) = apps
+            .into_iter()
+            .partition(|app| self.prefs.hidden_apps.contains(&app.id));
+        self.hidden_apps = hidden;
+        self.installed = visible.iter().map(AppEntry::is_installed).collect();
+        self.apps = visible;
+        self.sys.hidden_apps = self
+            .hidden_apps
+            .iter()
+            .map(|entry| AppView {
+                entry: entry.clone(),
+                installed: entry.is_installed(),
+                running: self.mgr().is_running(&entry.id),
+            })
+            .collect();
     }
 
+    fn save_hidden_prefs(&mut self, ctx: &egui::Context, prefs: prefs::UiPrefs) -> bool {
+        match prefs::save(&prefs) {
+            Ok(()) => {
+                self.prefs = prefs;
+                self.rebuild_apps();
+                true
+            }
+            Err(_) => {
+                self.show_toast(ctx, "Could not save hidden apps");
+                false
+            }
+        }
+    }
+    fn player_hidden(&self, source: catostv_core::playback::Source) -> bool {
+        catostv_core::hidden_apps::hides_player(&self.hidden_apps, source)
+    }
+    fn media_item_hidden(&self, item: &Item) -> bool {
+        catostv_core::hidden_apps::hides_item(&self.hidden_apps, item)
+    }
+    fn visible_media(&self) -> fin::Media {
+        let mut media = self.media.clone();
+        for row in &mut media.home {
+            row.items.retain(|item| !self.media_item_hidden(item));
+        }
+        media.home.retain(|row| !row.items.is_empty());
+        media
+            .now_playing
+            .retain(|item| !self.player_hidden(item.source));
+        if self
+            .hidden_apps
+            .iter()
+            .any(|app| app.command == catostv_core::apps::FIN_COMMAND)
+        {
+            media.home_note = None;
+        }
+        media
+    }
     fn views(&self) -> Vec<AppView> {
         self.apps
             .iter()
@@ -1385,7 +1441,12 @@ impl ShellApp {
         let name = self
             .foreground
             .as_deref()
-            .and_then(|f| self.apps.iter().find(|a| a.id == f))
+            .and_then(|f| {
+                self.apps
+                    .iter()
+                    .chain(&self.hidden_apps)
+                    .find(|a| a.id == f)
+            })
             .map(|a| a.name.clone())
             .or_else(|| self.foreground.clone())
             .unwrap_or_else(|| "App".into());
@@ -1406,7 +1467,11 @@ impl ShellApp {
         if id == android::SESSION_APP_ID {
             return None;
         }
-        let entry = self.apps.iter().find(|a| a.id == id);
+        let entry = self
+            .apps
+            .iter()
+            .chain(&self.hidden_apps)
+            .find(|a| a.id == id);
         if entry.is_some_and(|a| matches!(a.source, AppSource::Android { .. })) {
             return None;
         }
@@ -1664,6 +1729,7 @@ impl ShellApp {
         let players: Vec<String> = self
             .apps
             .iter()
+            .chain(&self.hidden_apps)
             .find(|a| a.id == app_id)
             .and_then(|a| a.command.split_whitespace().next())
             .and_then(|c| c.rsplit('/').next())
@@ -1674,12 +1740,14 @@ impl ShellApp {
         let name = self
             .apps
             .iter()
+            .chain(&self.hidden_apps)
             .find(|a| a.id == app_id)
             .map_or_else(|| "Android".to_string(), |a| a.name.clone());
         // The Android app being opened, to wait until Android shows it.
         let package = self
             .apps
             .iter()
+            .chain(&self.hidden_apps)
             .find(|a| a.id == app_id)
             .and_then(|a| match &a.source {
                 AppSource::Android { package } => Some(package.clone()),
@@ -1780,7 +1848,13 @@ impl ShellApp {
         if f == android::SESSION_APP_ID {
             return Some(android::read_top().filter(|t| !android::is_android_home(t)));
         }
-        match &self.apps.iter().find(|a| a.id == f)?.source {
+        match &self
+            .apps
+            .iter()
+            .chain(&self.hidden_apps)
+            .find(|a| a.id == f)?
+            .source
+        {
             AppSource::Android { package } => Some(Some(package.clone())),
             _ => None,
         }
@@ -1796,7 +1870,11 @@ impl ShellApp {
         ) {
             return Some(id.into());
         }
-        let app = self.apps.iter().find(|a| a.id == id)?;
+        let app = self
+            .apps
+            .iter()
+            .chain(&self.hidden_apps)
+            .find(|a| a.id == id)?;
         match &app.source {
             // Its own window on the Android TV image; `show_app` falls back
             // to any Waydroid window when there is none by that name.
@@ -1835,8 +1913,18 @@ impl ShellApp {
     }
 
     fn launch_entry(&mut self, ctx: &egui::Context, app: &AppEntry) {
-        if app.is_builtin() {
+        if self.prefs.hidden_apps.contains(&app.id) {
+            self.show_toast(ctx, "Open this app from Hidden apps in Settings");
+            return;
+        }
+        self.launch_entry_authorized(ctx, app);
+    }
+    fn launch_entry_authorized(&mut self, ctx: &egui::Context, app: &AppEntry) {
+        if app.command == catostv_core::apps::FIN_COMMAND {
             return self.open_fin(ctx, None);
+        }
+        if app.command == catostv_core::apps::FILES_COMMAND {
+            return self.open_files(ctx);
         }
         if let AppSource::Android { package } = &app.source {
             return self.android(ctx, AndroidTask::Launch(package.clone()));
@@ -1917,6 +2005,14 @@ impl ShellApp {
     /// until the app has been launched (switching
     /// early showed whatever app was last on the app desktop).
     fn android(&mut self, ctx: &egui::Context, task: AndroidTask) {
+        if matches!(task, AndroidTask::OpenAurora)
+            && self.hidden_apps.iter().any(|app| {
+                matches!(&app.source, AppSource::Android { package } if package == android::AURORA_PACKAGE)
+            })
+        {
+            self.show_toast(ctx, "Open this app from Hidden apps in Settings");
+            return;
+        }
         if self.sys.android_restarting {
             self.show_toast(ctx, "Restarting Android…");
             return;
@@ -2105,6 +2201,10 @@ impl ShellApp {
     }
 
     fn apply(&mut self, ctx: &egui::Context, effect: Effect) {
+        if catostv_core::hidden_apps::blocks_shortcut(&self.hidden_apps, &effect) {
+            self.show_toast(ctx, "Open this app from Hidden apps in Settings");
+            return;
+        }
         // A splash until the app is on screen. Not for Catfyn (it opens at
         // once) or an app that is already running.
         if let Effect::Launch(i) = &effect
@@ -2228,20 +2328,59 @@ impl ShellApp {
                     self.launch(ctx, i);
                 }
             }
-            Effect::HideApp(i) => {
-                if let Some(app) = self.apps.get(i) {
-                    let id = app.id.clone();
-                    if !self.prefs.hidden_apps.contains(&id) {
-                        self.prefs.hidden_apps.push(id);
-                        self.save_prefs(ctx);
-                        self.rebuild_apps();
+            Effect::HideApp(id) => {
+                if self
+                    .views()
+                    .iter()
+                    .any(|app| app.entry.id == id && app.running)
+                {
+                    self.show_toast(ctx, "Close the app first");
+                    return;
+                }
+                if self.apps.iter().any(|app| app.id == id) && !self.prefs.hidden_apps.contains(&id)
+                {
+                    let mut prefs = self.prefs.clone();
+                    prefs.hidden_apps.push(id);
+                    if self.save_hidden_prefs(ctx, prefs) {
+                        self.show_toast(ctx, "Moved to hidden apps");
                     }
                 }
             }
-            Effect::ShowHiddenApps => {
-                self.prefs.hidden_apps.clear();
-                self.save_prefs(ctx);
-                self.rebuild_apps();
+            Effect::UnhideApp(id) => {
+                let mut prefs = self.prefs.clone();
+                prefs.hidden_apps.retain(|hidden| hidden != &id);
+                if self.save_hidden_prefs(ctx, prefs) {
+                    self.show_toast(ctx, "App is visible again");
+                }
+            }
+            Effect::LaunchHiddenApp(id) => {
+                if let Some(app) = self.hidden_apps.iter().find(|app| app.id == id).cloned() {
+                    self.launch_entry_authorized(ctx, &app);
+                }
+            }
+            Effect::CheckHiddenPin { ticket, pin } => {
+                let wait = self.pin_attempts.wait(Instant::now());
+                if wait > 0 {
+                    self.shell.on_hidden_pin_error(
+                        ticket,
+                        format!("Try again in {wait} seconds"),
+                        false,
+                    );
+                    return;
+                }
+                let Some(hash) = self.prefs.hidden_pin_hash.clone() else {
+                    self.shell
+                        .on_hidden_pin_error(ticket, "PIN is not configured".into(), false);
+                    return;
+                };
+                self.jobs.spawn(move || {
+                    Msg::HiddenPinChecked(ticket, catostv::hidden_pin::verify(&pin, &hash))
+                });
+            }
+            Effect::SaveHiddenPin { ticket, pin } => {
+                self.jobs.spawn(move || {
+                    Msg::HiddenPinCreated(ticket, catostv::hidden_pin::create(&pin))
+                });
             }
             Effect::Uninstall(i) => {
                 let Some(app) = self.apps.get(i).cloned() else {
@@ -2877,21 +3016,7 @@ impl ShellApp {
                     self.shell.go_home();
                 }
             }
-            Effect::OpenFiles => {
-                let home = self.home.clone();
-                let (f, effects) =
-                    catostv_core::files::Files::open(catostv_core::files::places(&home));
-                self.shell.files = Some(f);
-                for e in effects {
-                    self.files_effect(ctx, e);
-                }
-                // Drives: udisks mounts what is plugged in, then the places
-                // are refreshed.
-                self.jobs.spawn(move || {
-                    android::mount_removable(&mut SystemRunner);
-                    Msg::FilesListed(String::new(), Ok(catostv_core::files::places(&home)))
-                });
-            }
+            Effect::OpenFiles => self.open_files(ctx),
             Effect::Files(e) => self.files_effect(ctx, e),
             Effect::OpenFin => self.open_fin(ctx, None),
             Effect::FinDetails(item) if catostv_core::cattube::is_cattube(&item) => {
@@ -2940,6 +3065,19 @@ impl ShellApp {
     }
 
     // ------------------------------------------------------------ Catfyn
+
+    fn open_files(&mut self, ctx: &egui::Context) {
+        let home = self.home.clone();
+        let (files, effects) = catostv_core::files::Files::open(catostv_core::files::places(&home));
+        self.shell.files = Some(files);
+        for effect in effects {
+            self.files_effect(ctx, effect);
+        }
+        self.jobs.spawn(move || {
+            android::mount_removable(&mut SystemRunner);
+            Msg::FilesListed(String::new(), Ok(catostv_core::files::places(&home)))
+        });
+    }
 
     fn files_effect(&mut self, ctx: &egui::Context, e: catostv_core::files::FilesEffect) {
         use catostv_core::files::{self, FilesEffect};
@@ -3617,6 +3755,7 @@ impl ShellApp {
                 self.foreground = self
                     .apps
                     .iter()
+                    .chain(&self.hidden_apps)
                     .find(
                         |a| matches!(&a.source, AppSource::Android { package } if *package == pkg),
                     )
@@ -3856,6 +3995,7 @@ impl ShellApp {
                 let name = self
                     .apps
                     .iter()
+                    .chain(&self.hidden_apps)
                     .find(
                         |a| matches!(&a.source, AppSource::Android { package } if *package == pkg),
                     )
@@ -3920,6 +4060,7 @@ impl ShellApp {
                 let name = self
                     .apps
                     .iter()
+                    .chain(&self.hidden_apps)
                     .find(
                         |a| matches!(&a.source, AppSource::Android { package } if *package == pkg),
                     )
@@ -3956,6 +4097,7 @@ impl ShellApp {
                         || self
                             .apps
                             .iter()
+                            .chain(&self.hidden_apps)
                             .any(|a| a.id == f && matches!(a.source, AppSource::Android { .. }))
                 }) {
                     let _ = compositor::show_shell_workspace(&mut SystemRunner, true);
@@ -4034,6 +4176,53 @@ impl ShellApp {
                 self.refresh_soon();
             }
             Msg::VpnFiles(files) => self.shell.on_vpn_files(files),
+            Msg::HiddenPinChecked(ticket, result) => {
+                let passed = matches!(result, Ok(true));
+                let wait = if result.is_ok() {
+                    self.pin_attempts.record(passed, Instant::now())
+                } else {
+                    0
+                };
+                match result {
+                    Ok(true) => {
+                        for effect in self.shell.on_hidden_pin_granted(ticket) {
+                            self.apply(ctx, effect);
+                        }
+                    }
+                    Ok(false) => self.shell.on_hidden_pin_error(
+                        ticket,
+                        if wait > 0 {
+                            format!("Try again in {wait} seconds")
+                        } else {
+                            "Incorrect PIN".into()
+                        },
+                        false,
+                    ),
+                    Err(message) => self.shell.on_hidden_pin_error(ticket, message, false),
+                }
+            }
+            Msg::HiddenPinCreated(ticket, result) => {
+                if self.shell.hidden_pin_pending(ticket) {
+                    match result {
+                        Ok(hash) => {
+                            let mut prefs = self.prefs.clone();
+                            prefs.hidden_pin_hash = Some(hash);
+                            if self.save_hidden_prefs(ctx, prefs) {
+                                for effect in self.shell.on_hidden_pin_granted(ticket) {
+                                    self.apply(ctx, effect);
+                                }
+                            } else {
+                                self.shell.on_hidden_pin_error(
+                                    ticket,
+                                    "Could not save PIN".into(),
+                                    true,
+                                );
+                            }
+                        }
+                        Err(message) => self.shell.on_hidden_pin_error(ticket, message, true),
+                    }
+                }
+            }
             Msg::Nothing => {}
         }
     }
@@ -4174,18 +4363,21 @@ impl ShellApp {
             self.last_media_refresh = None;
             self.updates_checked_at = None;
         }
+        let hidden_apps = std::mem::take(&mut self.sys.hidden_apps);
         self.sys = s;
+        self.sys.hidden_apps = hidden_apps;
         self.autostart_android(ctx);
         self.refresh_home_media();
         // A phone asking to pair gets a pop-up right away.
         {
             let views = self.views();
+            let media = self.visible_media();
             let sctx = ShellContext {
                 apps: &views,
                 sys: &self.sys,
                 prefs: &self.prefs,
                 display: &self.display,
-                media: &self.media,
+                media: &media,
             };
             self.shell.on_kde_requests(&sctx);
             self.shell.settle_store_log(&sctx);
@@ -4207,6 +4399,7 @@ impl ShellApp {
         let name = self
             .apps
             .iter()
+            .chain(&self.hidden_apps)
             .find(|a| a.id == id)
             .map(|a| a.name.clone())
             .unwrap_or_else(|| id.clone());
@@ -4230,6 +4423,7 @@ impl ShellApp {
                 || self
                     .apps
                     .iter()
+                    .chain(&self.hidden_apps)
                     .any(|a| a.id == f && matches!(a.source, AppSource::Android { .. }))
         });
         if id == android::SESSION_APP_ID && android_in_front {
@@ -4345,6 +4539,7 @@ impl ShellApp {
                 || self
                     .apps
                     .iter()
+                    .chain(&self.hidden_apps)
                     .any(|a| a.id == f && matches!(a.source, AppSource::Android { .. }))
         });
         let window = self
@@ -4670,12 +4865,13 @@ impl eframe::App for ShellApp {
         let mut effects = Vec::new();
         {
             let views = self.views();
+            let media = self.visible_media();
             let sctx = ShellContext {
                 apps: &views,
                 sys: &self.sys,
                 prefs: &self.prefs,
                 display: &self.display,
-                media: &self.media,
+                media: &media,
             };
             let nav = std::mem::take(&mut self.pending_nav);
             for action in actions.into_iter().chain(nav) {
@@ -4807,12 +5003,13 @@ impl eframe::App for ShellApp {
         }
         let views = self.views();
         self.tick_home_bg(&ctx);
+        let media = self.visible_media();
         let sctx = ShellContext {
             apps: &views,
             sys: &self.sys,
             prefs: &self.prefs,
             display: &self.display,
-            media: &self.media,
+            media: &media,
         };
         self.shell.clamp(&sctx);
         let c = Canvas::new(ui, self.display.safe_area_pct);

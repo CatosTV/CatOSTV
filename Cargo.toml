@@ -16,6 +16,7 @@ license = "MIT"
 publish = false
 
 [dependencies]
+argon2 = { version = "=0.5.3", features = ["std"] }
 catostv-core = { path = "crates/catostv-core" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Pinned to the API this code was written against (egui 0.36.2 source was

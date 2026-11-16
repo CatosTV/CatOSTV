@@ -41,6 +41,8 @@ use crate::power::PowerAction;
 use crate::prefs;
 use crate::settings::{self, Category, RowId, RowKind, ShellContext};
 
+mod hidden;
+
 pub const APPS_GRID_COLS: usize = 6;
 pub const STORE_COLS: usize = 5;
 pub const MAX_SEARCH_RESULTS: usize = 8;
@@ -378,7 +380,7 @@ impl AppOption {
             Self::Restart => "Restart",
             Self::Close => "Close",
             Self::Uninstall => "Uninstall",
-            Self::Hide => "Hide",
+            Self::Hide => "Move to hidden apps",
             Self::Cancel => "Cancel",
         }
     }
@@ -795,6 +797,14 @@ pub enum Overlay {
     AppsSearch {
         osk: Box<Osk>,
     },
+    HiddenPin(crate::hidden_apps::Entry),
+    HiddenApps {
+        index: usize,
+    },
+    HiddenAppOptions {
+        id: String,
+        index: usize,
+    },
     KeyGuide,
     /// APKs found on USB drives; `len` is "Search again".
     ApkList {
@@ -806,6 +816,8 @@ impl Overlay {
     /// The list/button focus index, for overlays that have one.
     pub fn index_mut(&mut self) -> Option<&mut usize> {
         match self {
+            Overlay::HiddenPin(entry) => Some(&mut entry.index),
+            Overlay::HiddenApps { index } | Overlay::HiddenAppOptions { index, .. } => Some(index),
             Overlay::Quick { index }
             | Overlay::AppOptions { index, .. }
             | Overlay::AppUpdateNotes { index, .. }
@@ -915,8 +927,17 @@ pub enum Effect {
     Restart(usize),
     /// Remove a Flatpak / Android app (index into `ctx.apps`).
     Uninstall(usize),
-    HideApp(usize),
-    ShowHiddenApps,
+    HideApp(String),
+    UnhideApp(String),
+    LaunchHiddenApp(String),
+    CheckHiddenPin {
+        ticket: u64,
+        pin: crate::hidden_apps::Pin,
+    },
+    SaveHiddenPin {
+        ticket: u64,
+        pin: crate::hidden_apps::Pin,
+    },
     SetWifi(bool),
     SetBluetooth(bool),
     VolumeStep(i8),
@@ -1150,6 +1171,7 @@ pub struct Shell {
     pub home_player: Option<crate::playback::Source>,
     /// Settings → Apps filter text.
     pub apps_filter: String,
+    hidden_ticket: u64,
     pub overlays: Vec<Overlay>,
     pub wifi_scan: Scan<WifiNetwork>,
     /// SSID currently being joined.
@@ -1256,6 +1278,7 @@ impl Shell {
             home_now_playing: false,
             home_player: None,
             apps_filter: String::new(),
+            hidden_ticket: 0,
             overlays: Vec::new(),
             wifi_scan: Scan::Idle,
             wifi_connecting: None,
@@ -1324,7 +1347,8 @@ impl Shell {
                 | Overlay::DebugPassword { .. }
                 | Overlay::EthField { .. }
                 | Overlay::StoreSearch { .. }
-                | Overlay::AppsSearch { .. },
+                | Overlay::AppsSearch { .. }
+                | Overlay::HiddenPin(_),
             ) => true,
             Some(_) => false,
             None => {
@@ -1369,6 +1393,13 @@ impl Shell {
     }
 
     pub fn open_quick(&mut self, over_app: bool) {
+        if self
+            .overlays
+            .iter()
+            .any(|overlay| matches!(overlay, Overlay::HiddenApps { .. } | Overlay::HiddenPin(_)))
+        {
+            self.overlays.clear();
+        }
         self.overlays
             .retain(|o| !matches!(o, Overlay::Quick { .. }));
         self.quick_over_app = over_app;
@@ -1428,6 +1459,9 @@ impl Shell {
     /// Number of selectable entries in an overlay (for clamping/pointer).
     pub fn overlay_len(&self, o: &Overlay, ctx: &ShellContext) -> usize {
         match o {
+            Overlay::HiddenPin(_) => 12,
+            Overlay::HiddenApps { .. } => ctx.sys.hidden_apps.len() + 2,
+            Overlay::HiddenAppOptions { .. } => 3,
             Overlay::AppUpdateNotes { app, .. } => ctx
                 .sys
                 .updates
@@ -1672,7 +1706,13 @@ impl Shell {
             }
             // Movies and shows from Catfyn, for the query they were fetched
             // for.
-            if self.search_media.0 == q {
+            if self.search_media.0 == q
+                && !ctx
+                    .sys
+                    .hidden_apps
+                    .iter()
+                    .any(|app| app.entry.command == crate::apps::FIN_COMMAND)
+            {
                 for it in self.search_media.1.iter().take(6) {
                     hits.push(SearchHit::Media(Box::new(it.clone())));
                 }
@@ -2840,7 +2880,10 @@ impl Shell {
                     .push(Overlay::AppsSearch { osk: Box::new(osk) });
                 vec![]
             }
-            RowId::ShowHiddenApps => vec![Effect::ShowHiddenApps],
+            RowId::HiddenApps => {
+                self.request_hidden_apps(crate::hidden_apps::Goal::Browse, ctx);
+                vec![]
+            }
             // First setup: the store chooser; "Try again" after a
             // failure keeps the choice (its own row: after a failure no image
             // is installed yet either).
@@ -2900,6 +2943,16 @@ impl Shell {
     }
 
     fn handle_overlay(&mut self, action: Action, ctx: &ShellContext) -> Vec<Effect> {
+        if matches!(
+            self.overlay(),
+            Some(
+                Overlay::HiddenPin(_)
+                    | Overlay::HiddenApps { .. }
+                    | Overlay::HiddenAppOptions { .. }
+            )
+        ) {
+            return self.handle_hidden(action, ctx);
+        }
         let len = match self.overlays.last() {
             Some(o) => self.overlay_len(o, ctx),
             None => return vec![],
@@ -2944,6 +2997,9 @@ impl Shell {
             return vec![];
         };
         match top {
+            Overlay::HiddenPin(_)
+            | Overlay::HiddenApps { .. }
+            | Overlay::HiddenAppOptions { .. } => vec![],
             Overlay::Quick { index } => {
                 let off = if self.quick_over_app {
                     app_items.len()
@@ -3042,7 +3098,15 @@ impl Shell {
                     AppOption::Restart => vec![Effect::Restart(app)],
                     AppOption::Close => vec![Effect::Close(app)],
                     AppOption::Uninstall => vec![Effect::Uninstall(app)],
-                    AppOption::Hide => vec![Effect::HideApp(app)],
+                    AppOption::Hide => {
+                        if let Some(app) = ctx.apps.get(app) {
+                            self.request_hidden_apps(
+                                crate::hidden_apps::Goal::Hide(app.entry.id.clone()),
+                                ctx,
+                            );
+                        }
+                        vec![]
+                    }
                     AppOption::Cancel => vec![],
                 }
             }

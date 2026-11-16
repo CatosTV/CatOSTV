@@ -114,6 +114,7 @@ pub struct UiPrefs {
     pub app_order: Vec<String>,
     /// Apps hidden from Home and Apps. Settings can show them again.
     pub hidden_apps: Vec<String>,
+    pub hidden_pin_hash: Option<String>,
     /// Behind the interface: one of [`HOME_BACKGROUNDS`] (keys).
     pub home_background: String,
     /// Mouse mode chosen per app (app id, on) in the Control Center; apps
@@ -182,6 +183,7 @@ impl Default for UiPrefs {
             saver_minutes: crate::screensaver::DEFAULT_MINUTES,
             app_order: Vec::new(),
             hidden_apps: Vec::new(),
+            hidden_pin_hash: None,
             home_background: DEFAULT_HOME_BACKGROUND.into(),
             mouse_apps: Vec::new(),
         }
@@ -281,6 +283,7 @@ impl UiPrefs {
                     p.pad_nintendo_devices.push(v.to_string())
                 }
                 "app" if !v.is_empty() && v.len() <= 256 => p.app_order.push(v.to_string()),
+                "hidden_pin_hash" => p.hidden_pin_hash = Some(v.to_owned()),
                 "hidden_app" if !v.is_empty() && v.len() <= 256 => {
                     if !p.hidden_apps.iter().any(|id| id == v) {
                         p.hidden_apps.push(v.to_string());
@@ -369,6 +372,9 @@ impl UiPrefs {
             let id: String = id.chars().filter(|c| !c.is_control()).collect();
             s.push_str(&format!("app = {id}\n"));
         }
+        if let Some(hash) = &self.hidden_pin_hash {
+            s.push_str(&format!("hidden_pin_hash = {hash}\n"));
+        }
         for id in &self.hidden_apps {
             let id: String = id.chars().filter(|c| !c.is_control()).collect();
             s.push_str(&format!("hidden_app = {id}\n"));
@@ -411,18 +417,61 @@ pub fn load() -> UiPrefs {
 
 /// Atomic save (write a temp file, then rename).
 pub fn save(p: &UiPrefs) -> std::io::Result<()> {
-    let path = path();
+    save_at(p, &path())
+}
+fn save_at(p: &UiPrefs, path: &std::path::Path) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("conf.tmp");
-    std::fs::write(&tmp, p.to_conf())?;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(p.to_conf().as_bytes())?;
+    file.sync_all()?;
     std::fs::rename(tmp, path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pin_settings_are_private_and_malformed_hashes_stay_locked() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "catostv-pin-prefs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("ui.conf");
+        let temporary = path.with_extension("conf.tmp");
+        std::fs::write(&temporary, "").unwrap();
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let prefs = UiPrefs::from_conf("hidden_app = one\nhidden_pin_hash = damaged\n");
+        assert_eq!(prefs.hidden_pin_hash.as_deref(), Some("damaged"));
+        save_at(&prefs, &path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            UiPrefs::from_conf(&std::fs::read_to_string(&path).unwrap()),
+            prefs
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn mouse_choice_per_app() {
@@ -466,6 +515,7 @@ mod tests {
             saver_minutes: 10,
             app_order: vec!["catfyn".into(), "com.example.Tv".into()],
             hidden_apps: vec!["catfyn".into()],
+            hidden_pin_hash: Some("$argon2id$v=19$test".into()),
             home_background: "photos".into(),
             mouse_apps: vec![("io.freetubeapp.FreeTube".into(), true)],
         };

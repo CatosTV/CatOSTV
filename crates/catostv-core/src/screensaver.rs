@@ -242,7 +242,9 @@ pub fn weather_icon(code: u32, night: bool) -> &'static str {
     match code {
         113 if night => "moon",
         113 => "sun",
-        116 | 119 | 122 => "cloud",
+        116 if night => "cloud-moon",
+        116 => "cloud-sun",
+        119 | 122 => "cloud",
         143 | 248 | 260 => "fog",
         200 | 386..=395 => "storm",
         179 | 182 | 185 | 227 | 230 | 281 | 284 | 311..=338 | 350 | 362..=377 => "snow",
@@ -332,6 +334,8 @@ mod tests {
         };
         assert_eq!(us.temp_label(), "82°");
         assert_eq!(weather_icon(113, true), "moon");
+        assert_eq!(weather_icon(116, false), "cloud-sun");
+        assert_eq!(weather_icon(116, true), "cloud-moon");
         assert!(parse_weather(r#"{"current_condition":[]}"#).is_none());
     }
 

@@ -7,6 +7,7 @@
 pub mod canvas;
 pub mod catfyn;
 pub mod config;
+pub mod hidden_pin;
 pub mod icons;
 pub mod images;
 pub mod jobs;
@@ -16,6 +17,7 @@ pub mod pointer;
 pub mod saver;
 pub mod theme;
 pub mod ui;
+pub mod weather_icons;
 pub mod widgets;
 
 pub use catostv_core as core;

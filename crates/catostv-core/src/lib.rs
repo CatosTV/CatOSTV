@@ -333,3 +333,5 @@ mod repo_consistency {
         }
     }
 }
+
+pub mod hidden_apps;

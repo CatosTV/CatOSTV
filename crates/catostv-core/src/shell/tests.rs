@@ -173,8 +173,15 @@ fn store_update_busy_empty_and_failed_states_reject_stale_actions() {
     assert!(s.pointer(Target::StoreItem(0), true, &f.ctx()).is_empty());
 }
 
+fn pin_digits(shell: &mut Shell, f: &Fixture, digits: &str) -> Vec<Effect> {
+    digits
+        .chars()
+        .flat_map(|digit| shell.handle(Action::Char(digit), &f.ctx()))
+        .collect()
+}
 #[test]
-fn bundled_apps_can_be_hidden_and_restored_from_settings() {
+fn moving_apps_requires_a_confirmed_pin_and_unlock_does_not_restore_them() {
+    use crate::hidden_apps::{Goal, Stage};
     let mut f = Fixture::new();
     let mut shell = Shell::new();
     shell.open_app_options(0, &f.ctx(), false);
@@ -183,19 +190,90 @@ fn bundled_apps_can_be_hidden_and_restored_from_settings() {
         .position(|option| *option == AppOption::Hide)
         .unwrap();
     *shell.overlays.last_mut().unwrap().index_mut().unwrap() = hide;
-    assert_eq!(shell.handle(Action::Ok, &f.ctx()), [Effect::HideApp(0)]);
-    assert!(shell.overlays.is_empty());
+    assert!(shell.handle(Action::Ok, &f.ctx()).is_empty());
+    assert!(
+        matches!(shell.overlay(),Some(Overlay::HiddenPin(entry)) if entry.stage==Stage::Create)
+    );
+    assert!(pin_digits(&mut shell, &f, "7391").is_empty());
+    let effects = pin_digits(&mut shell, &f, "7391");
+    let ticket = match effects.first() {
+        Some(Effect::SaveHiddenPin { ticket, .. }) => *ticket,
+        _ => panic!("PIN must be saved before moving the app"),
+    };
+    assert_eq!(
+        shell.on_hidden_pin_granted(ticket),
+        [Effect::HideApp("jellyfin".into())]
+    );
     f.prefs.hidden_apps.push("jellyfin".into());
+    f.prefs.hidden_pin_hash = Some("encoded".into());
+    f.sys.hidden_apps.push(f.apps.remove(0));
     open_settings(&mut shell, &f, Category::Apps);
-    let restore = shell
+    shell.settings_row = shell
         .settings_rows(&f.ctx())
         .iter()
-        .position(|row| row.id == RowId::ShowHiddenApps)
+        .position(|row| row.id == RowId::HiddenApps)
         .unwrap();
     shell.settings_rows_focus = true;
-    shell.settings_row = restore;
-    assert_eq!(shell.handle(Action::Ok, &f.ctx()), [Effect::ShowHiddenApps]);
+    assert!(shell.handle(Action::Ok, &f.ctx()).is_empty());
+    assert!(
+        matches!(shell.overlay(),Some(Overlay::HiddenPin(entry)) if entry.goal==Goal::Browse && entry.stage==Stage::Verify)
+    );
+    let effects = pin_digits(&mut shell, &f, "1111");
+    let ticket = match effects.first() {
+        Some(Effect::CheckHiddenPin { ticket, .. }) => *ticket,
+        _ => panic!("PIN must be checked"),
+    };
+    shell.on_hidden_pin_error(ticket, "Incorrect PIN".into(), false);
+    assert!(
+        !shell
+            .overlays
+            .iter()
+            .any(|overlay| matches!(overlay, Overlay::HiddenApps { .. }))
+    );
+    let effects = pin_digits(&mut shell, &f, "7391");
+    assert!(matches!(
+        effects.first(),
+        Some(Effect::CheckHiddenPin { .. })
+    ));
+    assert!(shell.on_hidden_pin_granted(ticket).is_empty());
+    assert!(matches!(shell.overlay(), Some(Overlay::HiddenApps { .. })));
+    assert_eq!(f.prefs.hidden_apps, ["jellyfin"]);
+    shell.handle(Action::OkLong, &f.ctx());
+    shell.handle(Action::Down, &f.ctx());
+    assert_eq!(
+        shell.handle(Action::Ok, &f.ctx()),
+        [Effect::UnhideApp("jellyfin".into())]
+    );
+    assert_eq!(
+        shell.handle(Action::Ok, &f.ctx()),
+        [Effect::LaunchHiddenApp("jellyfin".into())]
+    );
+    assert!(shell.overlays.is_empty());
     assert!(!app_options(true, false, false).contains(&AppOption::Hide));
+}
+#[test]
+fn cancelled_or_old_pin_results_cannot_reopen_the_private_list() {
+    use crate::hidden_apps::Goal;
+    let mut f = Fixture::new();
+    f.prefs.hidden_pin_hash = Some("encoded".into());
+    let mut shell = Shell::new();
+    shell.request_hidden_apps(Goal::Browse, &f.ctx());
+    let effects = pin_digits(&mut shell, &f, "7391");
+    let ticket = match effects.first() {
+        Some(Effect::CheckHiddenPin { ticket, .. }) => *ticket,
+        _ => unreachable!(),
+    };
+    shell.handle(Action::Back, &f.ctx());
+    shell.request_hidden_apps(Goal::Browse, &f.ctx());
+    assert!(shell.on_hidden_pin_granted(ticket).is_empty());
+    assert!(!shell.hidden_pin_pending(ticket));
+    assert!(matches!(shell.overlay(), Some(Overlay::HiddenPin(_))));
+    shell.go_home();
+    assert!(shell.overlays.is_empty());
+    shell.overlays.push(Overlay::HiddenApps { index: 0 });
+    shell.handle_ipc(ShellCommand::Quick);
+    shell.handle(Action::Back, &f.ctx());
+    assert!(shell.overlays.is_empty());
 }
 
 #[test]
@@ -1505,7 +1583,7 @@ fn settings_apps_search_filters_the_list() {
     let rows = s.settings_rows(&f.ctx());
     assert_eq!(rows[0].id, crate::settings::RowId::AppSearch);
     // (The fixture has no Flatpak, so no "Update store apps" row.)
-    assert_eq!(rows.len(), 1 + f.apps.len());
+    assert_eq!(rows.len(), 2 + f.apps.len());
     press(&mut s, &f, &[Ok]);
     assert!(matches!(s.overlay(), Some(Overlay::AppsSearch { .. })));
     press(&mut s, &f, &[Char('z'), Char('e')]);
