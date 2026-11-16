@@ -6,7 +6,7 @@
 use crate::canvas::Canvas;
 use crate::icons;
 use crate::theme::{self, Weight};
-use crate::widgets::{self, ButtonStyle, ListRow};
+use crate::widgets::{self, ListRow};
 use catostv_core::installer::{Installer, STAGES, Scan, Step, Target};
 use catostv_core::settings::RowKind;
 use catostv_core::{install, keyboard, timezone};
@@ -23,10 +23,10 @@ fn t(c: &C, id: impl std::hash::Hash + std::fmt::Debug, on: bool) -> f32 {
 
 /// Draw one installer frame. `now`: monotonic seconds (spinner).
 pub fn draw(c: &C, f: &Installer, now: f64) {
-    c.background(None, true);
+    c.fill(c.r(0.0, 0.0, 1280.0, 720.0), 0.0, theme::rgb((15, 17, 23)));
     draw_sidebar(c, f);
     let main = c.r(320.0, 32.0, 928.0, 656.0);
-    c.glass(main, 28.0);
+    c.fill(main, 24.0, theme::rgb((29, 31, 40)));
     let enter = c.entrance("installer-step", f.step, crate::motion::PAGE);
     let content = c.translated(0.0, 14.0 * (1.0 - enter)).opacity(enter);
     let c = &content;
@@ -85,7 +85,7 @@ fn title(c: &C, heading: &str, body: &str) {
 
 fn draw_sidebar(c: &C, f: &Installer) {
     let r = c.r(32.0, 32.0, 268.0, 656.0);
-    c.glass(r, 28.0);
+    c.fill(r, 24.0, theme::rgb((23, 25, 33)));
     icons::logo(c, 60.0, 62.0, 40.0);
     c.text(
         114.0,
@@ -144,6 +144,46 @@ fn draw_sidebar(c: &C, f: &Installer) {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ButtonStyle {
+    Filled,
+    Tonal,
+    Text,
+    Danger,
+}
+
+fn button(c: &C, rect: Rect, label: &str, style: ButtonStyle, focus: f32) {
+    let radius = rect.height() / c.s / 2.0;
+    let (fill, ink) = match style {
+        ButtonStyle::Filled => (theme::rgb((208, 188, 255)), theme::rgb((56, 30, 114))),
+        ButtonStyle::Danger => (theme::rgb((242, 184, 181)), theme::rgb((96, 20, 16))),
+        ButtonStyle::Text => (theme::rgba((208, 188, 255), 0), theme::rgb((208, 188, 255))),
+        ButtonStyle::Tonal => (theme::rgb((74, 68, 88)), theme::rgb((232, 222, 248))),
+    };
+    c.fill(rect, radius, fill);
+    if focus > 0.01 {
+        c.fill(
+            rect,
+            radius,
+            theme::rgba((255, 255, 255), (20.0 * focus) as u8),
+        );
+        c.outline(
+            rect.expand(3.0 * c.s),
+            radius + 3.0,
+            2.0,
+            theme::rgba((208, 188, 255), (255.0 * focus) as u8),
+        );
+    }
+    let label = c.fit(label, rect.width() / c.s - 32.0, 18.0, Weight::Medium);
+    c.painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        c.font(18.0, Weight::Medium),
+        ink,
+    );
+}
+
 fn two_buttons(
     c: &C,
     f: &Installer,
@@ -154,8 +194,8 @@ fn two_buttons(
 ) {
     for (k, (label, style)) in [a, b].into_iter().enumerate() {
         let x = X0 + k as f32 * 236.0;
-        let rect = c.r(x, y, 220.0, 54.0);
-        widgets::button(
+        let rect = c.r(x, y, 220.0, 56.0);
+        button(
             c,
             rect,
             label,
@@ -166,51 +206,32 @@ fn two_buttons(
     }
 }
 
-fn draw_welcome(c: &C, f: &Installer, now: f64) {
-    // A slow "breathing" glow behind the logo.
-    let breathe = (0.5 + 0.5 * (now * 1.3).sin()) as f32;
-    c.glow(
-        X0 + 42.0,
-        138.0,
-        120.0 + 24.0 * breathe,
-        theme::accent_rgb(),
-        (40.0 + 40.0 * breathe) as u8,
-    );
-    icons::logo(c, X0, 96.0, 84.0);
-    // welcome with the idea, not a time estimate.
+fn draw_welcome(c: &C, f: &Installer, _now: f64) {
+    icons::logo(c, X0, 100.0, 72.0);
     c.text(
         X0,
-        214.0,
+        218.0,
         Align2::LEFT_TOP,
-        "Free your TV",
-        50.0,
+        "Install CatosTV",
+        44.0,
         theme::text(),
         Weight::Semibold,
     );
     c.text(
-        X0 + 2.0,
+        X0,
         282.0,
         Align2::LEFT_TOP,
-        "Welcome to the libre TV experience. Open, private and free of distractions.",
-        19.0,
+        "Connect to the internet, then choose a disk.",
+        18.0,
         theme::text2(),
-        Weight::Regular,
-    );
-    c.text(
-        X0 + 2.0,
-        314.0,
-        Align2::LEFT_TOP,
-        "Your apps, your shows, nothing else. Setup needs an internet connection.",
-        16.0,
-        theme::text3(),
         Weight::Regular,
     );
     two_buttons(
         c,
         f,
-        ("Let's go", ButtonStyle::Primary),
-        ("Power off", ButtonStyle::Secondary),
-        372.0,
+        ("Continue", ButtonStyle::Filled),
+        ("Power off", ButtonStyle::Text),
+        360.0,
         f.choice,
     );
 }
@@ -486,106 +507,142 @@ fn draw_timezone(c: &C, f: &Installer) {
 }
 
 fn draw_confirm(c: &C, f: &Installer) {
-    title(c, "Ready to install?", "");
-    let card = c.r(X0, 140.0, MAIN_W, 280.0);
-    c.fill(card, 22.0, theme::rgba(theme::BLACK, 90));
-    c.outline(card, 22.0, 1.0, theme::rgba(theme::DANGER, 90));
-    if let Some(d) = f.selected_disk() {
-        icons::draw(c, "disk", X0 + 48.0, 188.0, 30.0, theme::rgb(theme::DANGER));
+    title(c, "Review installation", "");
+    if let Some(disk) = f.selected_disk() {
+        let target = c.r(X0, 140.0, MAIN_W, 120.0);
+        c.fill(target, 18.0, theme::rgb((38, 40, 51)));
+        icons::draw(c, "disk", X0 + 36.0, 196.0, 28.0, theme::text2());
         c.text(
-            X0 + 84.0,
-            178.0,
+            X0 + 72.0,
+            166.0,
             Align2::LEFT_CENTER,
-            &c.fit(&d.title(), 720.0, 21.0, Weight::Semibold),
+            "Target disk",
+            14.0,
+            theme::text2(),
+            Weight::Medium,
+        );
+        c.text(
+            X0 + 72.0,
+            197.0,
+            Align2::LEFT_CENTER,
+            &c.fit(&disk.title(), MAIN_W - 100.0, 21.0, Weight::Semibold),
             21.0,
             theme::text(),
             Weight::Semibold,
         );
         c.text(
-            X0 + 84.0,
-            204.0,
+            X0 + 72.0,
+            232.0,
             Align2::LEFT_CENTER,
-            &d.detail(),
+            &c.fit(&disk.detail(), MAIN_W - 100.0, 14.0, Weight::Regular),
             14.0,
             theme::text2(),
             Weight::Regular,
         );
-        let mut y = 250.0;
-        for w in &d.warnings {
-            c.text(
-                X0 + 32.0,
-                y,
-                Align2::LEFT_CENTER,
-                &c.fit(&format!("•  {w}"), 780.0, 14.0, Weight::Regular),
-                14.0,
-                theme::rgb(theme::WARNING),
-                Weight::Regular,
-            );
-            y += 26.0;
-        }
         c.text(
-            X0 + 32.0,
-            y + 4.0,
+            X0,
+            290.0,
             Align2::LEFT_CENTER,
-            "Everything on this disk will be erased.",
-            15.0,
-            theme::rgb(theme::DANGER),
+            "All data on this disk will be erased.",
+            17.0,
+            theme::rgb((242, 184, 181)),
             Weight::Semibold,
         );
-        let facts = format!(
-            "{}  ·  {}",
-            f.timezone().replace('_', " "),
-            keyboard::label(f.keyboard())
+        let warnings = disk.warnings.join(" · ");
+        if !warnings.is_empty() {
+            c.text(
+                X0,
+                318.0,
+                Align2::LEFT_CENTER,
+                &c.fit(&warnings, MAIN_W, 14.0, Weight::Medium),
+                14.0,
+                theme::rgb(theme::WARNING),
+                Weight::Medium,
+            );
+        }
+    }
+    for (x, label, value) in [
+        (X0, "Time zone", f.timezone().replace('_', " ")),
+        (
+            X0 + 420.0,
+            "Keyboard",
+            keyboard::label(f.keyboard()).to_owned(),
+        ),
+    ] {
+        c.text(
+            x,
+            365.0,
+            Align2::LEFT_CENTER,
+            label,
+            14.0,
+            theme::text2(),
+            Weight::Medium,
         );
         c.text(
-            X0 + 32.0,
-            354.0,
+            x,
+            394.0,
             Align2::LEFT_CENTER,
-            &facts,
-            14.0,
-            theme::text3(),
-            Weight::Regular,
+            &c.fit(&value, 390.0, 18.0, Weight::Medium),
+            18.0,
+            theme::text(),
+            Weight::Medium,
         );
     }
-    let graphics = c.r(X0 + 24.0, 374.0, MAIN_W - 48.0, 38.0);
-    widgets::button(
+    c.text(
+        X0,
+        446.0,
+        Align2::LEFT_CENTER,
+        "Graphics driver",
+        14.0,
+        theme::text2(),
+        Weight::Medium,
+    );
+    c.text(
+        X0,
+        475.0,
+        Align2::LEFT_CENTER,
+        &c.fit(&f.drivers().summary, MAIN_W - 180.0, 18.0, Weight::Medium),
+        18.0,
+        theme::text(),
+        Weight::Medium,
+    );
+    let graphics = c.r(X0 + MAIN_W - 140.0, 438.0, 140.0, 48.0);
+    button(
         c,
         graphics,
-        &f.drivers().summary,
-        ButtonStyle::Secondary,
+        "Change",
+        ButtonStyle::Text,
         t(c, "installed-graphics", f.confirm_index == 2),
     );
     c.hit(graphics, Target::Item(2));
-    let buttons = [
-        ("Cancel", ButtonStyle::Secondary, 220.0),
-        ("Erase and install", ButtonStyle::Danger, 260.0),
-    ];
-    let mut x = X0;
-    for (k, (label, style, w)) in buttons.into_iter().enumerate() {
-        let rect = c.r(x, 452.0, w, 54.0);
-        widgets::button(
+    for (index, label, style, width, x) in [
+        (0, "Back", ButtonStyle::Tonal, 140.0, X0),
+        (
+            1,
+            "Erase disk and install",
+            ButtonStyle::Danger,
+            280.0,
+            X0 + MAIN_W - 280.0,
+        ),
+    ] {
+        let rect = c.r(x, 548.0, width, 56.0);
+        button(
             c,
             rect,
             label,
             style,
-            t(c, ("confirm", k), f.confirm_index == k),
+            t(c, ("confirm", index), f.confirm_index == index),
         );
-        c.hit(rect, Target::Item(k));
-        x += w + 16.0;
+        c.hit(rect, Target::Item(index));
     }
 }
 
 fn draw_installing(c: &C, f: &Installer, now: f64) {
-    // plain, calm heading.
-    title(
-        c,
-        "Setting your TV free",
-        "Sit back. Your distraction-free TV is on its way.",
-    );
+    title(c, "Installing CatosTV", "");
     let p = &f.progress;
     widgets::spinner(c, X0 + 30.0, 246.0, 26.0, now);
     let label = if p.label.is_empty() {
-        "Getting ready"
+        "Preparing installation"
     } else {
         p.label.as_str()
     };
@@ -665,7 +722,7 @@ fn draw_installing(c: &C, f: &Installer, now: f64) {
         if f.dry_run {
             "Dry run: commands are only simulated."
         } else {
-            "Keep the TV on and the USB drive in until this finishes."
+            "Keep the USB drive connected."
         },
         15.0,
         if f.dry_run {
@@ -680,8 +737,8 @@ fn draw_installing(c: &C, f: &Installer, now: f64) {
 fn draw_done(c: &C, f: &Installer) {
     title(
         c,
-        "You're all set",
-        "Remove the USB drive and restart to start watching.",
+        "Installation complete",
+        "Remove the USB drive and restart.",
     );
     let card = c.r(X0, 168.0, MAIN_W, 372.0);
     c.fill(card, 22.0, theme::rgba(theme::BLACK, 70));
@@ -690,15 +747,15 @@ fn draw_done(c: &C, f: &Installer) {
     two_buttons(
         c,
         f,
-        ("Restart now", ButtonStyle::Primary),
-        ("Power off", ButtonStyle::Secondary),
+        ("Restart", ButtonStyle::Filled),
+        ("Power off", ButtonStyle::Text),
         568.0,
         f.choice,
     );
 }
 
 fn draw_failed(c: &C, f: &Installer) {
-    title(c, "Something went wrong", "");
+    title(c, "Installation stopped", "");
     let (msg, modified) = f.failure.clone().unwrap_or_default();
     let box_r = c.r(X0, 140.0, MAIN_W, 150.0);
     c.fill(box_r, 18.0, theme::rgba(theme::DANGER, 28));
@@ -738,8 +795,8 @@ fn draw_failed(c: &C, f: &Installer) {
     two_buttons(
         c,
         f,
-        ("Try again", ButtonStyle::Primary),
-        ("Power off", ButtonStyle::Secondary),
+        ("Try again", ButtonStyle::Filled),
+        ("Power off", ButtonStyle::Text),
         400.0,
         f.choice,
     );
