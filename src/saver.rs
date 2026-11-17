@@ -6,7 +6,7 @@ use catostv_core::process::{Runner, SystemRunner};
 use catostv_core::screensaver::{self as ss, Pictures, Weather};
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::Instant;
 
 pub struct Slide {
@@ -21,6 +21,33 @@ const MAX_SIDE: u32 = 8192;
 
 type Decoded = Arc<Mutex<Option<Option<ColorImage>>>>;
 
+struct DecodeJob {
+    path: PathBuf,
+    px: [u32; 2],
+    blur: bool,
+    slot: Decoded,
+    ctx: egui::Context,
+}
+
+fn decoder() -> &'static mpsc::SyncSender<DecodeJob> {
+    static DECODER: OnceLock<mpsc::SyncSender<DecodeJob>> = OnceLock::new();
+    DECODER.get_or_init(|| {
+        let (sender, receiver) = mpsc::sync_channel::<DecodeJob>(2);
+        std::thread::spawn(move || {
+            for job in receiver {
+                let guarded = std::panic::AssertUnwindSafe(|| decode(&job.path, job.px, job.blur));
+                let image = std::panic::catch_unwind(guarded).unwrap_or(None);
+                if image.is_none() {
+                    let _ = std::fs::remove_file(&job.path);
+                }
+                *job.slot.lock().unwrap_or_else(|error| error.into_inner()) = Some(image);
+                job.ctx.request_repaint();
+            }
+        });
+        sender
+    })
+}
+
 pub struct Slideshow {
     pub started: Instant,
     pics: Vec<PathBuf>,
@@ -28,6 +55,7 @@ pub struct Slideshow {
     shown: usize,
     pub cur: Option<Slide>,
     pub prev: Option<Slide>,
+    spare: Option<TextureHandle>,
     /// A decode in flight: `Some(result)` once it is done.
     decoding: Option<Decoded>,
     /// Seconds each picture stays.
@@ -46,6 +74,7 @@ impl Slideshow {
             shown: 0,
             cur: None,
             prev: None,
+            spare: None,
             decoding: None,
             secs: ss::PICTURE_SECS,
             blur: false,
@@ -84,23 +113,12 @@ impl Slideshow {
             if let Some(img) = done {
                 self.decoding = None;
                 if let Some(img) = img {
-                    let tex = ctx.load_texture(
-                        format!("screensaver-{}", self.shown),
-                        img,
-                        TextureOptions::LINEAR,
-                    );
-                    self.prev = self.cur.take();
-                    self.cur = Some(Slide {
-                        tex,
-                        since: Instant::now(),
-                        n: self.shown,
-                    });
-                    self.shown += 1;
+                    self.display_image(ctx, img);
                 }
             }
         }
         if self.prev.as_ref().is_some_and(|_| self.fade() >= 1.0) {
-            self.prev = None;
+            self.spare = self.prev.take().map(|slide| slide.tex);
         }
         let due = self
             .cur
@@ -111,21 +129,49 @@ impl Slideshow {
             self.next = (self.next + 1) % self.pics.len();
             let slot: Decoded = Arc::new(Mutex::new(None));
             self.decoding = Some(slot.clone());
-            let ctx = ctx.clone();
-            let blur = self.blur;
-            std::thread::spawn(move || {
-                // A decoder panic must not leave the slot empty for good:
-                // the slideshow would wait for this picture forever.
-                let guarded = std::panic::AssertUnwindSafe(|| decode(&path, px, blur));
-                let img = std::panic::catch_unwind(guarded).unwrap_or(None);
-                if img.is_none() {
-                    // A broken download: gone, so it is not tried again.
-                    let _ = std::fs::remove_file(&path);
-                }
-                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(img);
-                ctx.request_repaint();
-            });
+            // A persistent worker avoids retaining another allocator arena per picture.
+            if decoder()
+                .try_send(DecodeJob {
+                    path,
+                    px,
+                    blur: self.blur,
+                    slot,
+                    ctx: ctx.clone(),
+                })
+                .is_err()
+            {
+                self.decoding = None;
+            }
         }
+    }
+
+    fn display_image(&mut self, ctx: &egui::Context, image: ColorImage) {
+        // Reuse the two cross-fade buffers instead of allocating one per picture.
+        let reuse = self
+            .spare
+            .take()
+            .or_else(|| self.prev.take().map(|slide| slide.tex));
+        let tex = if let Some(mut tex) = reuse {
+            if tex.size() == image.size {
+                tex.set_partial([0, 0], image, TextureOptions::LINEAR);
+            } else {
+                tex.set(image, TextureOptions::LINEAR);
+            }
+            tex
+        } else {
+            ctx.load_texture(
+                format!("screensaver-{}", self.shown),
+                image,
+                TextureOptions::LINEAR,
+            )
+        };
+        self.prev = self.cur.take();
+        self.cur = Some(Slide {
+            tex,
+            since: Instant::now(),
+            n: self.shown,
+        });
+        self.shown += 1;
     }
 
     /// Cross-fade progress of the current picture, 0 → 1.
@@ -266,5 +312,29 @@ fn shuffle(v: &mut [PathBuf]) {
         x ^= x >> 7;
         x ^= x << 17;
         v.swap(i, (x % (i as u64 + 1)) as usize);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    #[test]
+    fn picture_changes_reuse_two_textures_even_without_a_presented_frame() {
+        let ctx = egui::Context::default();
+        let mut show = Slideshow::new(vec![]);
+        let mut ids = std::collections::HashSet::new();
+        for n in 0..400 {
+            let size = if n < 200 { [16, 9] } else { [32, 18] };
+            let image = ColorImage::from_rgba_unmultiplied(size, &vec![255; size[0] * size[1] * 4]);
+            show.display_image(&ctx, image);
+            ids.insert(show.cur.as_ref().unwrap().tex.id());
+            assert!(ids.len() <= 2);
+            if n % 3 == 0 {
+                show.cur.as_mut().unwrap().since = Instant::now() - Duration::from_secs(3);
+                show.tick(&ctx, [32, 18]);
+            }
+        }
+        assert_eq!(ids.len(), 2);
     }
 }

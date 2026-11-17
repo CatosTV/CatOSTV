@@ -42,6 +42,7 @@ pub mod evdev;
 pub mod gamepad;
 pub mod gesture;
 pub mod gpu;
+pub mod gpu_memory;
 
 pub mod installer;
 pub mod keyboard;

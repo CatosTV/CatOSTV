@@ -33,7 +33,7 @@ supervise() {
 # Before the shell, which starts Android through it.
 supervise wlfilter 2 /usr/local/bin/catostv-wlfilter
 # The TV interface. "Restart the interface" exits it; it comes back here.
-supervise shell 1 /usr/local/bin/catostv-shell
+supervise shell 1 env CATOSTV_RENDERER="${CATOSTV_RENDERER:-glow}" /usr/local/bin/catostv-shell
 # Escape gesture: Back ×3 or hold Back inside an app → CatosTV Home.
 supervise inputd 2 /usr/local/bin/catostv-inputd
 # HDMI-CEC remote (waits quietly when there is no CEC adapter).
