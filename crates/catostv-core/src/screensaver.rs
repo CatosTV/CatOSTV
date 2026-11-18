@@ -83,7 +83,7 @@ impl Pictures {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Cats => "GOOOD CATS!",
+            Self::Cats => "Cats",
             Self::Photos => "Random photos",
         }
     }

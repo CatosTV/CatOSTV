@@ -1,7 +1,7 @@
 //! Shared visual tokens and global egui setup for shell and installer.
 //!
 //! Glassy uses translucent panels and soft light; Flat uses opaque,
-//! accent-tinted containers. Both share typography, controls and the
+//! charcoal surfaces. Both share typography, controls and the
 //! selected accent (Settings → Customization).
 //!
 //! Colours are built with [`rgba`] from `(r, g, b)` tuples. Never derive a
@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub type Rgb = (u8, u8, u8);
 
-const FLAT_TEXT_SECONDARY: Rgb = (194, 201, 215);
-const FLAT_TEXT_TERTIARY: Rgb = (158, 168, 187);
+const FLAT_TEXT_SECONDARY: Rgb = (204, 204, 207);
+const FLAT_TEXT_TERTIARY: Rgb = (164, 164, 169);
 
 static FLAT: AtomicBool = AtomicBool::new(false);
 
@@ -35,20 +35,19 @@ pub fn blend(a: Rgb, b: Rgb, amount: f32) -> Rgb {
     (mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2))
 }
 
-/// Opaque, accent-tinted containers, from the page to raised controls.
+/// Opaque charcoal, from the page to raised controls.
 pub fn surface(level: u8) -> Color32 {
-    rgb(flat_surface(level, accent_rgb()))
+    rgb(flat_surface(level))
 }
 
-fn flat_surface(level: u8, accent: Rgb) -> Rgb {
-    let tone = [
-        (15, 17, 23),
-        (23, 26, 34),
-        (32, 36, 46),
-        (42, 47, 59),
-        (55, 61, 75),
-    ][usize::from(level.min(4))];
-    blend(tone, accent, 0.035)
+fn flat_surface(level: u8) -> Rgb {
+    [
+        (20, 20, 22),
+        (25, 25, 28),
+        (33, 33, 36),
+        (43, 43, 47),
+        (55, 55, 59),
+    ][usize::from(level.min(4))]
 }
 
 pub fn primary_container() -> Color32 {
@@ -56,12 +55,12 @@ pub fn primary_container() -> Color32 {
 }
 
 fn flat_primary(accent: Rgb) -> Rgb {
-    blend((32, 36, 46), accent, 0.24)
+    blend(flat_surface(3), accent, 0.12)
 }
 
 /// A quiet app-specific tone, kept separate from the interface focus colour.
 pub fn app_container(tint: Rgb) -> Color32 {
-    rgb(blend(flat_surface(2, accent_rgb()), tint, 0.12))
+    rgb(blend(flat_surface(2), tint, 0.07))
 }
 
 /// Flat focus stays visible against artwork as well as tonal containers.
@@ -390,13 +389,13 @@ mod tests {
 
     #[test]
     fn flat_secondary_labels_stay_readable_on_resting_and_selected_rows() {
+        for level in 0..=4 {
+            assert!(
+                contrast(FLAT_TEXT_TERTIARY, flat_surface(level)) >= 4.5,
+                "surface {level}"
+            );
+        }
         for &(name, accent) in ACCENTS {
-            for level in 0..=2 {
-                assert!(
-                    contrast(FLAT_TEXT_TERTIARY, flat_surface(level, accent)) >= 4.5,
-                    "{name} surface {level}"
-                );
-            }
             assert!(
                 contrast(FLAT_TEXT_SECONDARY, flat_primary(accent)) >= 4.5,
                 "{name} selected row"

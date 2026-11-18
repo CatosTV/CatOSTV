@@ -346,9 +346,12 @@ fn draw_intro(c: &C, secs: f32) {
 fn draw_top_bar(c: &C, v: &ShellView) {
     let s = v.shell;
     let (y, h) = (24.0, 52.0);
-    // Brand pill.
-    let brand = c.r(52.0, y, 146.0, h);
-    c.glass(brand, h / 2.0);
+    let flat = theme::flat();
+    if flat {
+        c.fill(c.r(64.0, 84.0, 1152.0, 1.0), 0.0, theme::border());
+    } else {
+        c.glass(c.r(52.0, y, 146.0, h), h / 2.0);
+    }
     icons::logo(c, 64.0, y + (h - 32.0) / 2.0, 32.0);
     c.text(
         108.0,
@@ -391,15 +394,20 @@ fn draw_top_bar(c: &C, v: &ShellView) {
     let vpn_on = v.ctx.sys.vpns.iter().any(|x| x.on());
     let n_icons = if vpn_on { 4.0 } else { 3.0 };
     let w = pad + time_w + gap + n_icons * icon_step - 6.0 + pad;
-    let rect = c.r(1228.0 - w, y, w, h);
+    let right = if flat { 1216.0 } else { 1228.0 };
+    let rect = c.r(right - w, y, w, h);
     let t = focus_t(
         c,
         ("top", quick),
         no_overlay && s.top_focus && s.top_index == quick,
     );
-    c.glass(rect, h / 2.0);
-    if t > 0.01 {
-        widgets::bar_pill(c, rect, h / 2.0, t);
+    if flat {
+        widgets::focus_pill(c, rect, 8.0, t);
+    } else {
+        c.glass(rect, h / 2.0);
+        if t > 0.01 {
+            widgets::bar_pill(c, rect, h / 2.0, t);
+        }
     }
     c.hit(rect, Target::Top(quick));
     let update_available = matches!(
@@ -413,11 +421,16 @@ fn draw_top_bar(c: &C, v: &ShellView) {
         .as_ref()
         .is_some_and(|result| result.as_ref().is_ok_and(|apps| !apps.is_empty()));
     if update_available {
-        c.circle(1218.0, y + 10.0, 3.5, theme::accent());
+        c.circle(right - 10.0, y + 10.0, 3.5, theme::accent());
     }
-    let ink = widgets::mix(theme::text(), theme::on_accent(), t);
+    let focus_ink = if flat {
+        theme::text()
+    } else {
+        theme::on_accent()
+    };
+    let ink = widgets::mix(theme::text(), focus_ink, t);
     let cy = y + h / 2.0;
-    let x0 = 1228.0 - w + pad;
+    let x0 = right - w + pad;
     c.text(
         x0,
         cy,
@@ -432,7 +445,7 @@ fn draw_top_bar(c: &C, v: &ShellView) {
     let muted = sys.volume.is_some_and(|v| v.muted);
     let dim = |on: bool| {
         let base = if on { theme::text2() } else { theme::text3() };
-        widgets::mix(base, theme::on_accent(), t)
+        widgets::mix(base, focus_ink, t)
     };
     let wired = sys.net.as_ref().is_some_and(|n| n.wired());
     let mut ix = x0 + time_w + gap + 12.0;
@@ -443,7 +456,7 @@ fn draw_top_bar(c: &C, v: &ShellView) {
             ix,
             cy,
             15.0,
-            widgets::mix(theme::accent(), theme::on_accent(), t),
+            widgets::mix(theme::accent(), focus_ink, t),
         );
         ix += icon_step;
     }
@@ -749,11 +762,17 @@ fn home_now_playing(
     width: f32,
 ) {
     let t = focus_t(c, ("home-player-focus", item.source.app()), focused);
-    let rect = c.r(64.0, 122.0, width, 220.0);
-    if theme::flat() {
+    let flat = theme::flat();
+    let radius = if flat { 16.0 } else { 28.0 };
+    let rect = if flat {
+        c.r(64.0, 104.0, width, 120.0)
+    } else {
+        c.r(64.0, 122.0, width, 220.0)
+    };
+    if flat {
         c.fill(
             rect,
-            28.0,
+            radius,
             widgets::mix(theme::surface(2), theme::primary_container(), t),
         );
     } else {
@@ -763,7 +782,7 @@ fn home_now_playing(
     if t > 0.001 {
         c.outline(
             rect,
-            28.0,
+            radius,
             if theme::flat() { 3.0 } else { 2.5 },
             if theme::flat() {
                 theme::focus_edge(t)
@@ -772,10 +791,16 @@ fn home_now_playing(
             },
         );
     }
-    let picture = c.r(84.0, 142.0, 304.0, 171.0);
+    let (picture_x, picture_y, picture_w, picture_h) = if flat {
+        (80.0, 120.0, 156.0, 88.0)
+    } else {
+        (84.0, 142.0, 304.0, 171.0)
+    };
+    let picture = c.r(picture_x, picture_y, picture_w, picture_h);
+    let picture_radius = if flat { 8.0 } else { 18.0 };
     c.fill(
         picture,
-        18.0,
+        picture_radius,
         if theme::flat() {
             theme::surface(3)
         } else {
@@ -795,36 +820,47 @@ fn home_now_playing(
     if let Some((url, tex)) = artwork {
         c.image_rounded_uv(
             picture,
-            18.0,
+            picture_radius,
             tex,
-            crate::ui::fin::cover(pics.size(url), 304.0, 171.0),
+            crate::ui::fin::cover(pics.size(url), picture_w, picture_h),
             Color32::WHITE,
         );
     } else {
-        icons::draw(c, item.source.icon(), 236.0, 227.5, 76.0, theme::accent());
+        icons::draw(
+            c,
+            item.source.icon(),
+            picture_x + picture_w / 2.0,
+            picture_y + picture_h / 2.0,
+            picture_h * 0.44,
+            theme::accent(),
+        );
     }
+    let tx = if flat { 256.0 } else { 416.0 };
+    let title_y = if flat { 160.0 } else { 206.0 };
+    let title_size = if flat { 26.0 } else { 30.0 };
     let label = format!("Now playing  ·  {}", item.source.label());
     c.text(
-        416.0,
-        160.0,
+        tx,
+        if flat { 128.0 } else { 160.0 },
         Align2::LEFT_CENTER,
         &label,
         15.0,
         theme::text2(),
         Weight::Semibold,
     );
-    let title = c.clipped(416.0, 178.0, width - 384.0, 66.0);
-    let title_width = if width < 1152.0 {
+    let title_width = if flat {
+        width - 420.0
+    } else if width < 1152.0 {
         width - 432.0
     } else {
         width - 384.0
     };
-    title.text(
-        416.0,
-        206.0,
+    c.text(
+        tx,
+        title_y,
         Align2::LEFT_CENTER,
-        &title.fit(&item.title, title_width, 30.0, Weight::Semibold),
-        30.0,
+        &c.fit(&item.title, title_width, title_size, Weight::Semibold),
+        title_size,
         theme::text(),
         Weight::Semibold,
     );
@@ -842,8 +878,8 @@ fn home_now_playing(
         time
     };
     c.text(
-        416.0,
-        265.0,
+        tx,
+        if flat { 188.0 } else { 265.0 },
         Align2::LEFT_CENTER,
         &detail,
         16.0,
@@ -851,12 +887,18 @@ fn home_now_playing(
         Weight::Medium,
     );
     if let Some(f) = item.fraction() {
+        let progress_y = if flat { 204.0 } else { 302.0 };
+        let progress_width = if flat {
+            (width - 420.0).min(360.0)
+        } else {
+            width - 582.0
+        };
         let f = c.anim(
             ("home-playback-progress", item.source.app(), &item.title),
             f,
         );
         c.fill(
-            c.r(416.0, 302.0, width - 582.0, 4.0),
+            c.r(tx, progress_y, progress_width, 4.0),
             2.0,
             if theme::flat() {
                 theme::surface(4)
@@ -865,15 +907,16 @@ fn home_now_playing(
             },
         );
         c.fill(
-            c.r(416.0, 302.0, (width - 582.0) * f, 4.0),
+            c.r(tx, progress_y, progress_width * f, 4.0),
             2.0,
             theme::accent(),
         );
     }
-    let button = c.r(width - 132.0, 276.0, 164.0, 44.0);
+    let button_y = if flat { 142.0 } else { 276.0 };
+    let button = c.r(width - 132.0, button_y, 164.0, 44.0);
     c.fill(
         button,
-        22.0,
+        if flat { 10.0 } else { 22.0 },
         widgets::mix(
             if theme::flat() {
                 theme::surface(3)
@@ -886,7 +929,7 @@ fn home_now_playing(
     );
     c.text(
         width - 50.0,
-        298.0,
+        button_y + 22.0,
         Align2::CENTER_CENTER,
         if item.paused {
             "Resume video"
@@ -917,12 +960,13 @@ fn draw_home(c: &C, v: &ShellView) {
         1.0 - (1.0 - x).powi(3)
     };
     let bounce_of = |app: &AppView| {
+        if flat {
+            return 0.0;
+        }
         v.launching
             .filter(|(id, _)| *id == app.entry.id)
             .map_or(0.0, |(_, secs)| widgets::launch_bounce(secs))
     };
-    // Down from the apps: the "Continue watching" row (Catfyn)
-    // slides up, the apps slide away, and the focused show fills the hero.
     let media = &v.ctx.media.home;
     let server = v
         .ctx
@@ -937,7 +981,10 @@ fn draw_home(c: &C, v: &ShellView) {
         wanted: v.fin_wanted,
     };
     let in_media = s.home_media.is_some() && !media.is_empty();
-    let shift = c.anim("home-shift", if in_media { 1.0 } else { 0.0 });
+    // Flat keeps Apps and the first media row together. Later rows can
+    // use the space above when the viewer moves down.
+    let scroll_home = in_media && (!flat || s.home_media.is_some_and(|(row, _)| row > 0));
+    let shift = c.anim("home-shift", if scroll_home { 1.0 } else { 0.0 });
     let player_t = c.anim(
         "home-has-player",
         if !v.ctx.media.now_playing.is_empty() {
@@ -1044,7 +1091,7 @@ fn draw_home(c: &C, v: &ShellView) {
             0.86,
         );
         let rail = if flat {
-            c.clipped(52.0, 94.0, 1176.0, 280.0)
+            c.clipped(64.0, 94.0, 1152.0, 148.0)
         } else {
             c.clipped(0.0, 94.0, 1280.0, 280.0)
         };
@@ -1067,11 +1114,8 @@ fn draw_home(c: &C, v: &ShellView) {
         }
     }
     let up = if flat { 660.0 } else { 540.0 } * shift;
-    let heading_y = if flat {
-        260.0 + 138.0 * player_t
-    } else {
-        384.0
-    };
+    let flat_apps_y = 128.0 + 132.0 * player_t;
+    let heading_y = if flat { flat_apps_y } else { 384.0 };
     if flat {
         c.text(
             64.0,
@@ -1085,34 +1129,23 @@ fn draw_home(c: &C, v: &ShellView) {
     } else {
         widgets::section(c, 64.0, heading_y - up, "Apps");
     }
-    let (tw, th, gap) = if flat {
-        (216.0, 216.0 * 9.0 / 16.0, 24.0)
-    } else {
-        (208.0, 117.0, 24.0)
-    };
+    let (tw, th, gap) = (208.0, 117.0, 24.0);
     let step = tw + gap;
     let visible = 5usize;
-    let row_y = if flat {
-        310.0 + 138.0 * player_t
-    } else {
-        446.0
-    };
-    let row_x = if flat {
-        let n = apps.len().clamp(1, visible) as f32;
-        (1280.0 - n * tw - (n - 1.0) * gap) / 2.0
-    } else {
-        64.0
-    };
+    let row_y = if flat { flat_apps_y + 28.0 } else { 446.0 };
+    let row_x = 64.0;
     let rail_focus = s.overlay().is_none() && !s.top_focus && !in_media && !s.home_now_playing;
     let moving = s.moving && rail_focus;
     // The row runs to the screen's edge, so the next app peeks in there.
-    let rail = c
-        .clipped(0.0, 90.0, 1280.0, 630.0)
-        .opacity(if flat { 1.0 - shift } else { 1.0 });
+    let rail = if flat {
+        c.clipped(52.0, 92.0, 1164.0, 628.0)
+    } else {
+        c.clipped(0.0, 90.0, 1280.0, 630.0)
+    }
+    .opacity(if flat { 1.0 - shift } else { 1.0 });
     let grow = widgets::home_lift();
     let first = s.rail_index.saturating_sub(visible - 1) as f32;
     let (scroll, _) = c.spring("rail-scroll", first * step, 0.5, 0.86);
-    let time = c.ctx.input(|i| i.time) as f32;
     // Where each app sits: by app, not by place, so when an app is moved
     // its neighbours glide out of its way.
     let slot = |i: usize, app: &AppView| {
@@ -1137,19 +1170,16 @@ fn draw_home(c: &C, v: &ShellView) {
         let app = &apps[i];
         let (sx, _) = slot(i, app);
         let x = row_x + sx - scroll;
-        if x < -tw || x > 1280.0 {
+        let (left, right) = if flat { (52.0, 1216.0) } else { (0.0, 1280.0) };
+        if x + tw < left || x > right {
             continue;
         }
         // Tiles rise into place one after another when Home opens.
         let shown = ease(v.page_t * 2.2 - (i as f32 - first).max(0.0) * 0.12);
         let held = moving && s.rail_index == i;
         // The picked-up app floats a little above the others.
-        let float = if held {
-            5.0 + 3.0 * (time * 5.0).sin()
-        } else {
-            0.0
-        };
-        let y = row_y + 26.0 * (1.0 - shown) - up - float;
+        let rise = if flat { 0.0 } else { 26.0 * (1.0 - shown) };
+        let y = row_y + rise - up - if held { 5.0 } else { 0.0 };
         let rect = rail.r(x, y, tw, th);
         let focused = rail_focus && s.rail_index == i;
         let target = if held {
@@ -1161,7 +1191,6 @@ fn draw_home(c: &C, v: &ShellView) {
         };
         let (t, _) = c.spring(("rail-t", &app.entry.id), target, 0.42, 0.62);
         if held {
-            c.ctx.request_repaint();
             widgets::focus_lift(&rail, widgets::lifted_by(&rail, rect, t, grow), 22.0, 1.0);
         }
         widgets::home_glow(
@@ -1186,17 +1215,17 @@ fn draw_home(c: &C, v: &ShellView) {
             }
         }
         if !in_media {
-            c.hit(c.r(x, y, tw, th + 36.0), Target::Rail(i));
+            rail.hit(rail.r(x, y, tw, th + 36.0), Target::Rail(i));
         }
     }
     if moving {
-        move_hint(c, 1244.0, heading_y + 2.0 - up);
+        move_hint(c, if flat { 1216.0 } else { 1244.0 }, heading_y + 2.0 - up);
     }
+    let flat_media_y = 336.0 + 132.0 * player_t;
     if !media.is_empty() {
         let focus = if in_media { s.home_media } else { None };
         let y = if flat {
-            // Show the heading and thumbnail tops as a cue to browse down.
-            620.0 + 20.0 * player_t - (432.0 + 20.0 * player_t) * shift
+            flat_media_y + (128.0 - flat_media_y) * shift
         } else {
             628.0 - 278.0 * shift
         };
@@ -1211,7 +1240,7 @@ fn draw_home(c: &C, v: &ShellView) {
     {
         c.text(
             64.0,
-            if flat { 620.0 } else { 648.0 },
+            if flat { flat_media_y } else { 648.0 },
             Align2::LEFT_CENTER,
             &c.fit(note, 1150.0, 16.0, Weight::Regular),
             16.0,
@@ -1222,7 +1251,7 @@ fn draw_home(c: &C, v: &ShellView) {
     if apps.is_empty() {
         c.text(
             64.0,
-            if flat { 370.0 } else { 470.0 },
+            if flat { row_y } else { 470.0 },
             Align2::LEFT_TOP,
             "Nothing here yet. Find apps in the Store",
             17.0,
@@ -1691,14 +1720,15 @@ fn draw_store(c: &C, v: &ShellView) {
         let rect = c.r(40.0, y, 200.0, 42.0);
         let shown = s.store_cat == i;
         let t = focus_t(c, ("scat", i), no_overlay && !s.store_grid && shown);
+        let radius = if theme::flat() { 8.0 } else { 14.0 };
         if t > 0.01 {
-            widgets::card(c, rect, 14.0, t);
+            widgets::card(c, rect, radius, t);
         } else if shown {
             c.fill(
                 rect,
-                14.0,
+                radius,
                 if theme::flat() {
-                    theme::primary_container()
+                    theme::surface(2)
                 } else {
                     theme::rgba(theme::WHITE, 16)
                 },
@@ -1745,7 +1775,7 @@ fn draw_store(c: &C, v: &ShellView) {
         if *cat == StoreCat::Downloads && busy {
             widgets::spinner(c, 216.0, y + 21.0, 7.0, v.now);
         }
-        y += 46.0;
+        y += if theme::flat() { 48.0 } else { 46.0 };
     }
 
     let enter = c.entrance("store-section", s.store_cat, motion::PAGE);
@@ -1893,7 +1923,12 @@ fn draw_store(c: &C, v: &ShellView) {
         }
         let t = focus_t(c, ("sitem", i), grid_focus && s.store_index == i);
         let base = c.r(x, y, w, h);
-        widgets::card(c, widgets::grow(base, t), 24.0, t);
+        let (tile, radius) = if theme::flat() {
+            (base, 14.0)
+        } else {
+            (widgets::grow(base, t), 24.0)
+        };
+        widgets::card(c, tile, radius, t);
         c.hit(c.r(x, y, w, h + 30.0), Target::StoreItem(i));
         store_icon_or_mono(c, v, item, x + w / 2.0, y + h / 2.0, 60.0);
         let label_size = if theme::flat() { 17.0 } else { 15.0 };
@@ -2045,12 +2080,12 @@ fn draw_search(c: &C, v: &ShellView) {
         c,
         c.r(52.0, 96.0, 1176.0, 64.0),
         &s.search_osk,
-        "Search apps, settings and the store",
+        "Search",
         kb_focus,
         true,
     );
     let panel = c.r(52.0, 184.0, 600.0, widgets::keys_height() + 48.0);
-    c.glass(panel, 30.0);
+    c.glass(panel, if theme::flat() { 16.0 } else { 30.0 });
     widgets::keys(
         c,
         &s.search_osk,
@@ -2243,14 +2278,19 @@ const CAT_TOP: f32 = 114.0;
 fn draw_settings(c: &C, v: &ShellView) {
     let s = v.shell;
     let no_overlay = s.overlay().is_none();
-    // Flat gives the content a higher tone than the navigation panel.
-    c.glass(c.r(32.0, 32.0, 300.0, 656.0), 32.0);
+    let flat = theme::flat();
+    if flat {
+        c.fill(c.r(332.0, 48.0, 1.0, 624.0), 0.0, theme::border());
+    } else {
+        c.glass(c.r(32.0, 32.0, 300.0, 656.0), 32.0);
+    }
     widgets::title(c, 60.0, 60.0, "Settings", 28.0);
     for (i, cat) in Category::ALL.iter().enumerate() {
         // All 12 categories (Debug included) end at 673, inside the
         // panels' 688 edge.
         let rect = c.r(44.0, CAT_TOP + i as f32 * CAT_STEP, 276.0, CAT_H);
         let selected = s.settings_cat == i;
+        let radius = if flat { 8.0 } else { CAT_H / 2.0 };
         let t = focus_t(
             c,
             ("cat", i),
@@ -2261,15 +2301,15 @@ fn draw_settings(c: &C, v: &ShellView) {
         if selected {
             c.fill(
                 rect,
-                CAT_H / 2.0,
-                if theme::flat() {
-                    theme::primary_container()
+                radius,
+                if flat {
+                    theme::surface(2)
                 } else {
                     theme::rgba(theme::WHITE, 18)
                 },
             );
         }
-        widgets::focus_pill(c, rect, CAT_H / 2.0, t);
+        widgets::focus_pill(c, rect, radius, t);
         c.hit(rect, Target::SettingsCat(i));
         let y = CAT_TOP + CAT_H / 2.0 + i as f32 * CAT_STEP;
         icons::draw(
@@ -2302,9 +2342,7 @@ fn draw_settings(c: &C, v: &ShellView) {
     }
 
     let right = c.r(344.0, 32.0, 884.0, 656.0);
-    if theme::flat() {
-        c.fill(right, 32.0, theme::surface(2));
-    } else {
+    if !flat {
         c.glass(right, 32.0);
     }
     let rows_on = c.anim(
@@ -2330,7 +2368,11 @@ fn draw_settings(c: &C, v: &ShellView) {
     let rows = s.settings_rows(v.ctx);
     // 8 rows end at 670, inside the 688 panel edge (nothing on or
     // past the glass edge).
-    let (row_h, gap, top) = (60.0, 10.0, 120.0);
+    let (row_h, gap, top) = if flat {
+        (60.0, 8.0, 112.0)
+    } else {
+        (60.0, 10.0, 120.0)
+    };
     let step = row_h + gap;
     let visible = 8usize;
     // Smooth scrolling: the list glides to keep the focused row on screen,
@@ -2415,7 +2457,7 @@ fn draw_settings(c: &C, v: &ShellView) {
                 &list,
                 v.images,
                 a,
-                368.0 + 20.0 + 19.84,
+                368.0 + if flat { widgets::ROW_ICON_X } else { 39.2 },
                 y + row_h / 2.0,
                 26.0,
                 255,
@@ -2434,7 +2476,7 @@ fn draw_settings(c: &C, v: &ShellView) {
         if editing {
             list.outline(
                 rect,
-                widgets::ROW_RADIUS,
+                widgets::row_radius(),
                 1.5,
                 theme::rgba(theme::accent_rgb(), 200),
             );
@@ -4087,53 +4129,48 @@ fn choice_sheet(
 fn draw_hidden(c: &C, v: &ShellView, overlay: &Overlay) {
     match overlay {
         Overlay::HiddenPin(entry) => {
-            let panel = widgets::modal(c, 480.0, 620.0);
+            let panel = widgets::modal(c, 384.0, 480.0);
             let (x, y) = c.to_design(panel.min);
             c.hit(panel, Target::Item(usize::MAX));
-            modal_header(c, x, y, Some("lock"), entry.title(), 480.0);
+            modal_header(c, x, y, Some("lock"), entry.title(), 384.0);
             c.text(
-                x + 40.0,
-                y + 88.0,
+                x + 32.0,
+                y + 82.0,
                 Align2::LEFT_CENTER,
-                "Four digits for Hidden apps",
+                "Enter four digits to continue",
                 16.0,
                 theme::text2(),
                 Weight::Regular,
             );
             for index in 0..4 {
-                let px = x + 183.0 + index as f32 * 38.0;
+                let px = x + 138.0 + index as f32 * 36.0;
                 if index < entry.filled() {
-                    c.circle(px, y + 136.0, 7.0, theme::text());
+                    c.circle(px, y + 118.0, 7.0, theme::text());
                 } else {
-                    c.ring(px, y + 136.0, 7.0, 1.5, theme::text3());
+                    c.ring(px, y + 118.0, 7.0, 1.5, theme::text3());
                 }
             }
             if let Some(error) = &entry.error {
                 c.text(
-                    x + 40.0,
-                    y + 177.0,
+                    x + 32.0,
+                    y + 147.0,
                     Align2::LEFT_CENTER,
-                    &c.fit(error, 400.0, 15.0, Weight::Medium),
+                    &c.fit(error, 320.0, 15.0, Weight::Medium),
                     15.0,
                     theme::rgb(theme::DANGER),
                     Weight::Medium,
                 );
             }
             if entry.stage == catostv_core::hidden_apps::Stage::Busy {
-                widgets::spinner(c, x + 240.0, y + 320.0, 24.0, v.since_start as f64);
+                widgets::spinner(c, x + 192.0, y + 256.0, 24.0, v.since_start as f64);
                 return;
             }
-            for (index, label) in [
-                "1", "2", "3", "4", "5", "6", "7", "8", "9", "Delete", "0", "OK",
-            ]
-            .iter()
-            .enumerate()
-            {
+            for (index, label) in catostv_core::hidden_apps::Entry::KEYS.iter().enumerate() {
                 let rect = c.r(
-                    x + 40.0 + (index % 3) as f32 * 138.0,
-                    y + 212.0 + (index / 3) as f32 * 82.0,
-                    124.0,
-                    66.0,
+                    x + 32.0 + (index % 3) as f32 * 112.0,
+                    y + 168.0 + (index / 3) as f32 * 64.0,
+                    96.0,
+                    52.0,
                 );
                 widgets::button(
                     c,
@@ -4145,8 +4182,8 @@ fn draw_hidden(c: &C, v: &ShellView, overlay: &Overlay) {
                 c.hit(rect, Target::Item(index));
             }
             c.text(
-                x + 40.0,
-                y + 583.0,
+                x + 32.0,
+                y + 448.0,
                 Align2::LEFT_CENTER,
                 "Back to cancel",
                 14.0,

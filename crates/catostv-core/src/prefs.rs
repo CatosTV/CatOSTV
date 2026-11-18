@@ -127,7 +127,7 @@ pub struct UiPrefs {
 /// screensaver's collections. Cats by default.
 pub const HOME_BACKGROUNDS: [(&str, &str); 3] = [
     ("glow", "Glow"),
-    ("cats", "NOICE CATS"),
+    ("cats", "Cats"),
     ("photos", "Random photos"),
 ];
 pub const DEFAULT_HOME_BACKGROUND: &str = "cats";
@@ -528,7 +528,7 @@ mod tests {
         );
         assert_eq!(cycle_home_background("glow", -1), "photos");
         assert_eq!(cycle_home_background("photos", 1), "glow");
-        assert_eq!(home_background_label("cats"), "NOICE CATS");
+        assert_eq!(home_background_label("cats"), "Cats");
         // Catfyn autoplay: on, 10 s by default; only 5/10/15.
         let d = UiPrefs::default();
         assert!(d.fin_autoplay);

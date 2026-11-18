@@ -1459,7 +1459,7 @@ impl Shell {
     /// Number of selectable entries in an overlay (for clamping/pointer).
     pub fn overlay_len(&self, o: &Overlay, ctx: &ShellContext) -> usize {
         match o {
-            Overlay::HiddenPin(_) => 12,
+            Overlay::HiddenPin(_) => crate::hidden_apps::Entry::KEYS.len(),
             Overlay::HiddenApps { .. } => ctx.sys.hidden_apps.len() + 2,
             Overlay::HiddenAppOptions { .. } => 3,
             Overlay::AppUpdateNotes { app, .. } => ctx

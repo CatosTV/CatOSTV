@@ -1617,7 +1617,13 @@ pub fn home_rows(
     // Wide stills for Continue watching and YouTube's videos.
     let is_wide_row =
         |r: &fin::Row| r.title == "Continue watching" || r.title == catostv_core::cattube::ROW;
-    let row_h = |r: &fin::Row| if is_wide_row(r) { 262.0 } else { 344.0 };
+    let flat = theme::flat();
+    let row_h = |r: &fin::Row| match (flat, is_wide_row(r)) {
+        (true, true) => 224.0,
+        (true, false) => 280.0,
+        (false, true) => 262.0,
+        (false, false) => 344.0,
+    };
     let mut offsets = Vec::with_capacity(rows.len());
     let mut acc = 0.0;
     for r in rows {
@@ -1627,19 +1633,23 @@ pub fn home_rows(
     let scroll = c.anim("home-rows", offsets.get(frow).copied().unwrap_or(0.0));
     // Clipped just above the focused row's title: the rows scrolled past
     // (titles included) are gone, not peeking out under the hero.
-    let list = c.clipped(0.0, y - 14.0, 1280.0, 720.0 - y + 14.0);
+    let (left, right) = if flat { (52.0, 1216.0) } else { (0.0, 1280.0) };
+    let bottom = if flat { 708.0 } else { 720.0 };
+    let list = c.clipped(left, y - 14.0, right - left, bottom - y + 14.0);
     for (ri, r) in rows.iter().enumerate() {
         let ry = y + offsets[ri] - scroll;
-        if ry > 720.0 || ry + row_h(r) < y - 14.0 {
+        let (w, h, gap) = match (flat, is_wide_row(r)) {
+            (true, true) => (256.0, 144.0, 24.0),
+            (true, false) => (116.0, 174.0, 24.0),
+            (false, true) => (240.0, 135.0, 26.0),
+            (false, false) => (150.0, 225.0, 24.0),
+        };
+        let top = ry + if flat { 28.0 } else { ROW_GAP };
+        if ry > bottom || ry + row_h(r) < y - 14.0 || (flat && top + h + 32.0 > bottom) {
             continue;
         }
         let wide = is_wide_row(r);
         widgets::section(&list, 64.0, ry, &r.title);
-        let (w, h, gap) = if wide {
-            (240.0, 135.0, 26.0)
-        } else {
-            (150.0, 225.0, 24.0)
-        };
         let col = if ri == frow { fcol } else { 0 };
         let visible = ((1216.0 - 64.0) / (w + gap)) as usize;
         let first = col.saturating_sub(visible.saturating_sub(1));
@@ -1647,16 +1657,20 @@ pub fn home_rows(
         let row_focus = focus.filter(|(r, _)| *r == ri).map(|(_, i)| i);
         for (i, it) in r.items.iter().enumerate() {
             // The focused card grows; its neighbours step aside for it.
-            let push = list.anim(
-                ("home-media-push", ri, i),
-                match row_focus {
-                    Some(f) if i < f => -w * 0.08,
-                    Some(f) if i > f => w * 0.08,
-                    _ => 0.0,
-                },
-            );
+            let push = if flat {
+                0.0
+            } else {
+                list.anim(
+                    ("home-media-push", ri, i),
+                    match row_focus {
+                        Some(f) if i < f => -w * 0.08,
+                        Some(f) if i > f => w * 0.08,
+                        _ => 0.0,
+                    },
+                )
+            };
             let x = 64.0 + i as f32 * (w + gap) - sx + push;
-            if x > 1280.0 || x + w < 0.0 {
+            if x > right || x + w < left || (flat && x + w > right) {
                 continue;
             }
             let t = focus_t(&list, ("home-media", ri, i), focus == Some((ri, i)));
@@ -1665,7 +1679,6 @@ pub fn home_rows(
             } else {
                 poster_url(server, it)
             };
-            let top = ry + ROW_GAP;
             card(
                 &list,
                 pics,
@@ -1711,8 +1724,8 @@ pub fn home_rows(
                     Weight::Semibold,
                 );
             }
-            if top > y - 14.0 && top + h < 720.0 {
-                c.hit(c.r(x, top, w, h), Target::HomeMedia(ri, i));
+            if top > y - 14.0 && top + h < bottom {
+                list.hit(list.r(x, top, w, h), Target::HomeMedia(ri, i));
             }
         }
     }

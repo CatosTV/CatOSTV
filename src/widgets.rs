@@ -52,6 +52,7 @@ pub fn focus_pill<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
         (26.0 * t) as u8,
     );
     c.top_highlight(rect, radius, theme::rgba(theme::WHITE, (120.0 * t) as u8));
+    c.outline(rect, radius, 2.0, theme::focus_edge(t));
 }
 
 /// Colour between `a` and `b` (t = 0 → a, 1 → b).
@@ -105,11 +106,14 @@ pub const LIFT: f32 = 0.06;
 pub const HOME_LIFT: f32 = 0.14;
 
 pub fn home_lift() -> f32 {
-    if theme::flat() { 0.06 } else { HOME_LIFT }
+    if theme::flat() { 0.0 } else { HOME_LIFT }
 }
 
 /// [`lifted`], growing by `grow` (×1.14 for 0.14) when focused.
 pub fn lifted_by<H: Copy>(c: &Canvas<H>, rect: Rect, t: f32, grow: f32) -> Rect {
+    if grow == 0.0 {
+        return rect;
+    }
     rect.scale_from_center(1.0 + grow * t)
         .translate(eframe::egui::vec2(0.0, -c.len(4.0 + 40.0 * grow) * t))
 }
@@ -155,12 +159,7 @@ pub fn focus_sheen<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
         return;
     }
     c.rounded_gradient(rect, radius, theme::WHITE, (31.0 * t) as u8, 0);
-    c.outline(
-        rect,
-        radius,
-        1.0,
-        theme::rgba(theme::WHITE, (34.0 * t) as u8),
-    );
+    c.outline(rect, radius, 2.0, theme::focus_edge(t));
     c.top_highlight(rect, radius, theme::rgba(theme::WHITE, (90.0 * t) as u8));
 }
 
@@ -373,7 +372,15 @@ pub fn running_dot<H: Copy>(c: &Canvas<H>, x: f32, y: f32) {
 
 /// App tile (16:9) with the name underneath. `rect` is the tile only.
 pub fn app_tile<H: Copy>(c: &Canvas<H>, images: &Images, rect: Rect, app: &AppView, t: f32) {
-    app_tile_lift(c, images, rect, app, t, 0.0, LIFT);
+    app_tile_lift(
+        c,
+        images,
+        rect,
+        app,
+        t,
+        0.0,
+        if theme::flat() { 0.0 } else { LIFT },
+    );
 }
 
 /// Height of the macOS-style "launching" bounce `secs` after OK: three
@@ -405,7 +412,7 @@ pub fn app_tile_lift<H: Copy>(
     let rect = lifted_by(c, rect, t, grow);
     let (x, y) = c.to_design(rect.min);
     let (w, h) = c.dsize(rect);
-    let radius = 22.0;
+    let radius = if theme::flat() { 14.0 } else { 22.0 };
     let tint = theme::app_rgb(&app.entry.accent);
     focus_lift(c, rect, radius, t);
     // Frosted glass tinted with the app's own colour.
@@ -464,7 +471,11 @@ pub enum ButtonStyle {
 }
 
 pub fn button<H: Copy>(c: &Canvas<H>, rect: Rect, label: &str, style: ButtonStyle, t: f32) {
-    let radius = rect.height() / c.s / 2.0;
+    let radius = if theme::flat() {
+        10.0
+    } else {
+        rect.height() / c.s / 2.0
+    };
     let (fill, ink) = if theme::flat() {
         match style {
             ButtonStyle::Primary => (
@@ -523,6 +534,7 @@ pub fn button<H: Copy>(c: &Canvas<H>, rect: Rect, label: &str, style: ButtonStyl
     c.fill(rect, radius, fill);
     match style {
         _ if theme::flat() => {
+            c.outline(rect, radius, 1.0, theme::border());
             if t > 0.01 {
                 c.outline(rect, radius, 3.0, theme::focus_edge(t));
             }
@@ -608,6 +620,47 @@ pub fn tab_bar<H: Copy>(
     let widths: Vec<f32> = labels.iter().map(|l| tab_width(c, l)).collect();
     let pad = 6.0;
     let total: f32 = widths.iter().sum::<f32>() + pad * (widths.len() as f32 + 1.0);
+    if theme::flat() {
+        let mut x = cx - total / 2.0 + pad;
+        return labels
+            .iter()
+            .zip(&widths)
+            .enumerate()
+            .map(|(i, (label, &width))| {
+                let rect = c.r(x, y + pad, width, h - pad * 2.0);
+                let current = selected == Some(i);
+                let focused = focus == Some(i);
+                let t = c.anim((id, "tab", i), f32::from(focused));
+                focus_pill(c, rect, 8.0, t);
+                if current {
+                    c.fill(
+                        c.r(x + width / 2.0 - 10.0, y + h - pad - 3.0, 20.0, 2.0),
+                        1.0,
+                        theme::accent(),
+                    );
+                }
+                c.text(
+                    x + width / 2.0,
+                    y + h / 2.0 - 1.0,
+                    Align2::CENTER_CENTER,
+                    label,
+                    17.0,
+                    if current || focused {
+                        theme::text()
+                    } else {
+                        theme::text2()
+                    },
+                    if current {
+                        Weight::Semibold
+                    } else {
+                        Weight::Medium
+                    },
+                );
+                x += width + pad;
+                rect
+            })
+            .collect();
+    }
     let nav = c.r(cx - total / 2.0, y, total, h);
     c.glass(nav, h / 2.0);
     let tf = c.anim((id, "tab-focus"), if focus.is_some() { 1.0 } else { 0.0 });
@@ -771,6 +824,11 @@ impl<'a> ListRow<'a> {
 
 /// Corner radius of list rows (and of their focus).
 pub const ROW_RADIUS: f32 = 20.0;
+pub const ROW_ICON_X: f32 = 32.0;
+
+pub fn row_radius() -> f32 {
+    if theme::flat() { 10.0 } else { ROW_RADIUS }
+}
 
 pub fn list_row<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32) {
     list_row_focus(c, rect, row, t, true);
@@ -789,7 +847,7 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
     if row.kind == Some(RowKind::Heading) {
         return heading_row(c, rect, row);
     }
-    let radius = ROW_RADIUS;
+    let radius = row_radius();
     // Resting glass: a faint pane and hairline (no outer glow, no
     // lift; the focus stays inside the row and the panel).
     c.fill(
@@ -819,17 +877,22 @@ fn list_row_focus<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32, own
     };
     let mut tx = x + 22.0;
     if let Some(icon) = row.icon {
-        let r = (h * 0.32).min(20.0);
-        icon_badge(
-            c,
-            x + 20.0 + r,
-            y + h / 2.0,
-            r,
-            icon,
-            false,
-            if row.disabled { 0.0 } else { t },
-        );
-        tx = x + 36.0 + 2.0 * r;
+        if theme::flat() {
+            icons::draw(c, icon, x + ROW_ICON_X, y + h / 2.0, 20.0, ink);
+            tx = x + 60.0;
+        } else {
+            let r = (h * 0.32).min(20.0);
+            icon_badge(
+                c,
+                x + 20.0 + r,
+                y + h / 2.0,
+                r,
+                icon,
+                false,
+                if row.disabled { 0.0 } else { t },
+            );
+            tx = x + 36.0 + 2.0 * r;
+        }
     }
     let label_size = if theme::flat() { 18.0 } else { 16.5 };
     let subtitle_size = if theme::flat() { 14.0 } else { 13.0 };
@@ -1031,7 +1094,7 @@ fn primary_row<H: Copy>(c: &Canvas<H>, rect: Rect, row: &ListRow, t: f32) {
 pub fn modal<H: Copy>(c: &Canvas<H>, w: f32, h: f32) -> Rect {
     c.scrim();
     let rect = c.r((1280.0 - w) / 2.0, (720.0 - h) / 2.0, w, h);
-    c.sheet(rect, 30.0);
+    c.sheet(rect, if theme::flat() { 20.0 } else { 30.0 });
     rect
 }
 
@@ -1075,8 +1138,14 @@ pub fn text_field<H: Copy>(
 ) {
     let (x, y) = c.to_design(rect.min);
     let (w, h) = c.dsize(rect);
-    let radius = if pill { h / 2.0 } else { 16.0 };
-    if focused {
+    let radius = if theme::flat() {
+        10.0
+    } else if pill {
+        h / 2.0
+    } else {
+        16.0
+    };
+    if focused && !theme::flat() {
         c.shadow(rect, radius, 0.0, 30.0, theme::accent_a(55));
     }
     if theme::flat() {
@@ -1182,7 +1251,7 @@ pub fn keys<H: Copy>(
             let base = c.r(kx, ky, kw, key_h);
             c.hit(base, key_hit(ri, ci));
             let rect = base;
-            let r = key_h / 2.0;
+            let r = if theme::flat() { 8.0 } else { key_h / 2.0 };
             let special = !matches!(key.kind, KeyKind::Char(_));
             let done = key.kind == KeyKind::Done;
             let fill = if theme::flat() {
