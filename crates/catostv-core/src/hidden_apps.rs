@@ -79,6 +79,9 @@ pub enum Request {
     Save(Pin),
 }
 impl Entry {
+    pub const KEYS: [&'static str; 11] =
+        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "Delete", "0"];
+
     pub fn new(ticket: u64, goal: Goal, configured: bool) -> Self {
         let stage = if !configured || goal == Goal::Change {
             Stage::Create
@@ -113,15 +116,21 @@ impl Entry {
         match action {
             Action::Char(c) if c.is_ascii_digit() => {
                 self.digits.0.push(c);
-                self.index = 11;
             }
             Action::Erase => {
                 self.digits.0.pop();
             }
             Action::Left => self.index = self.index / 3 * 3 + (self.index % 3).saturating_sub(1),
-            Action::Right => self.index = self.index / 3 * 3 + (self.index % 3 + 1).min(2),
+            Action::Right => {
+                self.index =
+                    (self.index / 3 * 3 + (self.index % 3 + 1).min(2)).min(Self::KEYS.len() - 1);
+            }
             Action::Up => self.index = self.index.saturating_sub(3),
-            Action::Down => self.index = (self.index + 3).min(9 + self.index % 3),
+            Action::Down => {
+                self.index = (self.index + 3)
+                    .min(9 + self.index % 3)
+                    .min(Self::KEYS.len() - 1)
+            }
             Action::Ok | Action::OkLong => match self.index {
                 0..=8 => self.digits.0.push(char::from(b'1' + self.index as u8)),
                 9 => {
@@ -240,5 +249,25 @@ mod tests {
         assert_eq!(entry.filled(), 0);
         let request = type_pin(&mut entry, "0123");
         assert!(matches!(request, Some(Request::Verify(_))));
+    }
+
+    #[test]
+    fn keypad_navigation_skips_the_empty_corner_and_zero_submits_a_pin() {
+        let mut entry = Entry::new(1, Goal::Browse, true);
+        assert!(type_pin(&mut entry, "123").is_none());
+        for action in [
+            Action::Right,
+            Action::Right,
+            Action::Down,
+            Action::Down,
+            Action::Down,
+            Action::Right,
+        ] {
+            assert!(entry.handle(action).is_none());
+        }
+        assert_eq!(Entry::KEYS[entry.index], "0");
+        assert!(
+            matches!(entry.handle(Action::Ok), Some(Request::Verify(pin)) if pin.as_str() == "1230")
+        );
     }
 }

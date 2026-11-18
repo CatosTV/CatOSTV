@@ -52,6 +52,7 @@ pub fn focus_pill<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
         (26.0 * t) as u8,
     );
     c.top_highlight(rect, radius, theme::rgba(theme::WHITE, (120.0 * t) as u8));
+    c.outline(rect, radius, 2.0, theme::focus_edge(t));
 }
 
 /// Colour between `a` and `b` (t = 0 → a, 1 → b).
@@ -155,12 +156,7 @@ pub fn focus_sheen<H: Copy>(c: &Canvas<H>, rect: Rect, radius: f32, t: f32) {
         return;
     }
     c.rounded_gradient(rect, radius, theme::WHITE, (31.0 * t) as u8, 0);
-    c.outline(
-        rect,
-        radius,
-        1.0,
-        theme::rgba(theme::WHITE, (34.0 * t) as u8),
-    );
+    c.outline(rect, radius, 2.0, theme::focus_edge(t));
     c.top_highlight(rect, radius, theme::rgba(theme::WHITE, (90.0 * t) as u8));
 }
 

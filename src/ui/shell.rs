@@ -1112,7 +1112,6 @@ fn draw_home(c: &C, v: &ShellView) {
     let grow = widgets::home_lift();
     let first = s.rail_index.saturating_sub(visible - 1) as f32;
     let (scroll, _) = c.spring("rail-scroll", first * step, 0.5, 0.86);
-    let time = c.ctx.input(|i| i.time) as f32;
     // Where each app sits: by app, not by place, so when an app is moved
     // its neighbours glide out of its way.
     let slot = |i: usize, app: &AppView| {
@@ -1144,11 +1143,7 @@ fn draw_home(c: &C, v: &ShellView) {
         let shown = ease(v.page_t * 2.2 - (i as f32 - first).max(0.0) * 0.12);
         let held = moving && s.rail_index == i;
         // The picked-up app floats a little above the others.
-        let float = if held {
-            5.0 + 3.0 * (time * 5.0).sin()
-        } else {
-            0.0
-        };
+        let float = if held { 5.0 } else { 0.0 };
         let y = row_y + 26.0 * (1.0 - shown) - up - float;
         let rect = rail.r(x, y, tw, th);
         let focused = rail_focus && s.rail_index == i;
@@ -1161,7 +1156,6 @@ fn draw_home(c: &C, v: &ShellView) {
         };
         let (t, _) = c.spring(("rail-t", &app.entry.id), target, 0.42, 0.62);
         if held {
-            c.ctx.request_repaint();
             widgets::focus_lift(&rail, widgets::lifted_by(&rail, rect, t, grow), 22.0, 1.0);
         }
         widgets::home_glow(
@@ -1186,7 +1180,7 @@ fn draw_home(c: &C, v: &ShellView) {
             }
         }
         if !in_media {
-            c.hit(c.r(x, y, tw, th + 36.0), Target::Rail(i));
+            rail.hit(rail.r(x, y, tw, th + 36.0), Target::Rail(i));
         }
     }
     if moving {
@@ -2045,7 +2039,7 @@ fn draw_search(c: &C, v: &ShellView) {
         c,
         c.r(52.0, 96.0, 1176.0, 64.0),
         &s.search_osk,
-        "Search apps, settings and the store",
+        "Search",
         kb_focus,
         true,
     );
@@ -4087,53 +4081,48 @@ fn choice_sheet(
 fn draw_hidden(c: &C, v: &ShellView, overlay: &Overlay) {
     match overlay {
         Overlay::HiddenPin(entry) => {
-            let panel = widgets::modal(c, 480.0, 620.0);
+            let panel = widgets::modal(c, 384.0, 480.0);
             let (x, y) = c.to_design(panel.min);
             c.hit(panel, Target::Item(usize::MAX));
-            modal_header(c, x, y, Some("lock"), entry.title(), 480.0);
+            modal_header(c, x, y, Some("lock"), entry.title(), 384.0);
             c.text(
-                x + 40.0,
-                y + 88.0,
+                x + 32.0,
+                y + 82.0,
                 Align2::LEFT_CENTER,
-                "Four digits for Hidden apps",
+                "Enter four digits to continue",
                 16.0,
                 theme::text2(),
                 Weight::Regular,
             );
             for index in 0..4 {
-                let px = x + 183.0 + index as f32 * 38.0;
+                let px = x + 138.0 + index as f32 * 36.0;
                 if index < entry.filled() {
-                    c.circle(px, y + 136.0, 7.0, theme::text());
+                    c.circle(px, y + 118.0, 7.0, theme::text());
                 } else {
-                    c.ring(px, y + 136.0, 7.0, 1.5, theme::text3());
+                    c.ring(px, y + 118.0, 7.0, 1.5, theme::text3());
                 }
             }
             if let Some(error) = &entry.error {
                 c.text(
-                    x + 40.0,
-                    y + 177.0,
+                    x + 32.0,
+                    y + 147.0,
                     Align2::LEFT_CENTER,
-                    &c.fit(error, 400.0, 15.0, Weight::Medium),
+                    &c.fit(error, 320.0, 15.0, Weight::Medium),
                     15.0,
                     theme::rgb(theme::DANGER),
                     Weight::Medium,
                 );
             }
             if entry.stage == catostv_core::hidden_apps::Stage::Busy {
-                widgets::spinner(c, x + 240.0, y + 320.0, 24.0, v.since_start as f64);
+                widgets::spinner(c, x + 192.0, y + 256.0, 24.0, v.since_start as f64);
                 return;
             }
-            for (index, label) in [
-                "1", "2", "3", "4", "5", "6", "7", "8", "9", "Delete", "0", "OK",
-            ]
-            .iter()
-            .enumerate()
-            {
+            for (index, label) in catostv_core::hidden_apps::Entry::KEYS.iter().enumerate() {
                 let rect = c.r(
-                    x + 40.0 + (index % 3) as f32 * 138.0,
-                    y + 212.0 + (index / 3) as f32 * 82.0,
-                    124.0,
-                    66.0,
+                    x + 32.0 + (index % 3) as f32 * 112.0,
+                    y + 168.0 + (index / 3) as f32 * 64.0,
+                    96.0,
+                    52.0,
                 );
                 widgets::button(
                     c,
@@ -4145,8 +4134,8 @@ fn draw_hidden(c: &C, v: &ShellView, overlay: &Overlay) {
                 c.hit(rect, Target::Item(index));
             }
             c.text(
-                x + 40.0,
-                y + 583.0,
+                x + 32.0,
+                y + 448.0,
                 Align2::LEFT_CENTER,
                 "Back to cancel",
                 14.0,

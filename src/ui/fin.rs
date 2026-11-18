@@ -1712,7 +1712,7 @@ pub fn home_rows(
                 );
             }
             if top > y - 14.0 && top + h < 720.0 {
-                c.hit(c.r(x, top, w, h), Target::HomeMedia(ri, i));
+                list.hit(list.r(x, top, w, h), Target::HomeMedia(ri, i));
             }
         }
     }
